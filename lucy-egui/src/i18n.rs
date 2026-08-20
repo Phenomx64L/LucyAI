@@ -229,6 +229,13 @@ macro_rules! f {
 pub const FRASES: &[Frase] = &[
     // ── Dashboard ───────────────────────────────────────────────────────────
     f!(
+        "#{id} · sesión {sesion} · {chars} caracteres leídos",
+        "#{id} · session {sesion} · {chars} characters read",
+        "#{id} · sessão {sesion} · {chars} caracteres lidos",
+        "#{id} · session {sesion} · {chars} caractères lus",
+        "#{id} · Sitzung {sesion} · {chars} Zeichen gelesen",
+    ),
+    f!(
         "(el comando no devolvió nada)",
         "(the command returned nothing)",
         "(o comando não devolveu nada)",
@@ -278,6 +285,13 @@ pub const FRASES: &[Frase] = &[
     f!("Animaciones", "Animations", "Animações", "Animations", "Animationen"),
     f!("Apagadas", "Off", "Desligadas", "Désactivées", "Aus"),
     f!("Apagado", "Off", "Desligado", "Désactivé", "Aus"),
+    f!(
+        "Aplicar el cambio en {ruta}",
+        "Apply the change to {ruta}",
+        "Aplicar a alteração em {ruta}",
+        "Appliquer la modification dans {ruta}",
+        "Änderung in {ruta} übernehmen",
+    ),
     f!("Archivo", "Archive", "Arquivo", "Fichiers", "Archiv"),
     f!("Artefactos", "Artifacts", "Artefactos", "Artefacts", "Artefakte"),
     f!("Atención", "Warning", "Atenção", "Attention", "Achtung"),
@@ -377,6 +391,13 @@ pub const FRASES: &[Frase] = &[
     ),
     f!("Copiar la ruta", "Copy path", "Copiar o caminho", "Copier le chemin", "Pfad kopieren"),
     f!("Copiar la salida", "Copy output", "Copiar a saída", "Copier la sortie", "Ausgabe kopieren"),
+    f!(
+        "Copiar las {n} líneas visibles",
+        "Copy the {n} visible lines",
+        "Copiar as {n} linhas visíveis",
+        "Copier les {n} lignes visibles",
+        "Die {n} sichtbaren Zeilen kopieren",
+    ),
     f!(
         "Copiar toda la salida",
         "Copy all output",
@@ -582,6 +603,13 @@ pub const FRASES: &[Frase] = &[
         "Enregistrer une copie…",
         "Kopie speichern…",
     ),
+    f!(
+        "Hay {activos} activos y en el prompt entran {caben}: los que sobren no se aplican. Apaga los que ya no manden.",
+        "There are {activos} active and {caben} fit in the prompt: the extras don't apply. Turn off the ones that no longer call the shots.",
+        "Há {activos} ativos e no prompt cabem {caben}: os que sobrarem não se aplicam. Desliga os que já não mandam.",
+        "Il y a {activos} actifs et {caben} entrent dans le prompt : les autres ne s'appliquent pas. Désactive ceux qui ne commandent plus.",
+        "Aktiv sind {activos}, in den Prompt passen {caben}: der Rest wird nicht angewendet. Schalte ab, was nicht mehr gilt.",
+    ),
     f!("Idioma", "Language", "Idioma", "Langue", "Sprache"),
     f!(
         "Importancia alta · se recuerda antes que las demás",
@@ -653,6 +681,13 @@ pub const FRASES: &[Frase] = &[
     ),
     f!("Listo para operar", "Ready to operate", "Pronto a operar", "Opérationnel", "Einsatzbereit"),
     f!(
+        "Listo para operar en {equipo}",
+        "Ready to operate on {equipo}",
+        "Pronto a operar em {equipo}",
+        "Prêt à intervenir sur {equipo}",
+        "Einsatzbereit auf {equipo}",
+    ),
+    f!(
         "Lo ingerido alimenta el recuerdo y a pdf_search. Los secretos se redactan al entrar.",
         "What goes in feeds recall and pdf_search. Secrets are redacted on the way in.",
         "O que é ingerido alimenta a memória e o pdf_search. Os segredos são ocultados à entrada.",
@@ -714,6 +749,13 @@ pub const FRASES: &[Frase] = &[
         "Lucy n'a encore rien noté sur toi. Elle le fait seule quand tu lui dis quelque chose qui lui servira un autre jour.",
         "Lucy hat noch nichts über dich notiert. Sie macht das von selbst, wenn du ihr etwas erzählst, das ihr an einem anderen Tag nützt.",
     ),
+    f!(
+        "Línea base: {etiqueta} · {cuando}",
+        "Baseline: {etiqueta} · {cuando}",
+        "Linha base: {etiqueta} · {cuando}",
+        "Ligne de base : {etiqueta} · {cuando}",
+        "Baseline: {etiqueta} · {cuando}",
+    ),
     f!("Mantenimiento", "Maintenance", "Manutenção", "Maintenance", "Wartung"),
     f!("Memoria", "Memory", "Memória", "Mémoire", "Gedächtnis"),
     f!("Memorias", "Memories", "Memórias", "Mémoires", "Erinnerungen"),
@@ -739,6 +781,13 @@ pub const FRASES: &[Frase] = &[
         "Nada para copiar ainda",
         "Rien à copier pour l'instant",
         "Noch nichts zum Kopieren",
+    ),
+    f!(
+        "Ninguna repetida entre las {n} más recientes.",
+        "None repeated among the {n} most recent.",
+        "Nenhuma repetida entre as {n} mais recentes.",
+        "Aucune répétition parmi les {n} plus récentes.",
+        "Keine Wiederholung unter den {n} neuesten.",
     ),
     f!(
         "Ninguno en este estado.",
@@ -767,6 +816,13 @@ pub const FRASES: &[Frase] = &[
         "Nenhum modelo coincide",
         "Aucun modèle ne correspond",
         "Kein Modell passt",
+    ),
+    f!(
+        "No hay ficheros de log en {dir}.",
+        "No log files in {dir}.",
+        "Não há ficheiros de log em {dir}.",
+        "Aucun fichier de log dans {dir}.",
+        "Keine Log-Dateien in {dir}.",
     ),
     f!("No se pudo", "Not measured", "Não foi possível", "Non mesuré", "Nicht messbar"),
     f!(
@@ -1279,6 +1335,13 @@ pub const FRASES: &[Frase] = &[
     f!("no vale", "not valid", "não serve", "invalide", "ungültig"),
     f!("pegar clave", "paste key", "colar chave", "coller la clé", "Schlüssel einfügen"),
     f!(
+        "por defecto {puerto}",
+        "default {puerto}",
+        "por omissão {puerto}",
+        "{puerto} par défaut",
+        "standardmäßig {puerto}",
+    ),
+    f!(
         "si se deja vacío usa el usuario de Windows, que es una cuenta y no un nombre",
         "if left empty it uses the Windows user, which is an account and not a name",
         "se ficar vazio usa o utilizador do Windows, que é uma conta e não um nome",
@@ -1328,6 +1391,27 @@ pub const FRASES: &[Frase] = &[
         "lässt sich nicht mehr messen",
     ),
     f!(
+        "{con} de {total} con vector — el resto solo se encuentra por palabras",
+        "{con} of {total} with a vector — the rest is only found by keyword",
+        "{con} de {total} com vetor — o resto só se encontra por palavras",
+        "{con} sur {total} avec vecteur — le reste ne se trouve que par mots-clés",
+        "{con} von {total} mit Vektor — der Rest wird nur über Wörter gefunden",
+    ),
+    f!(
+        "{ent} tokens de entrada, {sal} de salida en esta terminal",
+        "{ent} input tokens, {sal} output in this terminal",
+        "{ent} tokens de entrada, {sal} de saída neste terminal",
+        "{ent} tokens en entrée, {sal} en sortie dans ce terminal",
+        "{ent} Tokens Eingabe, {sal} Ausgabe in diesem Terminal",
+    ),
+    f!(
+        "{grupos} grupos · {memorias} memorias se fundirían en otra, de {miradas} miradas. No se ha tocado nada todavía.",
+        "{grupos} groups · {memorias} memories would merge into another, out of {miradas} looked at. Nothing has been touched yet.",
+        "{grupos} grupos · {memorias} memórias seriam fundidas noutra, de {miradas} vistas. Ainda não se tocou em nada.",
+        "{grupos} groupes · {memorias} mémoires fusionneraient dans une autre, sur {miradas} examinées. Rien n'a encore été modifié.",
+        "{grupos} Gruppen · {memorias} Erinnerungen würden zu einer verschmelzen, aus {miradas} Sichtungen. Es wurde noch nichts verändert.",
+    ),
+    f!(
         "{libre} libres de {total}",
         "{libre} free of {total}",
         "{libre} livres de {total}",
@@ -1346,6 +1430,13 @@ pub const FRASES: &[Frase] = &[
     // lo que existe `trf`. Ver el test que comprueba que ninguna traducción se
     // deja uno por el camino.
     f!(
+        "{n} ficheros en {dir} — el más reciente primero",
+        "{n} files in {dir} — newest first",
+        "{n} ficheiros em {dir} — o mais recente primeiro",
+        "{n} fichiers dans {dir} — le plus récent en premier",
+        "{n} Dateien in {dir} — die neueste zuerst",
+    ),
+    f!(
         "{n} memorias detrás",
         "{n} memories behind it",
         "{n} memórias por trás",
@@ -1356,6 +1447,13 @@ pub const FRASES: &[Frase] = &[
     // SINGULAR Y PLURAL COMO DOS FRASES: en alemán el plural de «Laufwerk» es
     // «Laufwerke» y en francés cambia el artículo. Pegar una «s» al final solo
     // funciona en español.
+    f!(
+        "{n} por similitud",
+        "{n} by similarity",
+        "{n} por semelhança",
+        "{n} par similarité",
+        "{n} nach Ähnlichkeit",
+    ),
     f!("{n} volúmenes", "{n} volumes", "{n} volumes", "{n} volumes", "{n} Laufwerke"),
     f!(
         "{pista} · el proveedor la acepta",
@@ -1370,6 +1468,13 @@ pub const FRASES: &[Frase] = &[
         "{vivas} de {total} memórias vivas",
         "{vivas} sur {total} mémoires vivantes",
         "{vivas} von {total} lebenden Erinnerungen",
+    ),
+    f!(
+        "· {n} dinámicos ignorados",
+        "· {n} dynamic ones ignored",
+        "· {n} dinâmicos ignorados",
+        "· {n} dynamiques ignorés",
+        "· {n} dynamische ignoriert",
     ),
     f!("¿borrar?", "delete?", "apagar?", "supprimer ?", "löschen?"),
     f!("↻ Recargar", "↻ Reload", "↻ Recarregar", "↻ Recharger", "↻ Neu laden"),
@@ -1396,6 +1501,13 @@ pub const FRASES: &[Frase] = &[
     f!("▸ Ejecutar", "▸ Run", "▸ Executar", "▸ Exécuter", "▸ Ausführen"),
     f!("◈ Semántica", "◈ Semantic", "◈ Semântica", "◈ Sémantique", "◈ Semantisch"),
     f!("● ESCANEADO {hora}", "● SCANNED {hora}", "● ANALISADO {hora}", "● ANALYSÉ {hora}", "● GESCANNT {hora}"),
+    f!(
+        "⚠ {cat}: se enseñan {vistas} de {total}. Una lista recortada en silencio se lee como una lista completa.",
+        "⚠ {cat}: showing {vistas} of {total}. A list trimmed in silence reads like a complete one.",
+        "⚠ {cat}: mostram-se {vistas} de {total}. Uma lista cortada em silêncio lê-se como uma lista completa.",
+        "⚠ {cat} : affichage de {vistas} sur {total}. Une liste tronquée en silence se lit comme une liste complète.",
+        "⚠ {cat}: {vistas} von {total} werden angezeigt. Eine still gekürzte Liste liest sich wie eine vollständige.",
+    ),
     f!(
         "⚠ {sin} de {total} no se pudieron medir y quedan fuera del porcentaje — el motivo \
          está en cada fila.",
@@ -1660,8 +1772,26 @@ mod tests {
             if TRADUCEN_SOLOS.iter().any(|a| ventana.contains(a)) {
                 continue;
             }
-            if ventana.contains("format!") {
-                // Las plantillas van por `trf` y son otra conversación.
+            // LAS PLANTILLAS TAMBIÉN CUENTAN, y antes se saltaban enteras con un
+            // `continue`. Eso dejaba fuera de la medida todo un cubo: el
+            // Dashboard salía en español —«32 núcleos», «570 GB libres de 931
+            // GB», «act. 20:02»— con este test en verde, porque cada una de esas
+            // frases vive dentro de un `format!`.
+            //
+            // Ahora hay `trf` para ellas, así que un `format!` en una llamada que
+            // pinta y sin `trf` cerca es exactamente lo mismo que un literal
+            // crudo: sale en español pase lo que pase.
+            if ventana.contains("format!") && !ventana.contains("i18n::trf") {
+                // Solo si el texto tiene PROSA fuera de los huecos: `{:.1} GB` es
+                // un formato de cifra, no una frase, y no se traduce.
+                let con_prosa = literales_de(l).into_iter().any(|s| {
+                    let fuera: String =
+                        s.split('{').map(|t| t.split_once('}').map_or(t, |(_, r)| r)).collect();
+                    fuera.split_whitespace().filter(|p| p.chars().count() >= 3).count() >= 2
+                });
+                if con_prosa {
+                    crudos.extend(literales_de(l).into_iter().filter(|s| s.contains('{')));
+                }
                 continue;
             }
             for s in literales_de(l) {
@@ -1675,9 +1805,17 @@ mod tests {
         }
         crudos.sort();
         crudos.dedup();
-        // Medido. Lo que queda son sobre todo textos que se componen antes de
-        // pintarse y algún nombre propio.
-        const TOPE: usize = 30;
+        // CERO, Y SE QUEDA EN CERO. Cualquier sitio nuevo que pinte texto sin
+        // pasarlo por `tr` o `trf` rompe este test en el commit que lo
+        // introduce, que es la única forma de que esto no se vuelva a pudrir.
+        //
+        // LO QUE ESTE TEST NO GARANTIZA, y conviene saberlo antes de fiarse: la
+        // ventana es de tres líneas arriba y tres abajo, así que un `i18n::tr`
+        // en una línea vecina que no tiene nada que ver da por bueno el sitio de
+        // al lado. Es un cedazo, no una prueba. Lo que sí hace bien es cazar el
+        // caso normal —una llamada nueva escrita sin envolver— que es el que ha
+        // metido aquí todo lo que se ha ido encontrando por capturas.
+        const TOPE: usize = 0;
         assert!(
             crudos.len() <= TOPE,
             "{} sitios pintan texto sin pasarlo por la traducción y el tope son \

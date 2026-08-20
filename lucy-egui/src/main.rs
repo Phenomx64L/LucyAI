@@ -5155,9 +5155,12 @@ impl eframe::App for App {
                                     .monospace()
                                     .size(10.5),
                             )
-                            .on_hover_text(format!(
-                                "{} tokens de entrada, {} de salida en esta terminal",
-                                t.tokens_in, t.tokens_out
+                            .on_hover_text(i18n::trf(
+                                "{ent} tokens de entrada, {sal} de salida en esta terminal",
+                                &[
+                                    ("ent", &t.tokens_in.to_string()),
+                                    ("sal", &t.tokens_out.to_string()),
+                                ],
                             )),
                             // Sin precio conocido se dice, en vez de enseñar un
                             // cero que parecería gratis.
@@ -5621,7 +5624,7 @@ impl App {
                     );
                     ui.label(
                         egui::RichText::new(if online {
-                            format!("Ollama · {} modelos", self.models.len())
+                            i18n::trf("Ollama · {n} modelos", &[("n", &self.models.len().to_string())])
                         } else {
                             "Ollama offline".to_string()
                         })
@@ -9334,7 +9337,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                         ui.add_space(6.0);
                         if ui
                             .button("Escribir")
-                            .on_hover_text(format!("Aplicar el cambio en {}", a.path))
+                            .on_hover_text(i18n::trf("Aplicar el cambio en {ruta}", &[("ruta", &a.path)]))
                             .clicked()
                         {
                             escribir = Some(a.id.clone());
@@ -9514,10 +9517,12 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         } else if !self.lv_files.is_empty() {
             ui.add_space(6.0);
             ui.label(
-                egui::RichText::new(format!(
-                    "{} ficheros en {} — el más reciente primero",
-                    self.lv_files.len(),
-                    self.lv_dir
+                egui::RichText::new(i18n::trf(
+                    "{n} ficheros en {dir} — el más reciente primero",
+                    &[
+                        ("n", &self.lv_files.len().to_string()),
+                        ("dir", &self.lv_dir),
+                    ],
                 ))
                 .size(theme::FS_CAPTION)
                 .color(theme::txt3()),
@@ -9559,7 +9564,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         } else if !self.lv_dir.is_empty() {
             ui.add_space(6.0);
             ui.label(
-                egui::RichText::new(format!("No hay ficheros de log en {}.", self.lv_dir))
+                egui::RichText::new(i18n::trf("No hay ficheros de log en {dir}.", &[("dir", &self.lv_dir)]))
                     .size(theme::FS_CAPTION)
                     .color(theme::faint()),
             );
@@ -9704,7 +9709,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                     .on_hover_text(if n == 0 {
                         "No hay nada visible que copiar".to_string()
                     } else {
-                        format!("Copiar las {n} líneas visibles")
+                        i18n::trf("Copiar las {n} líneas visibles", &[("n", &n.to_string())])
                     })
                     .clicked()
                     && n > 0
@@ -10836,11 +10841,14 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         for (cat, total) in self.inv_data.truncado.clone() {
             ui.add_space(4.0);
             ui.label(
-                egui::RichText::new(format!(
-                    "⚠ {}: se enseñan {} de {total}. Una lista recortada en silencio se \
-                     lee como una lista completa.",
-                    cat.label(),
-                    self.inv_data.len_de(cat)
+                egui::RichText::new(i18n::trf(
+                    "⚠ {cat}: se enseñan {vistas} de {total}. Una lista recortada en \
+                     silencio se lee como una lista completa.",
+                    &[
+                        ("cat", cat.label()),
+                        ("vistas", &self.inv_data.len_de(cat).to_string()),
+                        ("total", &total.to_string()),
+                    ],
                 ))
                 .size(theme::FS_CAPTION)
                 .color(theme::amber()),
@@ -10881,9 +10889,12 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 Some((label, ts)) => {
                     let etiqueta = if label.trim().is_empty() { "sin etiqueta" } else { label };
                     ui.label(
-                        egui::RichText::new(format!(
-                            "Línea base: {etiqueta} · {}",
-                            hace_cuanto(ahora_epoch() - *ts)
+                        egui::RichText::new(i18n::trf(
+                            "Línea base: {etiqueta} · {cuando}",
+                            &[
+                                ("etiqueta", etiqueta),
+                                ("cuando", &hace_cuanto(ahora_epoch() - *ts)),
+                            ],
                         ))
                         .size(theme::FS_CAPTION)
                         .color(theme::txt3()),
@@ -11016,9 +11027,9 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             }
             if r.efimeros_ignorados > 0 {
                 ui.label(
-                    egui::RichText::new(format!(
-                        "· {} dinámicos ignorados",
-                        r.efimeros_ignorados
+                    egui::RichText::new(i18n::trf(
+                        "· {n} dinámicos ignorados",
+                        &[("n", &r.efimeros_ignorados.to_string())],
                     ))
                     .size(theme::FS_CAPTION)
                     .color(theme::faint()),
@@ -14267,7 +14278,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                                 icons::show(ui, icons::Icon::Server, 26.0, theme::faint());
                                 ui.add_space(8.0);
                                 ui.label(
-                                    egui::RichText::new(format!("Listo para operar en {}", h.name))
+                                    egui::RichText::new(i18n::trf("Listo para operar en {equipo}", &[("equipo", &h.name)]))
                                         .size(theme::FS_HEADING)
                                         .color(theme::txt2()),
                                 );
@@ -14800,7 +14811,10 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                     }
                     ui.add_space(12.0);
                     ui.label(
-                        egui::RichText::new(format!("por defecto {}", h.protocol.default_port()))
+                        egui::RichText::new(i18n::trf(
+                            "por defecto {puerto}",
+                            &[("puerto", &h.protocol.default_port().to_string())],
+                        ))
                             .size(theme::FS_MICRO)
                             .color(theme::faint()),
                     );
@@ -15291,9 +15305,9 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             }
             Some(Ok(r)) if r.clusters_found == 0 => {
                 ui.label(
-                    egui::RichText::new(format!(
-                        "Ninguna repetida entre las {} más recientes.",
-                        r.scanned
+                    egui::RichText::new(i18n::trf(
+                        "Ninguna repetida entre las {n} más recientes.",
+                        &[("n", &r.scanned.to_string())],
                     ))
                     .size(theme::FS_CAPTION)
                     .color(theme::faint()),
@@ -15302,10 +15316,14 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             Some(Ok(r)) => {
                 ui.label(
                     egui::RichText::new(if r.dry_run {
-                        format!(
-                            "{} grupos · {} memorias se fundirían en otra, de {} miradas. \
-                             No se ha tocado nada todavía.",
-                            r.clusters_found, r.memories_merged, r.scanned
+                        i18n::trf(
+                            "{grupos} grupos · {memorias} memorias se fundirían en otra, de \
+                             {miradas} miradas. No se ha tocado nada todavía.",
+                            &[
+                                ("grupos", &r.clusters_found.to_string()),
+                                ("memorias", &r.memories_merged.to_string()),
+                                ("miradas", &r.scanned.to_string()),
+                            ],
                         )
                     } else {
                         format!(
@@ -15399,7 +15417,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                         Ok((hits, notes)) => {
                             ui.add_space(4.0);
                             ui.label(
-                                egui::RichText::new(format!("{} por similitud", hits.len()))
+                                egui::RichText::new(i18n::trf("{n} por similitud", &[("n", &hits.len().to_string())]))
                                     .small()
                                     .color(theme::acc()),
                             );
@@ -15449,10 +15467,12 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                     })
                     .collect();
                 ui.label(
-                    egui::RichText::new(format!(
-                        "{} de {} memorias vivas",
-                        filtered.len(),
-                        mems.len()
+                    egui::RichText::new(i18n::trf(
+                        "{vivas} de {total} memorias vivas",
+                        &[
+                            ("vivas", &filtered.len().to_string()),
+                            ("total", &mems.len().to_string()),
+                        ],
                     ))
                     .small()
                     .weak(),
@@ -15709,9 +15729,13 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                                 );
                             }
                             ui.label(
-                                egui::RichText::new(format!(
-                                    "#{} · sesión {} · {} caracteres leídos",
-                                    c.id, c.session_id, c.caracteres
+                                egui::RichText::new(i18n::trf(
+                                    "#{id} · sesión {sesion} · {chars} caracteres leídos",
+                                    &[
+                                        ("id", &c.id.to_string()),
+                                        ("sesion", &c.session_id),
+                                        ("chars", &c.caracteres.to_string()),
+                                    ],
                                 ))
                                 .size(theme::FS_MICRO)
                                 .weak(),
@@ -15806,13 +15830,13 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                                     egui::RichText::new(if i.refuerzos == 1 {
                                         "visto 1 vez".to_string()
                                     } else {
-                                        format!("visto {} veces", i.refuerzos)
+                                        i18n::trf("visto {n} veces", &[("n", &i.refuerzos.to_string())])
                                     })
                                     .small()
                                     .weak(),
                                 );
                                 ui.label(
-                                    egui::RichText::new(format!("{} memorias detrás", i.fuentes))
+                                    egui::RichText::new(i18n::trf("{n} memorias detrás", &[("n", &i.fuentes.to_string())]))
                                         .small()
                                         .weak(),
                                 );
@@ -15961,10 +15985,13 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                                 // tiene diagnóstico.
                                 if d.vectorizados < d.trozos {
                                     ui.label(
-                                        egui::RichText::new(format!(
-                                            "{} de {} con vector — el resto solo se \
-                                             encuentra por palabras",
-                                            d.vectorizados, d.trozos
+                                        egui::RichText::new(i18n::trf(
+                                            "{con} de {total} con vector — el resto solo \
+                                             se encuentra por palabras",
+                                            &[
+                                                ("con", &d.vectorizados.to_string()),
+                                                ("total", &d.trozos.to_string()),
+                                            ],
                                         ))
                                         .small()
                                         .color(theme::amber()),
@@ -16093,10 +16120,13 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 let activos = v.iter().filter(|p| p.activo).count();
                 if activos >= lucy_core::principles::MAX_ACTIVOS {
                     ui.label(
-                        egui::RichText::new(format!(
-                            "Hay {activos} activos y en el prompt entran {}: los que sobren no \
-                             se aplican. Apaga los que ya no manden.",
-                            lucy_core::principles::MAX_ACTIVOS
+                        egui::RichText::new(i18n::trf(
+                            "Hay {activos} activos y en el prompt entran {caben}: los que \
+                             sobren no se aplican. Apaga los que ya no manden.",
+                            &[
+                                ("activos", &activos.to_string()),
+                                ("caben", &lucy_core::principles::MAX_ACTIVOS.to_string()),
+                            ],
                         ))
                         .small()
                         .color(theme::amber()),
