@@ -2695,11 +2695,13 @@ fn disk_card(ui: &mut egui::Ui, w: f32, d: &lucy_core::system::DiskInfo) {
         ui.add_space(8.0);
         ui.add(
             egui::Label::new(
-                egui::RichText::new(format!(
-                    "{} libres · {} / {}",
-                    fmt_gb(d.avail),
-                    fmt_gb(d.total.saturating_sub(d.avail)),
-                    fmt_gb(d.total)
+                egui::RichText::new(i18n::trf(
+                    "{libre} libres · {usado} / {total}",
+                    &[
+                        ("libre", &fmt_gb(d.avail)),
+                        ("usado", &fmt_gb(d.total.saturating_sub(d.avail))),
+                        ("total", &fmt_gb(d.total)),
+                    ],
                 ))
                 .size(theme::FS_CAPTION)
                 .monospace()
@@ -9737,7 +9739,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
     /// El desplegable de equipos. Devuelve si hay que releer.
     fn lv_host_picker(&mut self, ui: &mut egui::Ui) -> bool {
         let etiqueta = if self.lv_host.is_empty() {
-            "Este equipo".to_string()
+            i18n::tr("Este equipo").to_string()
         } else {
             self.remote_hosts
                 .iter()
@@ -9785,7 +9787,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                     })
                     .show(ui, |ui| {
                         ui.set_min_width(210.0);
-                        if lv_opcion(ui, "Este equipo", "local", self.lv_host.is_empty()) {
+                        if lv_opcion(ui, i18n::tr("Este equipo"), "local", self.lv_host.is_empty()) {
                             elegido = Some(String::new());
                         }
                         // SOLO LOS QUE SABEN LEER UN FICHERO. Un equipo dado de
@@ -10303,7 +10305,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                             .inner_margin(egui::Margin::same(6.0))
                             .show(ui, |ui| {
                                 ui.set_min_width(220.0);
-                                if lv_opcion(ui, "Este equipo", "local", self.cmp_host.is_empty()) {
+                                if lv_opcion(ui, i18n::tr("Este equipo"), "local", self.cmp_host.is_empty()) {
                                     elegido = Some(String::new());
                                 }
                                 for h in
@@ -11229,7 +11231,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                     })
                     .show(ui, |ui| {
                         ui.set_min_width(210.0);
-                        if lv_opcion(ui, "Este equipo", "local", self.inv_host.is_empty()) {
+                        if lv_opcion(ui, i18n::tr("Este equipo"), "local", self.inv_host.is_empty()) {
                             elegido = Some(String::new());
                         }
                         // Solo los que tienen shell: un equipo dado de alta como
@@ -13212,7 +13214,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
     fn host_picker(&mut self, ui: &mut egui::Ui) {
         let is_local = self.selected_host == "local";
         let name = if is_local {
-            "Este equipo".to_string()
+            i18n::tr("Este equipo").to_string()
         } else {
             self.remote_hosts
                 .iter()
@@ -13246,7 +13248,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 let w = 236.0_f32;
                 ui.set_min_width(w);
                 ui.spacing_mut().item_spacing.y = 1.0;
-                if host_option(ui, w, icons::Icon::Desktop, "Este equipo", "local", is_local) {
+                if host_option(ui, w, icons::Icon::Desktop, i18n::tr("Este equipo"), "local", is_local) {
                     elegido = Some("local".to_string());
                 }
                 for h in &self.remote_hosts {
@@ -13428,13 +13430,16 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                     ui.spacing_mut().item_spacing.x = 6.0;
                     ui.label(egui::RichText::new("●").size(7.0).color(sal_col));
                     ui.label(
-                        egui::RichText::new(sal_txt)
+                        egui::RichText::new(i18n::tr(sal_txt))
                             .size(theme::FS_CAPTION)
                             .color(sal_col),
                     );
                 });
             ui.label(
-                egui::RichText::new(format!("act. {}", self.sys_stamp))
+                egui::RichText::new(i18n::trf(
+                    "act. {hora}",
+                    &[("hora", &self.sys_stamp)],
+                ))
                     .size(theme::FS_CAPTION)
                     .monospace()
                     .color(theme::faint()),
@@ -13549,7 +13554,10 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                                 value: s.cpu_pct,
                                 unit: "%",
                                 spark: cpu_hist,
-                                sub: format!("{} núcleos", s.cores),
+                                sub: i18n::trf(
+                                    "{n} núcleos",
+                                    &[("n", &s.cores.to_string())],
+                                ),
                                 ..Default::default()
                             },
                         );
@@ -13581,10 +13589,12 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                                     // recta. Lo que se quiere saber es cuánto
                                     // queda, y eso lo dice la ocupación.
                                     bar: Some(pct / 100.0),
-                                    sub: format!(
-                                        "{} libres de {}",
-                                        fmt_gb(d.avail),
-                                        fmt_gb(d.total)
+                                    sub: i18n::trf(
+                                        "{libre} libres de {total}",
+                                        &[
+                                            ("libre", &fmt_gb(d.avail)),
+                                            ("total", &fmt_gb(d.total)),
+                                        ],
                                     ),
                                     ..Default::default()
                                 },
@@ -13698,9 +13708,12 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                             ui,
                             "Discos",
                             Some(if disks.len() == 1 {
-                                "1 volumen".to_string()
+                                i18n::tr("1 volumen").to_string()
                             } else {
-                                format!("{} volúmenes", disks.len())
+                                i18n::trf(
+                                    "{n} volúmenes",
+                                    &[("n", &disks.len().to_string())],
+                                )
                             }),
                         );
                         // Tres columnas como máximo: una barra de uso estirada a
@@ -13766,7 +13779,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                                 .color(theme::faint())
                         };
                         row(ui, 18.0, |ui| {
-                            cell(ui, w_name, 18.0, false, head("PROCESO"));
+                            cell(ui, w_name, 18.0, false, head(i18n::tr("PROCESO")));
                             cell(ui, w_cpu, 18.0, true, head("CPU"));
                             cell(ui, w_ram, 18.0, true, head("RAM"));
                             cell(ui, w_pid, 18.0, true, head("PID"));

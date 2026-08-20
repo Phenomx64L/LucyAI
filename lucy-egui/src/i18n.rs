@@ -227,10 +227,7 @@ macro_rules! f {
 /// `tr` devuelve el español, que es lo que se quiere. Que falten es la decisión,
 /// no un olvido.
 pub const FRASES: &[Frase] = &[
-    // ── Plantillas con hueco ────────────────────────────────────────────────
-    // El hueco lleva NOMBRE y cambia de sitio entre idiomas — que es justo por
-    // lo que existe `trf`. Ver el test que comprueba que ninguna traducción se
-    // deja uno por el camino.
+    // ── Dashboard ───────────────────────────────────────────────────────────
     f!(
         "(el comando no devolvió nada)",
         "(the command returned nothing)",
@@ -245,6 +242,7 @@ pub const FRASES: &[Frase] = &[
         "(aucun changement)",
         "(keine Änderungen)",
     ),
+    f!("1 volumen", "1 volume", "1 volume", "1 volume", "1 Laufwerk"),
     f!("AVISOS", "WARNINGS", "AVISOS", "AVERTISSEMENTS", "WARNUNGEN"),
     f!(
         "Abre Lucy al menos una vez para crear la DB, o corre desde el mismo usuario.",
@@ -831,6 +829,7 @@ pub const FRASES: &[Frase] = &[
         "Nach dieser Spalte sortieren",
     ),
     f!("Oscuro", "Dark", "Escuro", "Sombre", "Dunkel"),
+    f!("PROCESO", "PROCESS", "PROCESSO", "PROCESSUS", "PROZESS"),
     f!(
         "Pasa los controles CIS al equipo y te dice cuáles no cumple y con qué se ha \
          mirado cada uno. Hay que pulsar Escanear. Señala lo que está flojo; arreglarlo \
@@ -1165,6 +1164,7 @@ pub const FRASES: &[Frase] = &[
     // Estos eran INVISIBLES para el contador hasta que se le añadió `ui.button`.
     // Salían en español en cualquier idioma, y nadie los echaba de menos porque
     // el número decía que quedaban otros.
+    f!("act. {hora}", "upd. {hora}", "atu. {hora}", "maj {hora}", "akt. {hora}"),
     f!("ahora", "now", "agora", "à l'instant", "jetzt"),
     f!("alta", "high", "alta", "élevée", "hoch"),
     f!(
@@ -1328,12 +1328,35 @@ pub const FRASES: &[Frase] = &[
         "lässt sich nicht mehr messen",
     ),
     f!(
+        "{libre} libres de {total}",
+        "{libre} free of {total}",
+        "{libre} livres de {total}",
+        "{libre} libres sur {total}",
+        "{libre} frei von {total}",
+    ),
+    f!(
+        "{libre} libres · {usado} / {total}",
+        "{libre} free · {usado} / {total}",
+        "{libre} livres · {usado} / {total}",
+        "{libre} libres · {usado} / {total}",
+        "{libre} frei · {usado} / {total}",
+    ),
+    // ── Plantillas con hueco ────────────────────────────────────────────────
+    // El hueco lleva NOMBRE y cambia de sitio entre idiomas — que es justo por
+    // lo que existe `trf`. Ver el test que comprueba que ninguna traducción se
+    // deja uno por el camino.
+    f!(
         "{n} memorias detrás",
         "{n} memories behind it",
         "{n} memórias por trás",
         "{n} mémoires derrière",
         "{n} Erinnerungen dahinter",
     ),
+    f!("{n} núcleos", "{n} cores", "{n} núcleos", "{n} cœurs", "{n} Kerne"),
+    // SINGULAR Y PLURAL COMO DOS FRASES: en alemán el plural de «Laufwerk» es
+    // «Laufwerke» y en francés cambia el artículo. Pegar una «s» al final solo
+    // funciona en español.
+    f!("{n} volúmenes", "{n} volumes", "{n} volumes", "{n} volumes", "{n} Laufwerke"),
     f!(
         "{pista} · el proveedor la acepta",
         "{pista} · the provider accepts it",
