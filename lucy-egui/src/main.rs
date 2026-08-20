@@ -3394,6 +3394,10 @@ fn cmp_tarjeta(ui: &mut egui::Ui, ancho: f32, n: usize, label: &str, col: egui::
 /// El caso de «se miró y falló» ya estaba resuelto con `fallo`; faltaba el de
 /// antes de empezar, que es el que se ve el primer día.
 fn inv_tarjeta(ui: &mut egui::Ui, label: &str, n: Option<usize>, fallo: bool, on: bool) -> bool {
+    // Las cinco categorías vienen de `inventory::Categoria::label()`, en
+    // `lucy-core`, que no sabe de idiomas. Se traducen aquí, que es donde se
+    // pintan.
+    let label = i18n::tr(label);
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(118.0, 66.0), egui::Sense::click());
     ui.painter().rect(
         rect,
@@ -9274,7 +9278,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(
-                            egui::RichText::new(a.kind.label())
+                            egui::RichText::new(i18n::tr(a.kind.label()))
                                 .size(theme::FS_CAPTION)
                                 .color(theme::acc()),
                         );
@@ -10836,7 +10840,13 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         // bueno que este equipo no tiene ninguna.
         for (cat, motivo) in self.inv_data.fallos.clone() {
             ui.add_space(4.0);
-            aviso_rojo(ui, &format!("{}: {motivo}", cat.label()));
+            aviso_rojo(
+                ui,
+                &i18n::trf(
+                    "{cat}: {motivo}",
+                    &[("cat", i18n::tr(cat.label())), ("motivo", &motivo)],
+                ),
+            );
         }
         for (cat, total) in self.inv_data.truncado.clone() {
             ui.add_space(4.0);
@@ -11018,7 +11028,10 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 let n = r.cuenta(c);
                 if n > 0 {
                     ui.label(
-                        egui::RichText::new(format!("{} {n}", c.label()))
+                        egui::RichText::new(i18n::trf(
+                            "{cat} {n}",
+                            &[("cat", i18n::tr(c.label())), ("n", &n.to_string())],
+                        ))
                             .size(theme::FS_CAPTION)
                             .color(theme::txt3()),
                     );
@@ -11057,7 +11070,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                     ui.horizontal(|ui| {
                         ui.set_height(alto);
                         celda(ui, marca, 18.0, col, true);
-                        celda(ui, f.cat.label(), 96.0, theme::txt3(), false);
+                        celda(ui, i18n::tr(f.cat.label()), 96.0, theme::txt3(), false);
                         celda(ui, &f.id, 240.0, theme::txt(), true);
                         let texto = match &f.cambio {
                             Cambio::Cambió { campo, de, a } => {
@@ -11329,7 +11342,10 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         ui.add_sized(
             [ui.available_width(), 30.0],
             egui::TextEdit::singleline(&mut self.inv_query)
-                .hint_text(format!("⌕   Filtrar {}…", self.inv_cat.label().to_lowercase())),
+                .hint_text(i18n::trf(
+                    "⌕   Filtrar {cat}…",
+                    &[("cat", &i18n::tr(self.inv_cat.label()).to_lowercase())],
+                )),
         );
     }
 
@@ -12281,7 +12297,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                             .unwrap_or(1);
                         let etiquetas: Vec<&str> = lucy_core::prompt::Tono::ALL
                             .iter()
-                            .map(|t| t.label())
+                            .map(|t| i18n::tr(t.label()))
                             .collect();
                         if let Some(k) = segmentado(ui, "tono", 270.0, &etiquetas, i) {
                             tono = lucy_core::prompt::Tono::ALL[k];
@@ -12485,7 +12501,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 }
                 fila(ui, "Tema", Some(explica), false, |ui| {
                     let etiquetas: Vec<&str> =
-                        theme::Mode::ALL.iter().map(|m| m.label()).collect();
+                        theme::Mode::ALL.iter().map(|m| i18n::tr(m.label())).collect();
                     if let Some(k) = segmentado(ui, "tema", 240.0, &etiquetas, i) {
                         if k != i {
                             nuevo_tema = Some(theme::Mode::ALL[k]);

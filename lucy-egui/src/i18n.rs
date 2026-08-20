@@ -261,6 +261,7 @@ pub const FRASES: &[Frase] = &[
     f!("Activadas", "On", "Ativadas", "Activées", "Ein"),
     f!("Activado", "On", "Ativado", "Activé", "Ein"),
     f!("Activo", "On", "Ativo", "Actif", "Ein"),
+    f!("Actualizado", "Updated", "Atualizado", "Mis à jour", "Aktualisiert"),
     f!(
         "Actualizar ahora",
         "Update now",
@@ -292,6 +293,7 @@ pub const FRASES: &[Frase] = &[
         "Appliquer la modification dans {ruta}",
         "Änderung in {ruta} übernehmen",
     ),
+    f!("Aprobar", "Approve", "Aprovar", "Approuver", "Genehmigen"),
     f!("Archivo", "Archive", "Arquivo", "Fichiers", "Archiv"),
     f!("Artefactos", "Artifacts", "Artefactos", "Artefacts", "Artefakte"),
     f!("Atención", "Warning", "Atenção", "Attention", "Achtung"),
@@ -305,6 +307,13 @@ pub const FRASES: &[Frase] = &[
     ),
     f!("Aviso", "Warning", "Aviso", "Avertissement", "Warnung"),
     f!("Avisos", "Warnings", "Avisos", "Avertissements", "Warnungen"),
+    f!(
+        "Añadir el primero",
+        "Add the first one",
+        "Adicionar o primeiro",
+        "Ajouter la première",
+        "Ersten hinzufügen",
+    ),
     f!(
         "Añadir equipo",
         "Add machine",
@@ -338,6 +347,7 @@ pub const FRASES: &[Frase] = &[
         "Jeder Kristall ist eine destillierte Sitzung. Sie schreiben sich selbst, wenn Runden enden; ihre Lehren sind bereits Erinnerungen und bleiben, auch wenn du den Kristall löschst.",
     ),
     f!("Cancelar", "Cancel", "Cancelar", "Annuler", "Abbrechen"),
+    f!("Cargando…", "Loading…", "A carregar…", "Chargement…", "Lädt…"),
     f!(
         "Cerrar terminal",
         "Close terminal",
@@ -370,11 +380,23 @@ pub const FRASES: &[Frase] = &[
         "Vérifier qu'elle répond et avec quel système",
         "Erreichbarkeit und System prüfen",
     ),
+    f!("Conciso", "Concise", "Conciso", "Concis", "Knapp"),
+    f!("Conectado", "Connected", "Ligado", "Connecté", "Verbunden"),
+    f!("Conectando…", "Connecting…", "A ligar…", "Connexion…", "Verbinde…"),
     f!("Conectar", "Connect", "Ligar", "Connecter", "Verbinden"),
     f!("Configuración", "Settings", "Configuração", "Réglages", "Einstellungen"),
     f!("Conformes", "Compliant", "Conformes", "Conformes", "Erfüllt"),
+    f!(
+        "Contenedor (Docker)",
+        "Container (Docker)",
+        "Contentor (Docker)",
+        "Conteneur (Docker)",
+        "Container (Docker)",
+    ),
     f!("Conversación", "Conversation", "Conversa", "Conversation", "Gespräch"),
     f!("Copia de seguridad", "Backup", "Cópia de segurança", "Sauvegarde", "Sicherung"),
+    f!("Copiado", "Copied", "Copiado", "Copié", "Kopiert"),
+    f!("Copiar", "Copy", "Copiar", "Copier", "Kopieren"),
     f!(
         "Copiar el informe en CSV",
         "Copy report as CSV",
@@ -469,6 +491,7 @@ pub const FRASES: &[Frase] = &[
         "Désinstaller : supprime le dossier du skill",
         "Deinstallieren: löscht den Skill-Ordner",
     ),
+    f!("Detallado", "Detailed", "Detalhado", "Détaillé", "Ausführlich"),
     f!("Detener", "Stop", "Parar", "Arrêter", "Stoppen"),
     f!(
         "Detenido, sin error de arranque",
@@ -479,6 +502,13 @@ pub const FRASES: &[Frase] = &[
     ),
     f!("Disco sistema", "System disk", "Disco do sistema", "Disque système", "Systemlaufwerk"),
     f!("Discos", "Disks", "Discos", "Disques", "Datenträger"),
+    f!(
+        "Dispositivo de red",
+        "Network device",
+        "Dispositivo de rede",
+        "Équipement réseau",
+        "Netzwerkgerät",
+    ),
     f!("Documentos", "Documents", "Documentos", "Documents", "Dokumente"),
     f!("Editar", "Edit", "Editar", "Modifier", "Bearbeiten"),
     f!("Ejecución", "Execution", "Execução", "Exécution", "Ausführung"),
@@ -499,8 +529,16 @@ pub const FRASES: &[Frase] = &[
     ),
     f!("Eliminar", "Delete", "Eliminar", "Supprimer", "Löschen"),
     f!("Enviar", "Send", "Enviar", "Envoyer", "Senden"),
+    f!("Equilibrado", "Balanced", "Equilibrado", "Équilibré", "Ausgewogen"),
     f!("Equipo", "Machine", "Máquina", "Machine", "Rechner"),
     f!("Equipos", "Machines", "Máquinas", "Machines", "Rechner"),
+    f!(
+        "Error de conexión",
+        "Connection error",
+        "Erro de ligação",
+        "Erreur de connexion",
+        "Verbindungsfehler",
+    ),
     f!(
         "Escribe un comando, o dime qué quieres saber y lo traduzco.",
         "Type a command, or tell me what you want to know and I'll translate it.",
@@ -595,6 +633,7 @@ pub const FRASES: &[Frase] = &[
         "Nach diesem Tag filtern",
     ),
     f!("Fundir", "Merge", "Fundir", "Fusionner", "Zusammenführen"),
+    f!("Guardado", "Saved", "Guardado", "Enregistré", "Gespeichert"),
     f!("Guardar", "Save", "Guardar", "Enregistrer", "Speichern"),
     f!(
         "Guardar copia…",
@@ -840,6 +879,13 @@ pub const FRASES: &[Frase] = &[
         "Aufnahme nicht möglich: {e}",
     ),
     f!(
+        "No se pudo guardar",
+        "Could not save",
+        "Não foi possível guardar",
+        "Échec de l'enregistrement",
+        "Speichern fehlgeschlagen",
+    ),
+    f!(
         "No se pudo leer «{ruta}»: {e}",
         "Could not read «{ruta}»: {e}",
         "Não foi possível ler «{ruta}»: {e}",
@@ -854,6 +900,7 @@ pub const FRASES: &[Frase] = &[
         "Übersetzung nicht möglich: {e}",
     ),
     f!("Nueva terminal", "New terminal", "Novo terminal", "Nouveau terminal", "Neues Terminal"),
+    f!("Nunca", "Never", "Nunca", "Jamais", "Nie"),
     f!(
         "Nunca ha corrido en esta base — correrá en la próxima comprobación.",
         "Never run on this database — it will run at the next check.",
@@ -862,6 +909,13 @@ pub const FRASES: &[Frase] = &[
         "Ist in dieser Datenbank noch nie gelaufen — läuft bei der nächsten Prüfung.",
     ),
     f!("Núcleos", "Cores", "Núcleos", "Cœurs", "Kerne"),
+    f!(
+        "Ocultar detalle",
+        "Hide details",
+        "Ocultar detalhe",
+        "Masquer le détail",
+        "Details ausblenden",
+    ),
     f!(
         "Ollama · modelos locales",
         "Ollama · local models",
@@ -1006,6 +1060,7 @@ pub const FRASES: &[Frase] = &[
         "Reprendre l'actualisation",
         "Aktualisierung fortsetzen",
     ),
+    f!("Rechazar", "Reject", "Rejeitar", "Refuser", "Ablehnen"),
     f!(
         "Recuerdo por significado",
         "Recall by meaning",
@@ -1016,6 +1071,7 @@ pub const FRASES: &[Frase] = &[
     f!("Red", "Network", "Rede", "Réseau", "Netzwerk"),
     f!("Rehacer", "Redo", "Refazer", "Rétablir", "Wiederholen"),
     f!("Rehaciendo…", "Rebuilding…", "A refazer…", "Reconstruction…", "Neuaufbau…"),
+    f!("Reintentar", "Retry", "Tentar de novo", "Réessayer", "Wiederholen"),
     f!(
         "Salió con código de error",
         "Exited with an error code",
@@ -1040,11 +1096,33 @@ pub const FRASES: &[Frase] = &[
         "Gestoppte Dienste",
     ),
     f!(
+        "Servidor / Shell",
+        "Server / Shell",
+        "Servidor / Shell",
+        "Serveur / Shell",
+        "Server / Shell",
+    ),
+    f!("Sin conexión", "Disconnected", "Sem ligação", "Déconnecté", "Nicht verbunden"),
+    f!(
+        "Sin datos todavía",
+        "No data yet",
+        "Ainda sem dados",
+        "Aucune donnée pour l'instant",
+        "Noch keine Daten",
+    ),
+    f!(
         "Sin equipos remotos dados de alta",
         "No remote machines registered",
         "Sem máquinas remotas registadas",
         "Aucune machine distante enregistrée",
         "Keine Remote-Rechner eingetragen",
+    ),
+    f!(
+        "Sin equipos remotos dados de alta todavía.",
+        "No remote machines registered yet.",
+        "Ainda não há equipamentos remotos registados.",
+        "Aucune machine distante enregistrée pour l'instant.",
+        "Noch keine Remote-Rechner eingetragen.",
     ),
     f!(
         "Sin equipos remotos.",
@@ -1071,12 +1149,14 @@ pub const FRASES: &[Frase] = &[
          administrateur.",
         "Keine Rechte und UAC ist aus: Du musst Lucy mit einem Administratorkonto öffnen.",
     ),
+    f!("Sin resultados", "No results", "Sem resultados", "Aucun résultat", "Keine Treffer"),
     f!("Sistema", "System", "Sistema", "Système", "System"),
     f!("Skills", "Skills", "Skills", "Skills", "Skills"),
     f!("Software", "Software", "Software", "Logiciels", "Software"),
     f!("Sub-agentes", "Sub-agents", "Subagentes", "Sous-agents", "Sub-Agenten"),
     f!("Tareas", "Tasks", "Tarefas", "Tâches", "Aufgaben"),
     f!("Tema", "Theme", "Tema", "Thème", "Design"),
+    f!("Terminales", "Terminals", "Terminais", "Terminaux", "Terminals"),
     f!(
         "Todavía no hay ninguno. Hacen falta al menos cuatro memorias del mismo asunto con más de cinco días — la reflexión corre sola cada día, o desde Mantenimiento → Reflexionar ahora.",
         "None yet. It takes at least four memories on the same subject, more than five days apart — reflection runs on its own each day, or from Maintenance → Reflect now.",
@@ -1192,6 +1272,7 @@ pub const FRASES: &[Frase] = &[
         "Voir les changements",
         "Änderungen ansehen",
     ),
+    f!("Ver detalle", "Show details", "Ver detalhe", "Voir le détail", "Details anzeigen"),
     f!(
         "Ver la evidencia",
         "View the evidence",
@@ -1239,6 +1320,7 @@ pub const FRASES: &[Frase] = &[
         "recherchable par le sens",
         "nach Bedeutung durchsuchbar",
     ),
+    f!("cambió", "changed", "mudou", "modifié", "geändert"),
     f!(
         "comandos encadenados sin aprobar, por orden",
         "chained commands without approval, one after another",
@@ -1276,6 +1358,7 @@ pub const FRASES: &[Frase] = &[
         "der Oberfläche und dessen, was Lucy antwortet · dieser Bildschirm, die \
          Navigation und die Hilfe sind übersetzt; der Rest folgt",
     ),
+    f!("editado", "edited", "editado", "édité", "bearbeitet"),
     f!(
         "en producción avisa antes de reiniciar un servicio",
         "in production, warn before restarting a service",
@@ -1284,6 +1367,7 @@ pub const FRASES: &[Frase] = &[
         "in der Produktion warnt sie vor dem Neustart eines Dienstes",
     ),
     f!("escaneando… {s}s", "scanning… {s}s", "a analisar… {s}s", "analyse… {s}s", "scanne… {s}s"),
+    f!("escrito", "written", "escrito", "écrit", "geschrieben"),
     f!(
         "escritura progresiva y transiciones · LUCY_NO_MOTION=1 las apaga al arrancar",
         "progressive typing and transitions · LUCY_NO_MOTION=1 turns them off at startup",
@@ -1332,7 +1416,9 @@ pub const FRASES: &[Frase] = &[
         "was hervorgehoben wird: Navigation, Fortschritt, erledigt",
     ),
     f!("media", "medium", "média", "moyenne", "mittel"),
+    f!("memoria", "memory", "memória", "mémoire", "Gedächtnis"),
     f!("no vale", "not valid", "não serve", "invalide", "ungültig"),
+    f!("nuevo", "new", "novo", "nouveau", "neu"),
     f!("pegar clave", "paste key", "colar chave", "coller la clé", "Schlüssel einfügen"),
     f!(
         "por defecto {puerto}",
@@ -1383,12 +1469,21 @@ pub const FRASES: &[Frase] = &[
     f!("vuelve a medirse", "measurable again", "volta a medir-se", "de nouveau mesuré", "wird wieder gemessen"),
     f!("válida", "valid", "válida", "valide", "gültig"),
     f!("ya cumple", "now compliant", "já cumpre", "conforme désormais", "erfüllt es jetzt"),
+    f!("ya no está", "gone", "já não está", "n'existe plus", "nicht mehr da"),
     f!(
         "ya no se puede medir",
         "can no longer be measured",
         "já não se pode medir",
         "ne peut plus être mesuré",
         "lässt sich nicht mehr messen",
+    ),
+    f!("{cat} {n}", "{cat} {n}", "{cat} {n}", "{cat} {n}", "{cat} {n}"),
+    f!(
+        "{cat}: {motivo}",
+        "{cat}: {motivo}",
+        "{cat}: {motivo}",
+        "{cat} : {motivo}",
+        "{cat}: {motivo}",
     ),
     f!(
         "{con} de {total} con vector — el resto solo se encuentra por palabras",
@@ -1488,6 +1583,13 @@ pub const FRASES: &[Frase] = &[
         "⇈ Repetir como administrador",
         "⇈ Réessayer en administrateur",
         "⇈ Als Administrator wiederholen",
+    ),
+    f!(
+        "⌕   Filtrar {cat}…",
+        "⌕   Filter {cat}…",
+        "⌕   Filtrar {cat}…",
+        "⌕   Filtrer {cat}…",
+        "⌕   {cat} filtern…",
     ),
     f!(
         "⌕  Filtrar mensajes…",
@@ -2030,6 +2132,50 @@ mod tests {
         // Y en alemán el hueco va en otro sitio, que es el motivo de todo esto.
         assert_eq!(trf("hace {n} días", &[("n", "3")]), "vor 3 Tagen");
         set(Lang::Es);
+    }
+
+    #[test]
+    fn los_textos_que_vienen_del_core_estan_traducidos() {
+        // EL PUNTO CIEGO QUE NO CERRABA NINGÚN OTRO TEST. `lucy-core` no sabe de
+        // idiomas —y no debe: es el dominio, y la app Tauri comparte el mismo
+        // crate— así que sus `label()` se traducen envolviéndolos en el punto de
+        // uso. Eso funciona, pero nada avisaba de que una variante NUEVA en el
+        // core llegara a la pantalla sin traducción: se descubría en una
+        // captura, que es como se han descubierto casi todos los de esta tanda.
+        //
+        // Recorriendo los enums de verdad, añadir una sexta categoría de
+        // inventario o un cuarto tono rompe este test hasta que alguien la
+        // traduzca. Los `label()` que son nombres propios —los protocolos,
+        // «Windows (WinRM)»— quedan fuera a propósito.
+        let mut faltan: Vec<&str> = Vec::new();
+        for c in lucy_core::inventory::Categoria::ALL {
+            if busca(c.label()).is_none() {
+                faltan.push(c.label());
+            }
+        }
+        for t in lucy_core::prompt::Tono::ALL {
+            if busca(t.label()).is_none() {
+                faltan.push(t.label());
+            }
+        }
+        for e in [
+            lucy_core::compliance::Estado::Pasa,
+            lucy_core::compliance::Estado::Aviso,
+            lucy_core::compliance::Estado::Falla,
+            lucy_core::compliance::Estado::Error,
+        ] {
+            // «OK» es igual en los cinco idiomas y no está en la tabla a
+            // propósito: `tr` devuelve el español, que es lo que se quiere.
+            if e.label() != "OK" && busca(e.label()).is_none() {
+                faltan.push(e.label());
+            }
+        }
+        assert!(
+            faltan.is_empty(),
+            "estos textos vienen de `lucy-core` y llegan a la pantalla sin \
+             traducción:\n{}",
+            faltan.iter().map(|s| format!("  - {s}")).collect::<Vec<_>>().join("\n")
+        );
     }
 
     #[test]
