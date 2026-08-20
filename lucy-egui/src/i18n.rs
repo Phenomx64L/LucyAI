@@ -248,7 +248,7 @@ macro_rules! f {
 /// `tr` devuelve el español, que es lo que se quiere. Que falten es la decisión,
 /// no un olvido.
 pub const FRASES: &[Frase] = &[
-    // ── Servicios detenidos, ya accionables ─────────────────────────────────
+    // ── Visor de logs ───────────────────────────────────────────────────────
     f!(
         "#{id} · sesión {sesion} · {chars} caracteres leídos",
         "#{id} · session {sesion} · {chars} characters read",
@@ -1730,6 +1730,7 @@ pub const FRASES: &[Frase] = &[
         "en production, prévient avant de redémarrer un service",
         "in der Produktion warnt sie vor dem Neustart eines Dienstes",
     ),
+    f!("en vivo · {hora}", "live · {hora}", "ao vivo · {hora}", "en direct · {hora}", "live · {hora}"),
     f!("escaneando… {s}s", "scanning… {s}s", "a analisar… {s}s", "analyse… {s}s", "scanne… {s}s"),
     f!(
         "escribe owner/model",
@@ -1765,6 +1766,8 @@ pub const FRASES: &[Frase] = &[
     f!("hace {n} días", "{n} days ago", "há {n} dias", "il y a {n} jours", "vor {n} Tagen"),
     f!("hace {n} h", "{n} h ago", "há {n} h", "il y a {n} h", "vor {n} Std."),
     f!("hace {n} min", "{n} min ago", "há {n} min", "il y a {n} min", "vor {n} Min."),
+    f!("leyendo… {s}s", "reading… {s}s", "a ler… {s}s", "lecture… {s}s", "lese… {s}s"),
+    // ── Servicios detenidos, ya accionables ─────────────────────────────────
     f!(
         "llevas {gastado} · 0 = sin límite",
         "you've spent {gastado} · 0 = no limit",
@@ -1976,6 +1979,13 @@ pub const FRASES: &[Frase] = &[
         "⌕  Filtrar mensagens…",
         "⌕  Filtrer les messages…",
         "⌕  Nachrichten filtern…",
+    ),
+    f!(
+        "⏸ pausado · {hora}",
+        "⏸ paused · {hora}",
+        "⏸ em pausa · {hora}",
+        "⏸ en pause · {hora}",
+        "⏸ pausiert · {hora}",
     ),
     f!("■  Parar", "■  Stop", "■  Parar", "■  Arrêter", "■  Anhalten"),
     f!("■ Detener", "■ Stop", "■ Parar", "■ Arrêter", "■ Stopp"),
@@ -2223,6 +2233,15 @@ mod tests {
             ".hint_text(",
             "egui::Button::new(",
             ".selected_text(",
+            // Añadidos DESPUÉS de que el visor de logs saliera en español con
+            // este test en verde: son ayudantes propios de una pantalla, y cada
+            // uno que aparezca hay que meterlo aquí a mano. Es la debilidad de
+            // fondo de este test y no se arregla del todo — ver la nota del
+            // tope.
+            "seg(ui,",
+            "lv_chip(ui,",
+            "svc_row(ui,",
+            "inv_tarjeta(ui,",
         ];
         const TRADUCEN_SOLOS: &[&str] = &[
             "fila(",
@@ -2276,7 +2295,14 @@ mod tests {
                 continue;
             }
             for s in literales_de(l) {
-                if s.chars().count() >= 3
+                // LAS SIGLAS CORTAS NO SE TRADUCEN. «CPU», «RAM», «PID» y
+                // «OK» se escriben igual en los cinco idiomas; meterlas en la
+                // tabla serian cuatro entradas con la misma palabra repetida
+                // cinco veces, que es ruido con aspecto de trabajo.
+                let sigla = s.chars().count() <= 4
+                    && s.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit());
+                if !sigla
+                    && s.chars().count() >= 3
                     && s.chars().any(|c| c.is_alphabetic())
                     && !s.chars().all(|c| c.is_ascii_lowercase() || "._-/0123456789".contains(c))
                 {
@@ -2288,14 +2314,24 @@ mod tests {
         crudos.dedup();
         // CERO, Y SE QUEDA EN CERO. Cualquier sitio nuevo que pinte texto sin
         // pasarlo por `tr` o `trf` rompe este test en el commit que lo
-        // introduce, que es la única forma de que esto no se vuelva a pudrir.
+        // introduce, que es la unica forma de que esto no se vuelva a pudrir.
         //
-        // LO QUE ESTE TEST NO GARANTIZA, y conviene saberlo antes de fiarse: la
-        // ventana es de tres líneas arriba y tres abajo, así que un `i18n::tr`
-        // en una línea vecina que no tiene nada que ver da por bueno el sitio de
-        // al lado. Es un cedazo, no una prueba. Lo que sí hace bien es cazar el
-        // caso normal —una llamada nueva escrita sin envolver— que es el que ha
-        // metido aquí todo lo que se ha ido encontrando por capturas.
+        // LO QUE ESTE TEST NO GARANTIZA, y hay que decirlo claro porque ha dado
+        // cero cuatro veces mientras habia pantallas enteras en espanol:
+        //
+        //   1. La ventana es de tres lineas. Un `tr` vecino que no tiene nada
+        //      que ver da por bueno el sitio de al lado, y un `format!` cuyo
+        //      `ui.label` esta cinco lineas mas abajo no se ve.
+        //   2. La lista de marcas de arriba es MANUAL. Cada ayudante nuevo de
+        //      una pantalla hay que anadirlo, y hasta que alguien lo haga sus
+        //      textos son invisibles para esto. Asi se escaparon Compliance y
+        //      el visor de logs.
+        //   3. Un literal guardado en una tabla de datos y pintado veinte
+        //      lineas despues no lo ve ningun escaner de lineas.
+        //
+        // Es un CEDAZO, no una prueba. Caza el caso normal —una llamada nueva
+        // escrita sin envolver— y ha cazado bastantes. Lo que no hace es
+        // sustituir a abrir la aplicacion en otro idioma y mirarla.
         const TOPE: usize = 0;
         assert!(
             crudos.len() <= TOPE,

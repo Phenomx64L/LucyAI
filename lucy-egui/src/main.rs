@@ -9660,10 +9660,10 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 .inner_margin(egui::Margin::same(2.0))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        if seg(ui, "Auditoría", self.lv_mode == LvMode::Auditoria) {
+                        if seg(ui, i18n::tr("Auditoría"), self.lv_mode == LvMode::Auditoria) {
                             nuevo = LvMode::Auditoria;
                         }
-                        if seg(ui, "Archivo", self.lv_mode == LvMode::Archivo) {
+                        if seg(ui, i18n::tr("Archivo"), self.lv_mode == LvMode::Archivo) {
                             nuevo = LvMode::Archivo;
                         }
                     });
@@ -9724,9 +9724,15 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             if !self.lv_last.is_empty() {
                 ui.add_space(8.0);
                 let (txt, col) = if self.lv_paused {
-                    (format!("⏸ pausado · {}", self.lv_last), theme::amber())
+                    (
+                        i18n::trf("⏸ pausado · {hora}", &[("hora", &self.lv_last)]),
+                        theme::amber(),
+                    )
                 } else {
-                    (format!("en vivo · {}", self.lv_last), theme::acc())
+                    (
+                        i18n::trf("en vivo · {hora}", &[("hora", &self.lv_last)]),
+                        theme::acc(),
+                    )
                 };
                 ui.label(egui::RichText::new(txt).size(theme::FS_CAPTION).color(col));
             }
@@ -9736,7 +9742,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             if let Some(t0) = self.lv_desde {
                 ui.add_space(8.0);
                 ui.label(
-                    egui::RichText::new(format!("leyendo… {}s", t0.elapsed().as_secs()))
+                    egui::RichText::new(i18n::trf("leyendo… {s}s", &[("s", &t0.elapsed().as_secs().to_string())]))
                         .size(theme::FS_CAPTION)
                         .color(theme::txt3()),
                 );
@@ -9908,7 +9914,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 ("Info", i, Some(lucy_core::logs::Level::Info)),
             ];
             for (label, n, nivel) in chips {
-                if lv_chip(ui, label, n, self.lv_filter == nivel) {
+                if lv_chip(ui, i18n::tr(label), n, self.lv_filter == nivel) {
                     self.lv_filter = nivel;
                 }
                 ui.add_space(6.0);
