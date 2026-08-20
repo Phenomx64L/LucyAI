@@ -626,6 +626,13 @@ pub const FRASES: &[Frase] = &[
         "{n} CIS-Prüfungen laufen auf {equipo}…",
     ),
     f!("Ejecutar", "Run", "Executar", "Exécuter", "Ausführen"),
+    f!(
+        "El fichero no tiene líneas.",
+        "The file has no lines.",
+        "O ficheiro não tem linhas.",
+        "Le fichier n'a aucune ligne.",
+        "Die Datei hat keine Zeilen.",
+    ),
     f!("El más barato", "Cheapest", "O mais barato", "Le moins cher", "Am günstigsten"),
     f!(
         "El razonamiento del agente — pensar · actuar · observar — se registra aquí.",
@@ -689,6 +696,13 @@ pub const FRASES: &[Frase] = &[
         "Verbindungsfehler",
     ),
     f!(
+        "Escribe la ruta de un fichero y pulsa Enter.",
+        "Type a file path and press Enter.",
+        "Escreve o caminho de um ficheiro e prime Enter.",
+        "Saisis le chemin d'un fichier et appuie sur Entrée.",
+        "Gib einen Dateipfad ein und drück Enter.",
+    ),
+    f!(
         "Escribe un comando, o dime qué quieres saber y lo traduzco.",
         "Type a command, or tell me what you want to know and I'll translate it.",
         "Escreve um comando, ou diz-me o que queres saber e eu traduzo.",
@@ -728,6 +742,13 @@ pub const FRASES: &[Frase] = &[
         "Esforço Médio (equilibrado)",
         "Effort moyen (équilibré)",
         "Mittlerer Aufwand (ausgewogen)",
+    ),
+    f!(
+        "Esta categoría no tiene nada en este equipo.",
+        "This category is empty on this machine.",
+        "Esta categoria não tem nada nesta máquina.",
+        "Cette catégorie ne contient rien sur ce poste.",
+        "Diese Kategorie ist auf diesem Rechner leer.",
     ),
     f!(
         "Esta foto pasa a ser la nueva línea base",
@@ -1167,6 +1188,13 @@ pub const FRASES: &[Frase] = &[
     ),
     f!("No se pudo", "Not measured", "Não foi possível", "Non mesuré", "Nicht messbar"),
     f!(
+        "No se pudo consultar esta categoría — el motivo está arriba.",
+        "Couldn't query this category — the reason is above.",
+        "Não foi possível consultar esta categoria — o motivo está acima.",
+        "Impossible d'interroger cette catégorie — la raison est au-dessus.",
+        "Diese Kategorie konnte nicht abgefragt werden — der Grund steht oben.",
+    ),
+    f!(
         "No se pudo consultar — el motivo está arriba.",
         "Couldn't query — the reason is above.",
         "Não foi possível consultar — o motivo está acima.",
@@ -1309,6 +1337,13 @@ pub const FRASES: &[Frase] = &[
         "Verbindung testen",
     ),
     f!("Puertos", "Ports", "Portas", "Ports", "Ports"),
+    f!(
+        "Pulsa Escanear para hacerle una foto a este equipo.",
+        "Press Scan to take a snapshot of this machine.",
+        "Carrega em Analisar para tirar uma fotografia a esta máquina.",
+        "Appuie sur Scanner pour prendre une photo de ce poste.",
+        "Drück auf Scannen, um eine Momentaufnahme dieses Rechners zu machen.",
+    ),
     f!(
         "Pulsa Escanear para pasar los controles CIS a este equipo.",
         "Press Scan to run the CIS controls on this machine.",
@@ -1462,7 +1497,21 @@ pub const FRASES: &[Frase] = &[
         "Serveur / Shell",
         "Server / Shell",
     ),
+    f!(
+        "Sin actividad registrada.",
+        "No activity recorded.",
+        "Sem atividade registada.",
+        "Aucune activité enregistrée.",
+        "Keine Aktivität erfasst.",
+    ),
     f!("Sin artefactos", "No artifacts", "Sem artefactos", "Aucun artefact", "Keine Artefakte"),
+    f!(
+        "Sin coincidencias.",
+        "No matches.",
+        "Sem correspondências.",
+        "Aucune correspondance.",
+        "Keine Treffer.",
+    ),
     f!("Sin conexión", "Disconnected", "Sem ligação", "Déconnecté", "Nicht verbunden"),
     f!(
         "Sin datos todavía",
@@ -2593,6 +2642,67 @@ mod tests {
             "{} descripciones del catálogo de modelos salen en español:\n{}",
             faltan.len(),
             faltan.iter().take(8).map(|s| format!("  - {s}")).collect::<Vec<_>>().join("\n")
+        );
+    }
+
+    #[test]
+    fn toda_frase_envuelta_en_tr_tiene_traduccion() {
+        // EL HUECO QUE FALTABA, y por el que se colaron los vacíos de Inventario
+        // y del visor. Había un test que comprobaba que los SITIOS estuvieran
+        // envueltos y otro que las frases DE LA TABLA estuvieran completas — y
+        // ninguno miraba lo de en medio: una frase envuelta en `tr` que no está
+        // en la tabla.
+        //
+        // `tr` devuelve el español cuando no encuentra la frase, y eso es a
+        // propósito: permite convertir por pantallas sin que las que faltan se
+        // vean rotas. Pero significa que envolver una cadena y olvidar
+        // traducirla no falla en ninguna parte — sale en español y el sitio
+        // cuenta como cubierto.
+        let f = fuente();
+        let mut faltan: Vec<String> = Vec::new();
+        let mut desde = 0;
+        while let Some(rel) = f[desde..].find("i18n::tr(") {
+            let ini = desde + rel + "i18n::tr(".len();
+            desde = ini;
+            // Solo si el literal va PEGADO a la llamada. Un `tr(msg)` con una
+            // variable dentro no se puede resolver leyendo el fuente, y ahí no
+            // hay nada que comprobar desde aquí.
+            let resto = hasta(&f[ini..], 400);
+            let Some(c) = resto.chars().next() else { continue };
+            if c != '"' {
+                continue;
+            }
+            let Some(s) = literales_de(resto.lines().next().unwrap_or("")).into_iter().next()
+            else {
+                continue;
+            };
+            // Sin prosa, o una sigla: no se traducen.
+            let sigla = s.chars().count() <= 4
+                && s.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit());
+            if sigla || s.chars().count() < 3 || !s.chars().any(|c| c.is_alphabetic()) {
+                continue;
+            }
+            if busca(&s).is_none() {
+                faltan.push(s);
+            }
+        }
+        faltan.sort();
+        faltan.dedup();
+        // TRES, Y SON LAS TRES A PROPOSITO: «Lucy» y «✦ Lucy» son la marca, y
+        // «prod, web, db» es el ejemplo de la caja de etiquetas — traducirlo
+        // sugeriria etiquetar en otro idioma que el resto del equipo.
+        //
+        // Van envueltas igualmente porque pasan por un ayudante que traduce, y
+        // sacarlas de ahi seria complicar el sitio de llamada para complacer a
+        // un test. `tr` devuelve el español y eso es lo correcto para las tres.
+        const TOPE: usize = 3;
+        assert!(
+            faltan.len() <= TOPE,
+            "{} frases pasan por `tr` y NO están en la tabla, así que salen en \
+             español en cualquier idioma:\n{}",
+            faltan.len(),
+            faltan.iter().take(12).map(|s| format!("  - {}", hasta(s, 60)))
+                .collect::<Vec<_>>().join("\n")
         );
     }
 

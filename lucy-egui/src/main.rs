@@ -9930,19 +9930,30 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
     fn lv_stream(&mut self, ui: &mut egui::Ui) {
         let visibles = lv_filtrar(&self.lv_rows, self.lv_filter, &self.lv_query);
         if visibles.is_empty() {
+            // ENVUELTO DONDE ESTÁ EL LITERAL, no donde se pinta. Las dos
+            // formas funcionan igual en ejecución, pero solo esta la ve el test
+            // que comprueba que toda frase envuelta tenga traducción: con
+            // `tr(msg)` sobre una variable no hay forma de saber desde el
+            // fuente qué cadena acaba pasando por ahí. Y estos vacíos se colaron
+            // en español precisamente por eso.
             let msg = if self.lv_rows.is_empty() {
                 match self.lv_mode {
-                    LvMode::Auditoria => "Sin actividad registrada.",
+                    LvMode::Auditoria => i18n::tr("Sin actividad registrada."),
                     LvMode::Archivo if self.lv_path.trim().is_empty() => {
-                        "Escribe la ruta de un fichero y pulsa Enter."
+                        i18n::tr("Escribe la ruta de un fichero y pulsa Enter.")
                     }
-                    LvMode::Archivo => "El fichero no tiene líneas.",
+                    LvMode::Archivo => i18n::tr("El fichero no tiene líneas."),
                 }
             } else {
-                "Sin coincidencias."
+                i18n::tr("Sin coincidencias.")
             };
             ui.centered_and_justified(|ui| {
                 ui.label(
+                    // EL `tr` VA AQUI Y NO EN EL `let`. `msg` sale de una
+                    // cadena de `if` con cuatro literales, y envolver cada uno
+                    // seria envolver cuatro veces lo que se pinta una. Ademas
+                    // este es el patron que ningun escaner de lineas ve: el
+                    // literal se asigna arriba y se pinta quince lineas abajo.
                     egui::RichText::new(msg)
                         .monospace()
                         .size(theme::FS_FOOTNOTE)
@@ -11397,21 +11408,26 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         let filas = inv_filas(&self.inv_data, cat, &self.inv_query, self.inv_sort[ci]);
 
         if filas.is_empty() {
+            // Envuelto donde está el literal, por lo mismo que en el visor.
             let msg = if self.inv_data.is_empty() && self.inv_last.is_empty() {
-                "Pulsa Escanear para hacerle una foto a este equipo."
+                i18n::tr("Pulsa Escanear para hacerle una foto a este equipo.")
             } else if self.inv_data.len_de(cat) == 0 {
                 match self.inv_data.fallo_de(cat) {
                     // Distinguir «no hay» de «no se pudo mirar» es la mitad del
                     // valor de un inventario: lo primero es un hecho del equipo y
                     // lo segundo un problema de permisos.
-                    Some(_) => "No se pudo consultar esta categoría — el motivo está arriba.",
-                    None => "Esta categoría no tiene nada en este equipo.",
+                    Some(_) => {
+                        i18n::tr("No se pudo consultar esta categoría — el motivo está arriba.")
+                    }
+                    None => i18n::tr("Esta categoría no tiene nada en este equipo."),
                 }
             } else {
-                "Sin coincidencias."
+                i18n::tr("Sin coincidencias.")
             };
             ui.centered_and_justified(|ui| {
                 ui.label(
+                    // Igual que en el visor: el `tr` va donde se pinta, porque
+                    // `msg` sale de una cadena de `if` con cuatro literales.
                     egui::RichText::new(msg)
                         .monospace()
                         .size(theme::FS_FOOTNOTE)
