@@ -2956,7 +2956,32 @@ import { listen } from '@tauri-apps/api/event';
             const savedName = safeGetLS('lucy_user_name', '');
             const savedLang = safeGetLS('lucy_user_lang', '');
             const savedRb   = safeGetLS('lucy_runbooks_dir', '');
-            if (savedLang) userLang = savedLang;
+            // ── El idioma de la PRIMERA vez ──────────────────────────────────
+            //
+            // Lucy arrancaba siempre en `es-MX` y lo preguntaba en el alta. En
+            // un Windows en alemán, eso significa que el formulario donde eliges
+            // idioma sale en español: hay que encontrar el desplegable antes de
+            // poder leer nada. Justo al revés de para lo que está.
+            //
+            // Ahora se mira lo que dice el sistema —`navigator.language` en el
+            // WebView es el idioma de MOSTRAR de Windows— y se elige la entrada
+            // de LANGS que le corresponda. Solo la primera vez: en cuanto hay
+            // algo guardado, manda lo guardado, porque el operador ya decidió.
+            //
+            // Si el sistema está en un idioma que Lucy no habla —italiano,
+            // japonés— se queda el valor por defecto y el alta lo pregunta,
+            // que es lo correcto: adivinar mal es peor que preguntar.
+            if (savedLang) {
+                userLang = savedLang;
+            } else {
+                try {
+                    const sys = String(navigator.language || '').toLowerCase();
+                    const dos = sys.slice(0, 2);
+                    const exacto = LANGS.find(l => l.code.toLowerCase() === sys);
+                    const porIdioma = LANGS.find(l => l.code.slice(0, 2).toLowerCase() === dos);
+                    if (exacto || porIdioma) userLang = (exacto || porIdioma).code;
+                } catch { /* sin navigator: se queda el de por defecto */ }
+            }
             if (hasKey && savedName) {
                 lucyConfig = {
                     name: savedName,

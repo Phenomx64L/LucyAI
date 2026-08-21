@@ -216,7 +216,7 @@
 
   // v1.7.236 — versión DINÁMICA desde Tauri (getVersion lee tauri.conf.json)
   // en vez de un string hardcodeado que se desincroniza cada release.
-  let appVersion = $state('1.7.236');
+  let appVersion = $state(__LUCY_VERSION__);
   import { getVersion } from '@tauri-apps/api/app';
 
   // ── Voz de Lucy (v1.7.235) ──────────────────────────────────────────────────

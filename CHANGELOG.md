@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [2.0.1] — 2026-08-20
+
+Primera versión oficial 2.x, y la primera empaquetada con la interfaz en cinco
+idiomas.
+
+### Feat — la interfaz en cinco idiomas
+
+Español, inglés, portugués (Portugal), francés y alemán. **1.674 frases** en
+`src/lib/i18n-table.ts`, con el español como CLAVE: una frase sin entrada sale
+en español en vez de rota, que es lo que permitió convertir la aplicación
+pantalla por pantalla.
+
+Sustituye a tres mecanismos que convivían: `cockpit/i18n.ts` con `t(es, en)` —dos
+idiomas, no reactivo, su propio comentario admitía que obligaba a recargar—, el
+`t(es, pt, en, fr = en, de = en)` de `SetupOverlay` —con francés y alemán cayendo
+al inglés— y 2.315 ternarios `isEN ? 'English' : 'Español'` en 75 ficheros.
+
+**El inglés no se retradujo.** Estaba escrito a mano por quien conoce el
+producto; se cosechó de esos ternarios (1.671 pares únicos) y a los modelos solo
+se les pidió pt/fr/de, con el inglés delante como referencia.
+
+- `$trad('…')` en componentes (tienda: repinta al cambiar de idioma).
+- `tr('…')` en módulos `.ts`, donde no hay nada a lo que suscribirse.
+- El prop `isEN` desaparece de 21 componentes y de los 17 sitios que se lo
+  pasaban.
+- Quedan 231 ternarios: 157 son plantillas con `${…}` y necesitan huecos con
+  nombre uno a uno.
+
+### Feat — el idioma del sistema en el primer arranque
+
+Lucy arrancaba siempre en `es-MX`. En un Windows en alemán, el formulario donde
+se elige idioma salía en español — justo al revés de para lo que está. Ahora la
+primera vez se mira `navigator.language`; en cuanto hay algo guardado, manda lo
+guardado. Un idioma que Lucy no habla se sigue preguntando: adivinar mal es peor.
+
+### Feat — instaladores en cinco idiomas
+
+- **NSIS (`.exe`)**: selector de idioma en el propio instalador, ahora con seis
+  entradas (inglés, español, español internacional, portugués, francés, alemán).
+- **MSI**: cinco ficheros, uno por idioma (`en-US`, `es-ES`, `pt-PT`, `fr-FR`,
+  `de-DE`). Un MSI es de un solo idioma por diseño: el selector vive en el NSIS.
+
+### Fix — la versión deja de estar escrita a mano
+
+`package.json`, `src-tauri/Cargo.toml` y `tauri.conf.json` la declaran porque
+cada una la lee una herramienta distinta. Los TRES fallbacks que había en
+componentes —`LUCY_VERSION`, `appVersion`, `currentVersion`— leen ahora
+`__LUCY_VERSION__`, que Vite compila desde `package.json`.
+
+Habían derivado otra vez: al llegar aquí decían 1.7.236, 1.7.236 y 1.7.66
+mientras el paquete iba por 1.8.0. No se veía porque `getVersion()` los
+sobrescribe al montar — o sea que el fallo solo salía en dev y en preview, que
+es exactamente por lo que nadie lo reportaba. Hay test.
+
+### Fix — portugués de Portugal
+
+La lista de idiomas ofrecía «Português (Brasil)» y el texto usaba formas
+europeas. Se decide por Portugal, que es lo que ya estaba escrito en las dos
+versiones de Lucy; `stt` y `tts` van con la etiqueta.
+
+---
+
 ## [1.7.238] — 2026-07-16
 
 ### Fix — memory: capsule save + `memoria_buscar` no longer collapse against document rows

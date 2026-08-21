@@ -36,7 +36,7 @@
     // v1.7.236 — versión DINÁMICA desde Tauri (getVersion lee tauri.conf.json),
     // igual que el resto de la UI. El literal es solo un fallback para el modo
     // dev/preview donde getVersion() puede no resolver; se sobrescribe en onMount.
-    let LUCY_VERSION = '1.7.236';
+    let LUCY_VERSION = __LUCY_VERSION__;
     onMount(async () => {
         try { LUCY_VERSION = await getVersion(); } catch { /* keep fallback */ }
     });

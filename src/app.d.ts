@@ -18,6 +18,20 @@
 export {};
 
 declare global {
+    /**
+     * La versión de Lucy, compilada dentro del bundle por Vite desde
+     * `package.json`. Ver la nota de `vite.config.js`.
+     *
+     * NO es `window.algo`: es una sustitución de texto que hace el compilador,
+     * así que en el bundle final no queda ninguna variable — queda la cadena.
+     * Por eso se declara aquí fuera de `Window`.
+     *
+     * Existe porque tres componentes llevaban la versión escrita a mano como
+     * valor por defecto, con un comentario pidiendo mantenerlos sincronizados.
+     * No se mantuvieron.
+     */
+    const __LUCY_VERSION__: string;
+
     interface Window {
         /**
          * Ring of UI-freeze samples. Appended by the freeze watchdog and read

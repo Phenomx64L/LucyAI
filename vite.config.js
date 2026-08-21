@@ -1,5 +1,29 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import { sveltekit } from "@sveltejs/kit/vite";
+
+// ── La versión, de UN SOLO SITIO ────────────────────────────────────────────
+//
+// Estaba escrita a mano en tres componentes como valor por defecto, con un
+// comentario que pedía «keep in sync with package.json + Cargo.toml». No se
+// mantuvo: el CHANGELOG cuenta que `LUCY_VERSION = '1.6.4'` se quedó docenas de
+// versiones atrás mientras la aplicación ya iba por la 1.7.x, y que hubo que
+// arreglarlo a mano. Volvió a pasar: al llegar a la 2.0.1 esos tres decían
+// 1.7.236, 1.7.236 y 1.7.66.
+//
+// En ejecución no se veía porque `getVersion()` de Tauri los sobrescribe al
+// montar — o sea que el fallo solo salía en dev, en preview y en un test que
+// montara el componente suelto. Un dato incorrecto que se corrige medio segundo
+// después es peor que uno que se ve siempre: nadie lo reporta y nadie lo
+// arregla.
+//
+// `package.json` manda porque es lo que ya lee `npm version`. `Cargo.toml` y
+// `tauri.conf.json` siguen siendo suyos —los lee el bundler, no Vite— y hay un
+// test que comprueba que los tres dicen lo mismo.
+const pkg = JSON.parse(
+  readFileSync(fileURLToPath(new URL("./package.json", import.meta.url)), "utf8"),
+);
 
 // `process` is a Node global that neither config's `lib` declares. A cast
 // rather than a @ts-expect-error, because the directive only fires under the
@@ -16,6 +40,11 @@ const host = /** @type {any} */ (globalThis).process?.env?.TAURI_DEV_HOST;
 // promise is fine; Vite awaits the `plugins` array itself.
 export default defineConfig(() => ({
   plugins: [sveltekit()],
+
+  // La versión que compila dentro del bundle. Ver la nota de arriba.
+  define: {
+    __LUCY_VERSION__: JSON.stringify(pkg.version),
+  },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //

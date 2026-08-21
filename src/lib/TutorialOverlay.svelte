@@ -25,7 +25,7 @@
     // v1.7.67 — default bumped from '1.7.0' to '1.7.66' so a developer
     // who instantiates the overlay in isolation (e.g. Storybook, test
     // harness) doesn't see a stale version label.
-    export let currentVersion = '1.7.66';
+    export let currentVersion = __LUCY_VERSION__;
     // v1.7.165 — BUG FIX: this was `$: LUCY_VERSION = currentVersion`, a reactive
     // statement that runs AFTER the synchronous `const STEPS = [...]` below is
     // built. So every `v${LUCY_VERSION}` in STEPS interpolated `undefined` →
