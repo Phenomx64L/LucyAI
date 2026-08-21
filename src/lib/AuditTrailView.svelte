@@ -1,4 +1,6 @@
 <script>
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     import { createEventDispatcher, onMount } from 'svelte';
     import { auditTrail } from '$lib/stores';
     import { queryAuditTrail } from '$lib/audit';
@@ -106,9 +108,9 @@
     })();
     function _heatLabel() {
         const span = heatmap.span;
-        if (span <= 3600_000)  return isEN ? 'Last hour'  : 'Última hora';
-        if (span <= 86400_000) return isEN ? 'Last 24h'   : 'Últimas 24h';
-        return isEN ? 'Last 7 days' : 'Últimos 7 días';
+        if (span <= 3600_000)  return $trad('Última hora');
+        if (span <= 86400_000) return $trad('Últimas 24h');
+        return $trad('Últimos 7 días');
     }
 
     function toast(msg, type='info') { dispatch('toast', { msg, type }); }
@@ -116,7 +118,7 @@
     function clearTrail() {
         if (entries.length === 0) return;
         auditTrail.set([]);
-        toast(isEN ? 'Audit trail cleared' : 'Registro de auditoría limpiado');
+        toast($trad('Registro de auditoría limpiado'));
     }
 
     function exportTrail() {
@@ -129,7 +131,7 @@
         const a = document.createElement('a');
         a.href = url; a.download = `lucy-audit-${new Date().toISOString().split('T')[0]}.csv`;
         a.click(); URL.revokeObjectURL(url);
-        toast(isEN ? 'Audit trail exported as CSV' : 'Registro exportado como CSV');
+        toast($trad('Registro exportado como CSV'));
     }
 
     let exportingPdf = false;
@@ -137,7 +139,7 @@
         exportingPdf = true;
         try {
             await exportAuditPdf({ entries: $auditTrail }, isEN);
-            toast(isEN ? 'PDF exported' : 'PDF exportado');
+            toast($trad('PDF exportado'));
         } catch(e) {
             if (String(e) !== 'Cancelled') toast('Error: ' + e, 'error');
         }
@@ -159,15 +161,15 @@
 
 <div class="view-wrap">
   <div class="view-hdr">
-    <div class="view-title"><ClipboardList size={13} stroke={2}/> {isEN ? 'Audit Trail' : 'Registro de Auditoría'}</div>
+    <div class="view-title"><ClipboardList size={13} stroke={2}/> {$trad('Registro de Auditoría')}</div>
     <div style="display:flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:wrap;">
       <select class="view-select" bind:value={filterHost}>
-        <option value="all">{isEN ? 'All Hosts' : 'Todos los hosts'}</option>
+        <option value="all">{$trad('Todos los hosts')}</option>
         <option value="local">⊡ Local</option>
         {#each hosts as h}<option value={h.id}>{h.name}</option>{/each}
       </select>
       <select class="view-select" bind:value={filterSource}>
-        <option value="all">{isEN ? 'All Sources' : 'Todas'}</option>
+        <option value="all">{$trad('Todas')}</option>
         <option value="manual">⌨ Manual</option>
         <option value="ai">✦ AI</option>
         <option value="runbook">≡ Runbook</option>
@@ -182,46 +184,46 @@
 
   <!-- Stats bar -->
   <div class="at-stats">
-    <span class="at-stat">{visibleEntries} / {totalEntries} {isEN ? 'entries' : 'entradas'}</span>
+    <span class="at-stat">{visibleEntries} / {totalEntries} {$trad('entradas')}</span>
     <span class="at-stat">{uniqueHosts.length} hosts</span>
-    {#if failedCount > 0}<span class="at-stat" style="color:var(--red)">{failedCount} {isEN ? 'failed' : 'fallidos'}</span>{/if}
+    {#if failedCount > 0}<span class="at-stat" style="color:var(--red)">{failedCount} {$trad('fallidos')}</span>{/if}
     {#each Object.entries(sourceCounts) as [src, cnt]}
       <span class="at-stat">{sourceIcon(src)} {cnt}</span>
     {/each}
   </div>
 
   <!-- Activity heatmap (24 buckets over the active range) -->
-  <div class="at-heatmap" title={isEN ? 'Activity over time — failed runs in red' : 'Actividad en el tiempo — rojos = fallos'}>
+  <div class="at-heatmap" title={$trad('Actividad en el tiempo — rojos = fallos')}>
     <span class="at-heat-label">{_heatLabel()}</span>
     <div class="at-heat-bars">
       {#each heatmap.buckets as count, i}
         <div class="at-heat-bar"
           style="height:{Math.max(2, (count / heatmap.max) * 22)}px;background:{heatmap.failed[i] > 0 ? 'rgba(239,68,68,.55)' : count > 0 ? 'var(--acc)' : 'rgba(255,255,255,.04)'};"
-          title="{count} {isEN ? 'commands' : 'comandos'}{heatmap.failed[i] > 0 ? ` · ${heatmap.failed[i]} ${isEN ? 'failed' : 'fallidos'}` : ''}"></div>
+          title="{count} {$trad('comandos')}{heatmap.failed[i] > 0 ? ` · ${heatmap.failed[i]} ${$trad('fallidos')}` : ''}"></div>
       {/each}
     </div>
-    <span class="at-heat-meta">{heatmap.buckets.reduce((s,n)=>s+n,0)} {isEN ? 'cmd' : 'cmd'}</span>
+    <span class="at-heat-meta">{heatmap.buckets.reduce((s,n)=>s+n,0)} {$trad('cmd')}</span>
   </div>
 
   <!-- Quick filter chips -->
   <div class="at-quick-filters">
-    <span class="at-qf-label">{isEN ? 'Range:' : 'Rango:'}</span>
-    {#each [['all', isEN?'All':'Todo'], ['1h', '1h'], ['24h', '24h'], ['7d', '7d']] as [val, label]}
+    <span class="at-qf-label">{$trad('Rango:')}</span>
+    {#each [['all', $trad('Todo')], ['1h', '1h'], ['24h', '24h'], ['7d', '7d']] as [val, label]}
       <button class="at-qf-chip" class:active={filterRange === val} on:click={() => filterRange = val}>{label}</button>
     {/each}
     <span class="at-qf-sep"></span>
-    <span class="at-qf-label">{isEN ? 'Status:' : 'Estado:'}</span>
-    <button class="at-qf-chip" class:active={filterStatus === 'all'}     on:click={() => filterStatus = 'all'}>{isEN ? 'All' : 'Todo'}</button>
+    <span class="at-qf-label">{$trad('Estado:')}</span>
+    <button class="at-qf-chip" class:active={filterStatus === 'all'}     on:click={() => filterStatus = 'all'}>{$trad('Todo')}</button>
     <button class="at-qf-chip at-qf-ok" class:active={filterStatus === 'success'} on:click={() => filterStatus = 'success'}>✓ OK</button>
-    <button class="at-qf-chip at-qf-err" class:active={filterStatus === 'fail'}    on:click={() => filterStatus = 'fail'}>✗ {isEN ? 'Failed' : 'Fallidos'}</button>
+    <button class="at-qf-chip at-qf-err" class:active={filterStatus === 'fail'}    on:click={() => filterStatus = 'fail'}>✗ {$trad('Fallidos')}</button>
   </div>
 
   <!-- Search -->
   <div class="at-search">
     <input class="at-search-inp" type="text" bind:value={searchQuery}
-      placeholder={isEN ? 'Search commands, hosts, output...' : 'Buscar comandos, hosts, salida...'}>
+      placeholder={$trad('Buscar comandos, hosts, salida...')}>
     {#if searchQuery}
-      <button class="at-search-clear" on:click={() => searchQuery = ''} title={isEN ? 'Clear' : 'Limpiar'}>✕</button>
+      <button class="at-search-clear" on:click={() => searchQuery = ''} title={$trad('Limpiar')}>✕</button>
     {/if}
   </div>
 
@@ -245,7 +247,7 @@
       <div class="at-cmd">{e.command}</div>
       {#if e.outputPreview}
       <details class="at-output">
-        <summary>{isEN ? 'Output' : 'Salida'} ({e.outputPreview.length} chars)</summary>
+        <summary>{$trad('Salida')} ({e.outputPreview.length} chars)</summary>
         <pre>{e.outputPreview}</pre>
       </details>
       {/if}
@@ -253,7 +255,7 @@
     {/each}
     {#if !entries.length}
     <div style="text-align:center;color:var(--txt3);padding:40px;font-size:13px;">
-      {isEN ? 'No audit entries yet. Commands executed in NexShell and Terminal will appear here.' : 'Sin entradas. Los comandos ejecutados en NexShell y Terminal aparecerán aquí.'}
+      {$trad('Sin entradas. Los comandos ejecutados en NexShell y Terminal aparecerán aquí.')}
     </div>
     {/if}
   </div>

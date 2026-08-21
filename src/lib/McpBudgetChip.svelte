@@ -16,6 +16,8 @@
        compact — single-line vs. multi-line breakdown
 ─────────────────────────────────────────────────────────────────────── -->
 <script lang="ts">
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     import {
         computeBudget,
         BUDGET_SERVERS_CRIT, BUDGET_TOOLS_CRIT,
@@ -34,16 +36,14 @@
             : '◉';
     $: rationale = (() => {
         if (budget.tone === 'ok') {
-            return isEN ? 'Within budget' : 'Dentro del presupuesto';
+            return $trad('Dentro del presupuesto');
         }
         if (budget.tone === 'crit') {
             return isEN
                 ? `Critical — disable unused servers (caps: ${BUDGET_SERVERS_CRIT} servers / ${BUDGET_TOOLS_CRIT} tools).`
                 : `Crítico — deshabilita servidores sin uso (límites: ${BUDGET_SERVERS_CRIT} servidores / ${BUDGET_TOOLS_CRIT} tools).`;
         }
-        return isEN
-            ? 'Approaching limit. Consider trimming MCP servers before adding more.'
-            : 'Cerca del límite. Considera reducir servidores MCP antes de agregar más.';
+        return $trad('Cerca del límite. Considera reducir servidores MCP antes de agregar más.');
     })();
 </script>
 
@@ -56,7 +56,7 @@
         <span class="mbc-counts">
             <span class="mbc-axis" class:mbc-bad={budget.serverTone !== 'ok'}>
                 {budget.enabledServers}/{BUDGET_SERVERS_CRIT}
-                <small>{isEN ? 'servers' : 'serv'}</small>
+                <small>{$trad('serv')}</small>
             </span>
             <span class="mbc-sep">·</span>
             <span class="mbc-axis" class:mbc-bad={budget.toolTone !== 'ok'}>

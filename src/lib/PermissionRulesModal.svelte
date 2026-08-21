@@ -1,4 +1,6 @@
 <script>
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     import { createEventDispatcher } from 'svelte';
     import { invoke } from '@tauri-apps/api/core';
     import ConfirmModal from '$lib/ConfirmModal.svelte';
@@ -15,7 +17,6 @@
 
     // Props
     export let isOpen = false;
-    export let isEN = false;
 
     // Internal state
     let loading = false;
@@ -109,7 +110,7 @@
         }
     };
 
-    $: lang = labels[isEN ? 'en-US' : 'es-MX'];
+    $: lang = labels[$trad('es-MX')];
 
     function toast(msg, type = 'info') {
         dispatch('toast', { msg, type });
@@ -333,10 +334,10 @@
                         {:else}
                             <div class="rules-toolbar">
                                 <input type="text" class="rules-search"
-                                    placeholder={isEN ? 'Search by pattern or description…' : 'Buscar por patrón o descripción…'}
+                                    placeholder={$trad('Buscar por patrón o descripción…')}
                                     bind:value={searchQuery} />
                                 <select class="rules-filter" bind:value={actionFilter} aria-label={lang.action}>
-                                    <option value="all">{isEN ? 'All actions' : 'Todas las acciones'}</option>
+                                    <option value="all">{$trad('Todas las acciones')}</option>
                                     <option value="allow">{lang.allow}</option>
                                     <option value="block">{lang.block}</option>
                                     <option value="ask">{lang.ask}</option>
@@ -346,7 +347,7 @@
                                 </span>
                             </div>
                             {#if filteredRules.length === 0}
-                                <div class="no-rules">{isEN ? 'No rules match the filter.' : 'Ninguna regla coincide con el filtro.'}</div>
+                                <div class="no-rules">{$trad('Ninguna regla coincide con el filtro.')}</div>
                             {:else}
                             <table class="rules-table">
                                 <thead>
@@ -401,12 +402,10 @@
     open={pendingDelete !== null}
     variant="danger"
     title={lang.delete}
-    message={isEN
-        ? 'Delete this permission rule?'
-        : '¿Eliminar esta regla de permisos?'}
+    message={$trad('¿Eliminar esta regla de permisos?')}
     detail={pendingDelete?.pattern || ''}
     confirmLabel={lang.delete}
-    cancelLabel={isEN ? 'Cancel' : 'Cancelar'}
+    cancelLabel={$trad('Cancelar')}
     on:confirm={confirmDeleteRule}
     on:cancel={() => pendingDelete = null}
 />

@@ -18,6 +18,8 @@
   instead of leaking across the page-level state machine.
 -->
 <script lang="ts">
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     import { onMount, onDestroy } from 'svelte';
     import { invoke } from '@tauri-apps/api/core';
     import { listen, type UnlistenFn } from '@tauri-apps/api/event';
@@ -30,7 +32,6 @@
     export let keepAlive: boolean = true;
 
     /** English locale (placeholder text). */
-    export let isEN: boolean = false;
 
     let host: HTMLDivElement;
     let term: any = null;        // xterm.Terminal instance
@@ -171,14 +172,14 @@
 <div class="xterm-pane-wrap">
     {#if initError}
         <div class="xterm-pane-err">
-            {isEN ? 'Terminal failed to start' : 'Falló el arranque de la terminal'}:
+            {$trad('Falló el arranque de la terminal')}:
             <code>{initError}</code>
         </div>
     {/if}
     <div class="xterm-pane-host" bind:this={host}></div>
     {#if !opened && !initError}
         <div class="xterm-pane-boot">
-            {isEN ? '· starting shell ·' : '· iniciando shell ·'}
+            {$trad('· iniciando shell ·')}
         </div>
     {/if}
 </div>

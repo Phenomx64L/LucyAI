@@ -14,6 +14,9 @@ import hljsYaml         from 'highlight.js/lib/languages/yaml';
 import hljsPlain        from 'highlight.js/lib/languages/plaintext';
 import { renderMd }     from '$lib/md-render';
 
+// La interfaz en cinco idiomas. `tr` y no `$trad`: esto no es un
+// componente, así que no hay nada a lo que suscribirse. Ver `$lib/i18n`.
+import { tr } from '$lib/i18n';
 hljs.registerLanguage('powershell', hljsPS as any);
 hljs.registerLanguage('bash',       hljsBash as any);
 hljs.registerLanguage('shell',      hljsBash as any);
@@ -376,7 +379,7 @@ export async function addCopyBtns(opts: AddCopyBtnsOpts): Promise<void> {
                 if (_hdr && !_hdr.querySelector('.run-inline-btn')) {
                     const runBtn = document.createElement('button');
                     runBtn.className = 'run-inline-btn';
-                    runBtn.title = isEN ? 'Run this command' : 'Ejecutar este comando';
+                    runBtn.title = tr('Ejecutar este comando');
                     runBtn.textContent = `▶ ${langLabel}`;
                     runBtn.onclick = (ev) => {
                         ev.stopPropagation();
@@ -415,7 +418,7 @@ export async function addCopyBtns(opts: AddCopyBtnsOpts): Promise<void> {
         if (isRunnable) {
             const runBtn = document.createElement('button');
             runBtn.className = 'run-inline-btn';
-            runBtn.title = isEN ? 'Run this command' : 'Ejecutar este comando';
+            runBtn.title = tr('Ejecutar este comando');
             runBtn.textContent = `▶ ${langLabel}`;
             runBtn.onclick = (ev) => {
                 ev.stopPropagation();

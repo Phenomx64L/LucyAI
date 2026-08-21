@@ -1,4 +1,6 @@
 <script>
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     import { createEventDispatcher, onMount } from 'svelte';
     import { getCapacityTrends, formatDaysUntil } from '$lib/capacity';
     import { staggerIn } from '$lib/stagger';
@@ -7,7 +9,6 @@
     import AlertTriangle from '@tabler/icons-svelte/icons/alert-triangle';
     import Clock from '@tabler/icons-svelte/icons/clock';
 
-    export let isEN = false;
 
     const dispatch = createEventDispatcher();
     function toast(msg, type='info') { dispatch('toast', { msg, type }); }
@@ -63,7 +64,7 @@
 
 <div class="view-wrap">
     <div class="view-hdr">
-        <div class="view-title"><TrendingUp size={13} stroke={2}/> {isEN ? 'Capacity Planning' : 'Planificación de Capacidad'}</div>
+        <div class="view-title"><TrendingUp size={13} stroke={2}/> {$trad('Planificación de Capacidad')}</div>
         <div style="display:flex;align-items:center;gap:6px;margin-left:auto;">
             {#each ranges as r}
                 <button class="cp-range-btn" class:active={selectedRange === r.value}
@@ -82,7 +83,7 @@
     {#if !trend && !loading && !error}
         <div class="cp-empty">
             <Clock size={32} stroke={1.2}/>
-            <p>{isEN ? 'No metrics data yet. Samples are recorded automatically every 5 minutes.' : 'Sin datos aún. Las muestras se graban automáticamente cada 5 minutos.'}</p>
+            <p>{$trad('Sin datos aún. Las muestras se graban automáticamente cada 5 minutos.')}</p>
         </div>
     {/if}
 
@@ -94,18 +95,18 @@
                 {#if hasCriticalProjection && diskDays !== null && diskDays < 14}
                     <AlertTriangle size={14} stroke={2}/>
                 {/if}
-                <span class="cp-proj-label">{isEN ? 'DISK FULL IN' : 'DISCO LLENO EN'}</span>
+                <span class="cp-proj-label">{$trad('DISCO LLENO EN')}</span>
                 <span class="cp-proj-value">{formatDaysUntil(diskDays)}</span>
             </div>
             <div class="cp-proj-card" class:critical={ramDays !== null && ramDays < 14} class:warning={ramDays !== null && ramDays >= 14 && ramDays < 30}>
                 {#if ramDays !== null && ramDays < 14}
                     <AlertTriangle size={14} stroke={2}/>
                 {/if}
-                <span class="cp-proj-label">{isEN ? 'RAM CRITICAL IN' : 'RAM CRITICA EN'}</span>
+                <span class="cp-proj-label">{$trad('RAM CRITICA EN')}</span>
                 <span class="cp-proj-value">{formatDaysUntil(ramDays)}</span>
             </div>
             <div class="cp-proj-card">
-                <span class="cp-proj-label">{isEN ? 'SAMPLES' : 'MUESTRAS'}</span>
+                <span class="cp-proj-label">{$trad('MUESTRAS')}</span>
                 <span class="cp-proj-value">{trend.stats.sample_count}</span>
                 <span class="cp-proj-sub">{trend.stats.span_hours.toFixed(0)}h span</span>
             </div>
@@ -159,12 +160,12 @@
 
         <!-- ── Sample Table (last 20) ── -->
         <div class="cp-table-wrap" in:staggerIn={{ index: 3, step: 60, duration: 200 }}>
-            <div class="cp-table-title">{isEN ? 'Recent Samples' : 'Muestras Recientes'}</div>
+            <div class="cp-table-title">{$trad('Muestras Recientes')}</div>
             <div class="cp-table-scroll">
                 <table class="cp-table">
                     <thead><tr>
-                        <th>{isEN ? 'Time' : 'Hora'}</th><th>CPU</th><th>RAM</th><th>Disk</th>
-                        <th>{isEN ? 'RAM (MB)' : 'RAM (MB)'}</th><th>{isEN ? 'Disk (GB)' : 'Disco (GB)'}</th>
+                        <th>{$trad('Hora')}</th><th>CPU</th><th>RAM</th><th>Disk</th>
+                        <th>{$trad('RAM (MB)')}</th><th>{$trad('Disco (GB)')}</th>
                     </tr></thead>
                     <tbody>
                     {#each trend.samples.slice(-20).reverse() as s}

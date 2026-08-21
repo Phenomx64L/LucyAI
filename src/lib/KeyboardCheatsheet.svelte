@@ -11,13 +11,13 @@
 
      Props:
        open  — bindable boolean
-       isEN  — i18n switch
 ─────────────────────────────────────────────────────────────────────── -->
 <script>
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     import { Dialog } from 'bits-ui';
     import { createEventDispatcher } from 'svelte';
     export let open = false;
-    export let isEN = false;
     const dispatch = createEventDispatcher();
 
     function onOpenChange(v) {
@@ -30,75 +30,75 @@
     // a stack of <kbd> elements without parsing.
     $: groups = [
         {
-            title: isEN ? 'Navigation' : 'Navegación',
+            title: $trad('Navegación'),
             items: [
-                { keys: ['Ctrl', 'P'], desc: isEN ? 'Command palette' : 'Paleta de comandos' },
-                { keys: ['Ctrl', 'T'], desc: isEN ? 'New tab' : 'Nueva pestaña' },
-                { keys: ['Ctrl', 'W'], desc: isEN ? 'Close tab' : 'Cerrar pestaña' },
-                { keys: ['Ctrl', 'Tab'], desc: isEN ? 'Next tab' : 'Siguiente pestaña' },
-                { keys: ['Ctrl', 'Shift', 'Tab'], desc: isEN ? 'Previous tab' : 'Anterior pestaña' },
-                { keys: ['Ctrl', '1'], desc: isEN ? 'Density: focus' : 'Densidad: focus' },
-                { keys: ['Ctrl', '2'], desc: isEN ? 'Density: explore' : 'Densidad: explore' },
-                { keys: ['Ctrl', '3'], desc: isEN ? 'Density: war room' : 'Densidad: war room' },
+                { keys: ['Ctrl', 'P'], desc: $trad('Paleta de comandos') },
+                { keys: ['Ctrl', 'T'], desc: $trad('Nueva pestaña') },
+                { keys: ['Ctrl', 'W'], desc: $trad('Cerrar pestaña') },
+                { keys: ['Ctrl', 'Tab'], desc: $trad('Siguiente pestaña') },
+                { keys: ['Ctrl', 'Shift', 'Tab'], desc: $trad('Anterior pestaña') },
+                { keys: ['Ctrl', '1'], desc: $trad('Densidad: focus') },
+                { keys: ['Ctrl', '2'], desc: $trad('Densidad: explore') },
+                { keys: ['Ctrl', '3'], desc: $trad('Densidad: war room') },
             ],
         },
         {
-            title: isEN ? 'In Chat' : 'En el chat',
+            title: $trad('En el chat'),
             items: [
-                { keys: ['Enter'], desc: isEN ? 'Send message' : 'Enviar mensaje' },
-                { keys: ['Shift', 'Enter'], desc: isEN ? 'New line' : 'Nueva línea' },
-                { keys: ['Ctrl', 'Shift', 'Enter'], desc: isEN ? 'Run in background' : 'Ejecutar en background' },
-                { keys: ['Esc'], desc: isEN ? 'Cancel agent / close modal' : 'Cancelar agente / cerrar modal' },
-                { keys: ['Ctrl', 'L'], desc: isEN ? 'Clear current session' : 'Limpiar sesión actual' },
-                { keys: ['Ctrl', 'F'], desc: isEN ? 'Find in chat' : 'Buscar en chat' },
-                { keys: ['Tab'], desc: isEN ? 'Autocomplete command flag' : 'Autocompletar flag' },
+                { keys: ['Enter'], desc: $trad('Enviar mensaje') },
+                { keys: ['Shift', 'Enter'], desc: $trad('Nueva línea') },
+                { keys: ['Ctrl', 'Shift', 'Enter'], desc: $trad('Ejecutar en background') },
+                { keys: ['Esc'], desc: $trad('Cancelar agente / cerrar modal') },
+                { keys: ['Ctrl', 'L'], desc: $trad('Limpiar sesión actual') },
+                { keys: ['Ctrl', 'F'], desc: $trad('Buscar en chat') },
+                { keys: ['Tab'], desc: $trad('Autocompletar flag') },
             ],
         },
         {
-            title: isEN ? 'On a message' : 'En un mensaje',
+            title: $trad('En un mensaje'),
             items: [
-                { keys: ['·'], desc: isEN ? 'Pin / unpin' : 'Pin / quitar pin' },
-                { keys: ['⌥'], desc: isEN ? 'Branch from here (new tab)' : 'Bifurcar desde aquí (tab nueva)' },
-                { keys: ['⏪'], desc: isEN ? 'Replay this turn' : 'Reproducir este turno' },
-                { keys: ['Right-click'], desc: isEN ? 'Open context menu' : 'Abrir menú contextual' },
+                { keys: ['·'], desc: $trad('Pin / quitar pin') },
+                { keys: ['⌥'], desc: $trad('Bifurcar desde aquí (tab nueva)') },
+                { keys: ['⏪'], desc: $trad('Reproducir este turno') },
+                { keys: ['Right-click'], desc: $trad('Abrir menú contextual') },
             ],
         },
         {
-            title: isEN ? 'Slash commands' : 'Comandos slash',
+            title: $trad('Comandos slash'),
             items: [
-                { keys: ['/help'], desc: isEN ? 'List every slash command' : 'Lista todos los comandos' },
-                { keys: ['/snapshot'], desc: isEN ? 'Capture system state' : 'Captura estado del sistema' },
-                { keys: ['/diff'], desc: isEN ? 'Compare two snapshots' : 'Compara snapshots' },
-                { keys: ['/detective'], desc: isEN ? 'Synthesize F3+F8+F9 forensic query' : 'Sintetiza F3+F8+F9 forense' },
-                { keys: ['/recall'], desc: isEN ? 'Search conversation history' : 'Busca en historial' },
-                { keys: ['/crystallize'], desc: isEN ? 'Distill session into a crystal' : 'Destila sesión en crystal' },
-                { keys: ['/notebook'], desc: isEN ? 'Export tab as .ipynb' : 'Exporta pestaña como .ipynb' },
-                { keys: ['/revert'], desc: isEN ? 'Undo last writefile' : 'Revierte última escritura' },
-                { keys: ['/chip-stats'], desc: isEN ? 'Predictive-chip engagement' : 'Engagement de chips' },
-                { keys: ['/instinct-status'], desc: isEN ? 'Layer 3 patterns banded by confidence' : 'Patrones Layer 3 por bandas de confianza' },
-                { keys: ['/evolve'], desc: isEN ? 'Promote recurring patterns into skills' : 'Promueve patrones recurrentes a skills' },
-                { keys: ['/polarity'], desc: isEN ? 'Project text onto SUPPORTS↔CONTRADICTS axis' : 'Proyecta texto al eje APOYA↔CONTRADICE' },
-                { keys: ['/llm-health'], desc: isEN ? 'LLM tier health, latency & breaker state' : 'Salud de capas LLM, latencia y breaker' },
-                { keys: ['/verify'], desc: isEN ? 'Script syntax verifier status & toggles' : 'Estado y toggles del verificador de scripts' },
-                { keys: ['/sec-skill'], desc: isEN ? 'Search 213 cybersecurity skills (MITRE / NIST)' : 'Buscar 213 skills de ciberseguridad (MITRE / NIST)' },
-                { keys: ['/sec-skill auto'], desc: isEN ? 'Auto-routing status & toggles' : 'Estado y toggles de auto-routing' },
-                { keys: ['/sec-skill folder'], desc: isEN ? 'Open user skills folder' : 'Abre la carpeta de skills del usuario' },
-                { keys: ['/sec-skill new <id>'], desc: isEN ? 'Generate a starter SKILL.md template' : 'Genera plantilla starter SKILL.md' },
-                { keys: ['/anneal'], desc: isEN ? 'Ontology cluster scoring (promote/demote)' : 'Scoring de ontologías (promover/democionar)' },
-                { keys: ['/demote-tag'], desc: isEN ? 'Re-tag memories off a failed cluster' : 'Re-etiqueta memorias de un cúmulo fallido' },
-                { keys: ['/preset'], desc: isEN ? 'Open the skill-preset picker' : 'Abre el selector de plantillas de habilidad' },
-                { keys: ['/frontier-stats'], desc: isEN ? 'Frontier feature telemetry' : 'Telemetría Frontier' },
-                { keys: ['/model'], desc: isEN ? 'Switch model (partial match OK)' : 'Cambia modelo (match parcial)' },
-                { keys: ['/theme'], desc: isEN ? 'Switch theme' : 'Cambia tema' },
+                { keys: ['/help'], desc: $trad('Lista todos los comandos') },
+                { keys: ['/snapshot'], desc: $trad('Captura estado del sistema') },
+                { keys: ['/diff'], desc: $trad('Compara snapshots') },
+                { keys: ['/detective'], desc: $trad('Sintetiza F3+F8+F9 forense') },
+                { keys: ['/recall'], desc: $trad('Busca en historial') },
+                { keys: ['/crystallize'], desc: $trad('Destila sesión en crystal') },
+                { keys: ['/notebook'], desc: $trad('Exporta pestaña como .ipynb') },
+                { keys: ['/revert'], desc: $trad('Revierte última escritura') },
+                { keys: ['/chip-stats'], desc: $trad('Engagement de chips') },
+                { keys: ['/instinct-status'], desc: $trad('Patrones Layer 3 por bandas de confianza') },
+                { keys: ['/evolve'], desc: $trad('Promueve patrones recurrentes a skills') },
+                { keys: ['/polarity'], desc: $trad('Proyecta texto al eje APOYA↔CONTRADICE') },
+                { keys: ['/llm-health'], desc: $trad('Salud de capas LLM, latencia y breaker') },
+                { keys: ['/verify'], desc: $trad('Estado y toggles del verificador de scripts') },
+                { keys: ['/sec-skill'], desc: $trad('Buscar 213 skills de ciberseguridad (MITRE / NIST)') },
+                { keys: ['/sec-skill auto'], desc: $trad('Estado y toggles de auto-routing') },
+                { keys: ['/sec-skill folder'], desc: $trad('Abre la carpeta de skills del usuario') },
+                { keys: ['/sec-skill new <id>'], desc: $trad('Genera plantilla starter SKILL.md') },
+                { keys: ['/anneal'], desc: $trad('Scoring de ontologías (promover/democionar)') },
+                { keys: ['/demote-tag'], desc: $trad('Re-etiqueta memorias de un cúmulo fallido') },
+                { keys: ['/preset'], desc: $trad('Abre el selector de plantillas de habilidad') },
+                { keys: ['/frontier-stats'], desc: $trad('Telemetría Frontier') },
+                { keys: ['/model'], desc: $trad('Cambia modelo (match parcial)') },
+                { keys: ['/theme'], desc: $trad('Cambia tema') },
             ],
         },
         {
-            title: isEN ? 'System' : 'Sistema',
+            title: $trad('Sistema'),
             items: [
-                { keys: ['Shift', '?'], desc: isEN ? 'Open this cheatsheet' : 'Abrir este cheatsheet' },
-                { keys: ['Ctrl', 'M'], desc: isEN ? 'Toggle focus mode' : 'Alternar focus mode' },
-                { keys: ['Ctrl', 'B'], desc: isEN ? 'Branch tab from last Lucy reply' : 'Bifurcar tab de última respuesta' },
-                { keys: ['Ctrl', 'R'], desc: isEN ? 'Search history' : 'Buscar historial' },
+                { keys: ['Shift', '?'], desc: $trad('Abrir este cheatsheet') },
+                { keys: ['Ctrl', 'M'], desc: $trad('Alternar focus mode') },
+                { keys: ['Ctrl', 'B'], desc: $trad('Bifurcar tab de última respuesta') },
+                { keys: ['Ctrl', 'R'], desc: $trad('Buscar historial') },
             ],
         },
     ];
@@ -111,12 +111,10 @@
             <div class="kb-card">
                 <header class="kb-hdr">
                     <Dialog.Title class="kb-title">
-                        ⌨ {isEN ? 'Keyboard Shortcuts' : 'Atajos de Teclado'}
+                        ⌨ {$trad('Atajos de Teclado')}
                     </Dialog.Title>
                     <Dialog.Description class="kb-sub">
-                        {isEN
-                            ? 'Press Shift+? from anywhere to bring this back. Esc to close.'
-                            : 'Pulsa Shift+? desde cualquier lugar para volver aquí. Esc para cerrar.'}
+                        {$trad('Pulsa Shift+? desde cualquier lugar para volver aquí. Esc para cerrar.')}
                     </Dialog.Description>
                     <Dialog.Close class="kb-x" aria-label="Close">✕</Dialog.Close>
                 </header>

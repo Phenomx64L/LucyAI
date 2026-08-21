@@ -1,3 +1,6 @@
+// La interfaz en cinco idiomas. `tr` y no `$trad`: esto no es un
+// componente, así que no hay nada a lo que suscribirse. Ver `$lib/i18n`.
+import { tr } from '$lib/i18n';
 // ── skill-engine.ts — Skill system for Lucy ─────────────────────────────────
 // Skills are structured prompts that drive multi-step sysadmin workflows.
 // Each skill has phases with AI prompts + expected commands.
@@ -123,7 +126,7 @@ ${phase.prompt}
 Rules:
 - Wrap commands in <EXECUTE></EXECUTE>
 - Generate ONLY raw commands — no ssh wrappers, no Invoke-Command wrappers
-- Language: ${isEN ? 'English' : 'Spanish'}
+- Language: ${tr('Spanish')}
 ${phase.expectVerdict ? '- End your response with <VERDICT>CONTINUE</VERDICT>, <VERDICT>DONE</VERDICT>, or <VERDICT>ESCALATE</VERDICT>' : ''}`;
 }
 

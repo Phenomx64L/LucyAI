@@ -6,6 +6,8 @@
               cancel
 ──────────────────────────────────────────────────────────────────────────── -->
 <script>
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     import { createEventDispatcher } from 'svelte';
     import { invoke } from '@tauri-apps/api/core';
     import { focusTrap } from '$lib/actions';
@@ -242,8 +244,8 @@
     <div class="hm-hdr">
       <span class="hm-hdr-ico">{#if editingHost}<Pencil size={16}/>{:else}<Plus size={16}/>{/if}</span>
       <div class="hm-hdr-text">
-        <h2 class="hm-title">{editingHost ? (isEN ? 'Edit Host' : 'Editar Host') : (isEN ? 'New Remote Host' : 'Nuevo Host Remoto')}</h2>
-        <span class="hm-subtitle">{(protocolHint?.label || hostForm.protocol)} · {hostForm.host || (isEN ? 'no address yet' : 'sin dirección aún')}</span>
+        <h2 class="hm-title">{editingHost ? ($trad('Editar Host')) : ($trad('Nuevo Host Remoto'))}</h2>
+        <span class="hm-subtitle">{(protocolHint?.label || hostForm.protocol)} · {hostForm.host || ($trad('sin dirección aún'))}</span>
       </div>
       <button class="hm-close" on:click={cancel}><X size={15}/></button>
     </div>
@@ -251,27 +253,27 @@
     <!-- Form grid -->
     <div class="hm-grid">
       <div>
-        <label class="hm-label" for="hf-name">{isEN ? 'Name *' : 'Nombre *'}</label>
-        <input id="hf-name" class="hm-inp" placeholder={isEN ? 'E.g. Prod-Web-01' : 'Ej. Prod-Web-01'}
+        <label class="hm-label" for="hf-name">{$trad('Nombre *')}</label>
+        <input id="hf-name" class="hm-inp" placeholder={$trad('Ej. Prod-Web-01')}
           bind:value={hostForm.name}>
       </div>
       <div>
-        <label class="hm-label" for="hf-proto">{isEN ? 'Protocol *' : 'Protocolo *'}</label>
+        <label class="hm-label" for="hf-proto">{$trad('Protocolo *')}</label>
         <select id="hf-proto" class="hm-inp" bind:value={hostForm.protocol}
           on:change={() => onProtocolChange(hostForm.protocol)}>
-          <optgroup label="Shell / {isEN ? 'Remote access' : 'Acceso remoto'}">
+          <optgroup label="Shell / {$trad('Acceso remoto')}">
             <option value="winrm">🖥 Windows (WinRM)</option>
             <option value="ssh">🐧 Linux (SSH)</option>
             <option value="rdp">🖥 Windows (RDP)</option>
           </optgroup>
-          <optgroup label="{isEN ? 'Databases' : 'Bases de datos'}">
+          <optgroup label="{$trad('Bases de datos')}">
             <option value="postgres">🐘 PostgreSQL</option>
             <option value="mysql">🐬 MySQL / MariaDB</option>
             <option value="mongodb">🍃 MongoDB</option>
             <option value="redis">⚡ Redis</option>
             <option value="mssql">🪟 SQL Server</option>
           </optgroup>
-          <optgroup label="{isEN ? 'Infrastructure' : 'Infraestructura'}">
+          <optgroup label="{$trad('Infraestructura')}">
             <option value="docker">🐳 Docker API</option>
             <option value="k8s">⎈ Kubernetes API</option>
             <option value="snmp">🌐 SNMP (Red)</option>
@@ -279,18 +281,18 @@
         </select>
       </div>
       <div>
-        <label class="hm-label" for="hf-category">{isEN ? 'Category' : 'Categoría'}</label>
+        <label class="hm-label" for="hf-category">{$trad('Categoría')}</label>
         <select id="hf-category" class="hm-inp" bind:value={hostForm.category}>
-          <option value="shell">🖥 {isEN ? 'Server / Shell' : 'Servidor / Shell'}</option>
-          <option value="database">🗄️ {isEN ? 'Database' : 'Base de datos'}</option>
-          <option value="container">🐳 {isEN ? 'Container (Docker)' : 'Contenedor (Docker)'}</option>
+          <option value="shell">🖥 {$trad('Servidor / Shell')}</option>
+          <option value="database">🗄️ {$trad('Base de datos')}</option>
+          <option value="container">🐳 {$trad('Contenedor (Docker)')}</option>
           <option value="kubernetes">⎈ Kubernetes</option>
-          <option value="network">🌐 {isEN ? 'Network Device' : 'Dispositivo de red'}</option>
+          <option value="network">🌐 {$trad('Dispositivo de red')}</option>
         </select>
       </div>
       {#if hostForm.category === 'database' && !['postgres','mysql','mongodb','redis','mssql'].includes(hostForm.protocol)}
       <div class="hm-full">
-        <label class="hm-label" for="hf-dbtype">{isEN ? 'Database Engine' : 'Motor de base de datos'}</label>
+        <label class="hm-label" for="hf-dbtype">{$trad('Motor de base de datos')}</label>
         <select id="hf-dbtype" class="hm-inp" bind:value={hostForm.dbType}>
           <option value="postgres">🐘 PostgreSQL</option>
           <option value="mysql">🐬 MySQL / MariaDB</option>
@@ -303,7 +305,7 @@
       <div>
         <label class="hm-label" for="hf-host">IP / Hostname *</label>
         <input id="hf-host" class="hm-inp hm-mono"
-          placeholder={isEN ? '192.168.1.10 or server.company.com' : '192.168.1.10 ó servidor.empresa.com'}
+          placeholder={$trad('192.168.1.10 ó servidor.empresa.com')}
           bind:value={hostForm.host}>
       </div>
       <div>
@@ -315,27 +317,27 @@
           bind:value={hostForm.port}>
       </div>
       <div>
-        <label class="hm-label" for="hf-user">{isEN ? 'User ' : 'Usuario '}{hostForm.protocol === 'snmp' ? '(community)' : '*'}</label>
+        <label class="hm-label" for="hf-user">{$trad('Usuario ')}{hostForm.protocol === 'snmp' ? '(community)' : '*'}</label>
         <input id="hf-user" class="hm-inp hm-mono"
           placeholder={hostForm.protocol === 'snmp' ? 'public' : hostForm.type === 'windows' ? 'DOMINIO/usuario' : 'root'}
           bind:value={hostForm.username}>
       </div>
       <div>
         <label class="hm-label" for="hf-pass">
-          {isEN ? 'Password ' : 'Contraseña '} {editingHost ? (isEN ? '(leave empty = no change)' : '(dejar vacío = no cambiar)') : '*'}
+          {$trad('Contraseña ')} {editingHost ? ($trad('(dejar vacío = no cambiar)')) : '*'}
         </label>
         <input class="hm-inp" type="password" id="hf-pass"
           placeholder="••••••••" bind:value={hostPassword}>
       </div>
       <div class="hm-full">
         <label class="hm-label" for="hf-tags" style="display:flex;align-items:center;gap:5px;">
-          <Tag size={12}/> Tags <span class="hm-sub">({isEN ? 'comma separated — e.g. prod, web, db' : 'separados por coma — ej: prod, web, db'})</span>
+          <Tag size={12}/> Tags <span class="hm-sub">({$trad('separados por coma — ej: prod, web, db')})</span>
         </label>
         <input id="hf-tags" class="hm-inp hm-mono"
           placeholder="prod, web, linux" bind:value={hostForm.tags}>
       </div>
       <div class="hm-full">
-        <span class="hm-label" style="display:flex;align-items:center;gap:5px;"><Palette size={12}/> {isEN ? 'Host Color' : 'Color del host'}</span>
+        <span class="hm-label" style="display:flex;align-items:center;gap:5px;"><Palette size={12}/> {$trad('Color del host')}</span>
         <div class="hm-swatches">
           {#each ['#10b981','#ef4444','#3b82f6','#f59e0b','#a78bfa','#ff6eb4','#00d4ff','#ff8c00'] as c}
           <button class="hm-swatch" class:active={hostForm.color === c}
@@ -354,21 +356,21 @@
     {#if hostForm.protocol === 'ssh'}
     <div class="hm-keypath">
       <label class="hm-label" for="hf-keypath" style="display:flex;align-items:center;gap:5px;">
-        <Key size={12}/> {isEN ? 'Private SSH key path' : 'Ruta de clave SSH privada'}
-        <span class="hm-sub">({isEN ? 'optional — leave empty to use password' : 'opcional — deja vacío para usar contraseña'})</span>
+        <Key size={12}/> {$trad('Ruta de clave SSH privada')}
+        <span class="hm-sub">({$trad('opcional — deja vacío para usar contraseña')})</span>
       </label>
       <div class="hm-keypath-row">
         <input id="hf-keypath" class="hm-inp hm-mono" style="flex:1;"
           placeholder="C:\Users\tu\.ssh\id_rsa o ~/.ssh/id_ed25519"
           bind:value={hostForm.sshKeyPath}>
-        <button class="hm-pick" title="{isEN ? 'Select key file' : 'Seleccionar archivo de clave'}"
+        <button class="hm-pick" title="{$trad('Seleccionar archivo de clave')}"
           on:click={async () => {
             const p = await invoke('pick_file_path').catch(() => '');
             if (p) hostForm.sshKeyPath = p;
           }}><FolderOpen size={14}/></button>
       </div>
       <p class="hm-note">
-        {isEN ? 'If specified, <code>ssh -i &lt;path&gt;</code> will be used instead of a password.' : 'Si se especifica, se usa <code>ssh -i &lt;ruta&gt;</code> en lugar de contraseña.'}
+        {$trad('Si se especifica, se usa <code>ssh -i &lt;ruta&gt;</code> en lugar de contraseña.')}
       </p>
     </div>
     {/if}
@@ -376,36 +378,36 @@
     <!-- Protocol-specific info boxes -->
     {#if hostForm.protocol === 'ssh'}
     <div class="hm-info">
-      <b style="color:var(--blue);display:inline-flex;align-items:center;gap:4px;"><Info size={11}/>{isEN ? 'SSH Requirement:' : 'Requisito SSH:'}</b> {isEN ? 'The local machine must have OpenSSH installed (included in Windows 10/11) and the remote host must allow authentication via password or SSH key.' : 'El equipo local debe tener OpenSSH instalado (incluido en Windows 10/11) y el host remoto debe permitir autenticación por contraseña o clave SSH.'}
+      <b style="color:var(--blue);display:inline-flex;align-items:center;gap:4px;"><Info size={11}/>{$trad('Requisito SSH:')}</b> {$trad('El equipo local debe tener OpenSSH instalado (incluido en Windows 10/11) y el host remoto debe permitir autenticación por contraseña o clave SSH.')}
     </div>
     {:else if hostForm.protocol === 'winrm'}
     <div class="hm-info">
-      <b style="color:var(--blue);display:inline-flex;align-items:center;gap:4px;"><Info size={11}/>{isEN ? 'WinRM Requirement:' : 'Requisito WinRM:'}</b> {isEN ? 'The remote server must have WinRM enabled. Run on the server:' : 'El servidor remoto debe tener WinRM habilitado. Ejecuta en el servidor:'}
+      <b style="color:var(--blue);display:inline-flex;align-items:center;gap:4px;"><Info size={11}/>{$trad('Requisito WinRM:')}</b> {$trad('El servidor remoto debe tener WinRM habilitado. Ejecuta en el servidor:')}
       <code class="hm-mono" style="font-size:10px;color:var(--acc);">Enable-PSRemoting -Force</code>
     </div>
     {:else if hostForm.protocol === 'rdp'}
     <div class="hm-info">
-      <b style="color:var(--blue);display:inline-flex;align-items:center;gap:4px;"><Info size={11}/>RDP:</b> {isEN ? 'Lucy will launch a Remote Desktop session' : 'Lucy lanzará una sesión de Escritorio Remoto'}
-      (<code class="hm-mono" style="font-size:10px;">mstsc.exe</code>) {isEN ? 'upon connection. Ensure port 3389 is accessible and remote access is enabled on the server.' : 'al conectar. Asegúrate de que el puerto 3389 esté accesible y el acceso remoto habilitado en el servidor.'}
+      <b style="color:var(--blue);display:inline-flex;align-items:center;gap:4px;"><Info size={11}/>RDP:</b> {$trad('Lucy lanzará una sesión de Escritorio Remoto')}
+      (<code class="hm-mono" style="font-size:10px;">mstsc.exe</code>) {$trad('al conectar. Asegúrate de que el puerto 3389 esté accesible y el acceso remoto habilitado en el servidor.')}
     </div>
     {:else if hostForm.protocol === 'docker'}
     <div class="hm-info">
-      <b style="color:var(--blue);display:inline-flex;align-items:center;gap:4px;"><Info size={11}/>Docker API:</b> {isEN ? 'Requires the Docker daemon to expose the TCP API. Configure in' : 'Requiere que el daemon de Docker exponga el API TCP. Configura en'} <code class="hm-mono" style="font-size:10px;">/etc/docker/daemon.json</code>:
+      <b style="color:var(--blue);display:inline-flex;align-items:center;gap:4px;"><Info size={11}/>Docker API:</b> {$trad('Requiere que el daemon de Docker exponga el API TCP. Configura en')} <code class="hm-mono" style="font-size:10px;">/etc/docker/daemon.json</code>:
       <code class="hm-mono" style="font-size:10px;color:var(--acc);">"hosts": ["tcp://0.0.0.0:2375"]</code>.
-      {isEN ? 'Use TLS (2376) in production.' : 'Usa TLS (2376) en producción.'}
+      {$trad('Usa TLS (2376) en producción.')}
     </div>
     {:else if hostForm.protocol === 'k8s'}
     <div class="hm-info">
-      <b style="color:var(--blue);display:inline-flex;align-items:center;gap:4px;"><Info size={11}/>Kubernetes:</b> {isEN ? 'Lucy will execute' : 'Lucy ejecutará comandos'}
-      <code class="hm-mono" style="font-size:10px;">kubectl</code> {isEN ? 'commands against the API server. Ensure you have a valid' : 'contra el API server. Asegúrate de tener un'} <code class="hm-mono" style="font-size:10px;">kubeconfig</code> {isEN ? 'valid <code>kubeconfig</code> or a service token.' : 'válido o un token de servicio.'}
+      <b style="color:var(--blue);display:inline-flex;align-items:center;gap:4px;"><Info size={11}/>Kubernetes:</b> {$trad('Lucy ejecutará comandos')}
+      <code class="hm-mono" style="font-size:10px;">kubectl</code> {$trad('contra el API server. Asegúrate de tener un')} <code class="hm-mono" style="font-size:10px;">kubeconfig</code> {$trad('válido o un token de servicio.')}
     </div>
     {:else if hostForm.protocol === 'snmp'}
     <div class="hm-info">
-      <b style="color:var(--blue);display:inline-flex;align-items:center;gap:4px;"><Info size={11}/>SNMP:</b> {isEN ? 'Lucy will perform SNMP queries (GET/WALK) to the device. The User field is used as the' : 'Lucy realizará consultas SNMP (GET/WALK) al dispositivo. El campo "Usuario" se usa como'} <b>community string</b> (v2c) {isEN ? 'or SNMPv3 user. Standard port: 161.' : 'o usuario SNMPv3. Puerto estándar: 161.'}
+      <b style="color:var(--blue);display:inline-flex;align-items:center;gap:4px;"><Info size={11}/>SNMP:</b> {$trad('Lucy realizará consultas SNMP (GET/WALK) al dispositivo. El campo "Usuario" se usa como')} <b>community string</b> (v2c) {$trad('o usuario SNMPv3. Puerto estándar: 161.')}
     </div>
     {:else if ['postgres','mysql','mongodb','redis','mssql'].includes(hostForm.protocol)}
     <div class="hm-info">
-      <b style="color:var(--blue);display:inline-flex;align-items:center;gap:4px;"><Info size={11}/>{isEN ? 'Database' : 'Base de datos'}:</b> {isEN ? 'Lucy will connect to the' : 'Lucy se conectará al motor'}
+      <b style="color:var(--blue);display:inline-flex;align-items:center;gap:4px;"><Info size={11}/>{$trad('Base de datos')}:</b> {$trad('Lucy se conectará al motor')}
       <b>{PROTOCOLS.find(p => p.value === hostForm.protocol)?.label.split(' ')[1] || hostForm.protocol}</b>
       {isEN ? `engine on port ${defaultPort(hostForm.protocol)}. Ensure the server accepts remote connections and the user has required permissions.` : `en el puerto ${defaultPort(hostForm.protocol)}. Asegúrate de que el servidor acepte conexiones remotas y que el usuario tenga los permisos necesarios.`}
     </div>
@@ -431,7 +433,7 @@
     <div class="hm-footer">
       {#if editingHost}
       <button class="hm-btn" style="background:var(--red, #ef4444); color:#fff; margin-right:auto;display:flex;align-items:center;gap:6px;" on:click={eliminar}>
-        <Trash2 size={13}/> {isEN ? 'Delete' : 'Eliminar'}
+        <Trash2 size={13}/> {$trad('Eliminar')}
       </button>
       {/if}
       <!-- Test button — only meaningful for SSH/WinRM; disabled while running.
@@ -440,12 +442,12 @@
       <button class="hm-btn hm-ghost" style="display:flex;align-items:center;gap:6px;"
         on:click={testConnection}
         disabled={testRunning || hostSaving}
-        title={isEN ? 'Verify connection before saving' : 'Verificar conexión antes de guardar'}>
-        {testRunning ? (isEN ? '↻ Testing...' : '↻ Probando...') : (isEN ? '⚡ Test connection' : '⚡ Probar conexión')}
+        title={$trad('Verificar conexión antes de guardar')}>
+        {testRunning ? ($trad('↻ Probando...')) : ($trad('⚡ Probar conexión'))}
       </button>
-      <button class="hm-btn hm-ghost" on:click={cancel}>{isEN ? 'Cancel' : 'Cancelar'}</button>
+      <button class="hm-btn hm-ghost" on:click={cancel}>{$trad('Cancelar')}</button>
       <button class="hm-btn hm-pri" on:click={guardarHost} disabled={hostSaving || testRunning}>
-        {hostSaving ? (isEN ? '↻ Saving...' : '↻ Guardando...') : editingHost ? (isEN ? 'Update Host' : 'Actualizar Host') : (isEN ? 'Save Host' : 'Guardar Host')}
+        {hostSaving ? ($trad('↻ Guardando...')) : editingHost ? ($trad('Actualizar Host')) : ($trad('Guardar Host'))}
       </button>
     </div>
 
@@ -456,13 +458,11 @@
 <ConfirmModal
     open={confirmDelete}
     variant="danger"
-    title={isEN ? 'Delete host' : 'Eliminar host'}
-    message={isEN
-        ? 'Are you sure you want to delete this host? This action cannot be undone.'
-        : '¿Estás seguro de que deseas eliminar este host? Esta acción no se puede deshacer.'}
+    title={$trad('Eliminar host')}
+    message={$trad('¿Estás seguro de que deseas eliminar este host? Esta acción no se puede deshacer.')}
     detail={editingHost?.name || ''}
-    confirmLabel={isEN ? 'Delete' : 'Eliminar'}
-    cancelLabel={isEN ? 'Cancel' : 'Cancelar'}
+    confirmLabel={$trad('Eliminar')}
+    cancelLabel={$trad('Cancelar')}
     on:confirm={doDelete}
     on:cancel={() => confirmDelete = false}
 />

@@ -19,6 +19,8 @@
   picks 2+ hosts, types a path, and clicks fetch.
 -->
 <script>
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     import { invoke } from '@tauri-apps/api/core';
     import { createEventDispatcher, onMount, onDestroy } from 'svelte';
     import Search from '@tabler/icons-svelte/icons/search';
@@ -111,11 +113,11 @@
     // ── Fetching ───────────────────────────────────────────────────────
     async function fetchAllHosts() {
         if (!logPath.trim()) {
-            error = isEN ? 'Enter a log path first.' : 'Ingresa la ruta del log.';
+            error = $trad('Ingresa la ruta del log.');
             return;
         }
         if (selectedHostIds.size === 0) {
-            error = isEN ? 'Select at least one host.' : 'Selecciona al menos un host.';
+            error = $trad('Selecciona al menos un host.');
             return;
         }
         fetching = true;
@@ -251,23 +253,23 @@
     <div class="tl-header">
         <div class="tl-title">
             <span class="tl-glyph">⇄</span>
-            <span>{isEN ? 'Multi-host log timeline' : 'Timeline multi-host de logs'}</span>
+            <span>{$trad('Timeline multi-host de logs')}</span>
             {#if entries.length || unsorted.length}
                 <span class="tl-count">
                     {filteredEntries.length + filteredUnsorted.length} / {entries.length + unsorted.length}
-                    · {selectedHostIds.size} {isEN ? 'hosts' : 'hosts'}
+                    · {selectedHostIds.size} {$trad('hosts')}
                     {#if lastFetchAt} · {lastFetchAt}{/if}
                 </span>
             {/if}
         </div>
         <div class="tl-actions">
             <button class="tl-btn tl-btn-primary" on:click={fetchAllHosts} disabled={fetching}>
-                {fetching ? '⟳' : '↓'} {isEN ? 'Fetch' : 'Cargar'}
+                {fetching ? '⟳' : '↓'} {$trad('Cargar')}
             </button>
             <button class="tl-btn" on:click={toggleAutoRefresh}
                     class:active={autoRefreshOn}
-                    title={isEN ? 'Auto-refresh every 10s' : 'Auto-refresh cada 10s'}>
-                ⌛ {autoRefreshOn ? (isEN ? 'auto' : 'auto') : (isEN ? 'manual' : 'manual')}
+                    title={$trad('Auto-refresh cada 10s')}>
+                ⌛ {autoRefreshOn ? ($trad('auto')) : ($trad('manual'))}
             </button>
             <button class="tl-btn tl-btn-close" on:click={() => dispatch('close')} title="Esc">✕</button>
         </div>
@@ -278,17 +280,17 @@
         <div class="tl-row">
             <input class="tl-input mono" type="text"
                    bind:value={logPath}
-                   placeholder={isEN ? 'Log path (same on every host)' : 'Ruta del log (misma en todos los hosts)'}
+                   placeholder={$trad('Ruta del log (misma en todos los hosts)')}
                    on:keydown={(e) => { if (e.key === 'Enter') fetchAllHosts(); }}/>
             <select class="tl-input" bind:value={perHostTail}>
-                <option value={50}>50 {isEN ? 'lines/host' : 'líneas/host'}</option>
+                <option value={50}>50 {$trad('líneas/host')}</option>
                 <option value={100}>100</option>
                 <option value={200}>200</option>
                 <option value={500}>500</option>
             </select>
         </div>
         <div class="tl-row tl-host-chips">
-            <span class="tl-row-label">{isEN ? 'Hosts:' : 'Hosts:'}</span>
+            <span class="tl-row-label">{$trad('Hosts:')}</span>
             <button class="tl-host-chip" class:active={selectedHostIds.has('')}
                     style="--host-color: {colorForHost('')};"
                     on:click={() => toggleHost('')}>
@@ -309,10 +311,10 @@
                 <Search size={13}/>
                 <input class="tl-input" type="text"
                        bind:value={regexFilter}
-                       placeholder={isEN ? 'Filter (regex ok)…' : 'Filtrar (regex válido)…'}/>
+                       placeholder={$trad('Filtrar (regex válido)…')}/>
             </div>
             <select class="tl-input" bind:value={levelFilter}>
-                <option value="all">{isEN ? 'All levels' : 'Todos los niveles'}</option>
+                <option value="all">{$trad('Todos los niveles')}</option>
                 <option value="error">error</option>
                 <option value="warn">warn</option>
                 <option value="info">info</option>
@@ -329,11 +331,11 @@
     <div class="tl-scroll">
         {#if !entries.length && !unsorted.length && !fetching}
             <div class="tl-empty">
-                {isEN ? 'Pick hosts + a log path, click Fetch.' : 'Selecciona hosts + ruta de log, pulsa Cargar.'}
+                {$trad('Selecciona hosts + ruta de log, pulsa Cargar.')}
             </div>
         {:else if !filteredEntries.length && !filteredUnsorted.length}
             <div class="tl-empty">
-                {isEN ? 'No entries match the current filters.' : 'Ningún entry cumple los filtros actuales.'}
+                {$trad('Ningún entry cumple los filtros actuales.')}
             </div>
         {:else}
             {#each filteredEntries as e, i (e.hostId + ':' + e.ts + ':' + i)}

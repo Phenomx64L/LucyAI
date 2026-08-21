@@ -18,6 +18,8 @@
        compact     — if true, show only the dot + pct (no "%" label)
 ─────────────────────────────────────────────────────────────────────── -->
 <script lang="ts">
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     import { createEventDispatcher, onMount } from 'svelte';
     import {
         getGroundingScore, fmtStrengthPct, strengthTone,
@@ -50,7 +52,7 @@
     $: tone = score ? strengthTone(score) : 'info';
     $: pct  = score ? fmtStrengthPct(score) : '—';
     $: tooltip = (() => {
-        if (!score) return isEN ? 'Loading…' : 'Cargando…';
+        if (!score) return $trad('Cargando…');
         if (score.from_prior) {
             return isEN
                 ? `Prior confidence (no evidence yet). ${pct}`
@@ -73,7 +75,7 @@
         <span class="gc-dot">◉</span>
         <span class="gc-pct">{pct}</span>
         {#if !compact && score.from_prior}
-            <span class="gc-tag">{isEN ? 'prior' : 'inicial'}</span>
+            <span class="gc-tag">{$trad('inicial')}</span>
         {/if}
     </button>
 {/if}

@@ -1,4 +1,6 @@
 <script lang="ts">
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     import { createEventDispatcher, onMount } from 'svelte';
     import ShieldAlert from '@tabler/icons-svelte/icons/shield-exclamation';
 
@@ -11,7 +13,6 @@
     import { refreshNvidiaModels } from '$lib/models.js';
 
     const dispatch = createEventDispatcher();
-    export let isEN = false;
 
     type Provider = 'gemini' | 'anthropic' | 'openai' | 'nvidia' | 'local';
 
@@ -41,7 +42,7 @@
 
     async function handleSave() {
         if (!keys[activeTab]) {
-            errorMsg = isEN ? 'API Key cannot be empty.' : 'La clave no puede estar vacía.';
+            errorMsg = $trad('La clave no puede estar vacía.');
             return;
         }
 
@@ -53,7 +54,7 @@
             await testApiKey(activeTab, keys[activeTab]);
             await saveLlmKey(activeTab, keys[activeTab]);
             
-            successMsg = isEN ? 'Key securely saved to Vault!' : '¡Llave guardada de forma segura en la Bóveda!';
+            successMsg = $trad('¡Llave guardada de forma segura en la Bóveda!');
             if (!configured.includes(activeTab)) {
                 configured = [...configured, activeTab];
             }
@@ -77,11 +78,9 @@
 
         <div class="kr-hdr">
             <span class="kr-hdr-ico"><Key size={24} color="var(--acc, #10b981)"/></span>
-            <h2 class="kr-title">{isEN ? 'Secure Keyring Vault' : 'Bóveda de Seguridad DPAPI'}</h2>
+            <h2 class="kr-title">{$trad('Bóveda de Seguridad DPAPI')}</h2>
             <p class="kr-sub">
-                {isEN 
-                    ? 'All keys are encrypted locally using Windows Credential Manager' 
-                    : 'Las llaves se encriptan a nivel de Sistema Operativo usando Credential Manager'}
+                {$trad('Las llaves se encriptan a nivel de Sistema Operativo usando Credential Manager')}
             </p>
         </div>
 
@@ -105,16 +104,16 @@
             {#if configured.includes(activeTab)}
                 <div class="kr-status configured">
                     <ShieldCheck size={18}/>
-                    <span>{isEN ? 'API Key Configured and Protected' : 'API Key Configurada y Protegida'} (sk-*****)</span>
+                    <span>{$trad('API Key Configurada y Protegida')} (sk-*****)</span>
                 </div>
             {:else}
                 <div class="kr-status unconfigured">
                     <ShieldAlert size={18}/>
                     <span>
                         {#if activeTab === 'local'}
-                            {isEN ? 'No endpoint configured' : 'Sin endpoint configurado'}
+                            {$trad('Sin endpoint configurado')}
                         {:else}
-                            {isEN ? 'No key configured' : 'Sin llave configurada'}
+                            {$trad('Sin llave configurada')}
                         {/if}
                     </span>
                 </div>
@@ -123,9 +122,9 @@
             <div class="kr-input-grp">
                 <label for="kp">
                     {#if activeTab === 'local'}
-                        {isEN ? 'Local Endpoint URL' : 'URL del Endpoint Local (Compatible con OpenAI API)'}
+                        {$trad('URL del Endpoint Local (Compatible con OpenAI API)')}
                     {:else if activeTab === 'nvidia'}
-                        {isEN ? 'NVIDIA NIM API Key — get it free at build.nvidia.com' : 'NVIDIA NIM API Key — gratis en build.nvidia.com'}
+                        {$trad('NVIDIA NIM API Key — gratis en build.nvidia.com')}
                     {:else}
                         API Key ({providers.find(p => p.id === activeTab)?.name})
                     {/if}
@@ -149,9 +148,9 @@
 
             <button class="kr-btn" on:click={handleSave} disabled={loading}>
                 {#if loading}
-                    <span class="kr-spin"></span> {isEN ? 'Verifying...' : 'Validando con API...'}
+                    <span class="kr-spin"></span> {$trad('Validando con API...')}
                 {:else}
-                    <Shield size={16}/> {isEN ? 'Encrypt & Save' : 'Encriptar y Guardar'}
+                    <Shield size={16}/> {$trad('Encriptar y Guardar')}
                 {/if}
             </button>
         </div>

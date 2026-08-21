@@ -1,4 +1,6 @@
 <script>
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     import { createEventDispatcher, onMount } from 'svelte';
     import { runSelfDiagnostics, statusIcon, categoryLabel } from '$lib/diagnostics';
     import { staggerIn } from '$lib/stagger';
@@ -11,7 +13,6 @@
     import CircleX from '@tabler/icons-svelte/icons/circle-x';
     import Wrench from '@tabler/icons-svelte/icons/tool';
 
-    export let isEN = false;
 
     const dispatch = createEventDispatcher();
 
@@ -42,8 +43,8 @@
             && msg.includes('null value') && msg.includes('confidence')) {
             return {
                 command: 'repair_agent_memories_confidence',
-                label:   isEN ? 'Repair NULL confidence' : 'Reparar confidence NULL',
-                successDefault: isEN ? 'Repair complete' : 'Reparación completada',
+                label:   $trad('Reparar confidence NULL'),
+                successDefault: $trad('Reparación completada'),
             };
         }
         // v1.7.70 — DB size > 500 MB → VACUUM. The check raises a warning
@@ -54,8 +55,8 @@
             && /size:\s*[\d.]+\s*mb/.test(msg)) {
             return {
                 command: 'repair_database_vacuum',
-                label:   isEN ? 'VACUUM database' : 'VACUUM de la BD',
-                successDefault: isEN ? 'VACUUM complete' : 'VACUUM completado',
+                label:   $trad('VACUUM de la BD'),
+                successDefault: $trad('VACUUM completado'),
             };
         }
 
@@ -65,8 +66,8 @@
             && msg.includes('expired')) {
             return {
                 command: 'repair_memory_purge_expired',
-                label:   isEN ? 'Purge expired' : 'Purgar caducados',
-                successDefault: isEN ? 'Purged' : 'Purgado',
+                label:   $trad('Purgar caducados'),
+                successDefault: $trad('Purgado'),
             };
         }
 
@@ -77,8 +78,8 @@
         if (check.name === 'Document Embeddings' && check.status === 'warning') {
             return {
                 command: 'repair_pdf_embeddings',
-                label:   isEN ? 'Re-embed documents' : 'Re-embeber documentos',
-                successDefault: isEN ? 'Documents re-embedded' : 'Documentos re-embebidos',
+                label:   $trad('Re-embeber documentos'),
+                successDefault: $trad('Documentos re-embebidos'),
             };
         }
 
@@ -89,8 +90,8 @@
         if (check.name === 'Memory Duplication' && check.status === 'warning') {
             return {
                 command: 'repair_memory_consolidate',
-                label:   isEN ? 'Merge duplicates' : 'Fusionar duplicados',
-                successDefault: isEN ? 'Duplicates merged' : 'Duplicados fusionados',
+                label:   $trad('Fusionar duplicados'),
+                successDefault: $trad('Duplicados fusionados'),
             };
         }
 
@@ -99,8 +100,8 @@
         if (check.name === 'Stream Sessions' && check.status === 'warning') {
             return {
                 command: 'repair_clear_leaked_stream_sessions',
-                label:   isEN ? 'Clear leaked sessions' : 'Limpiar sesiones colgadas',
-                successDefault: isEN ? 'Cleared' : 'Limpiado',
+                label:   $trad('Limpiar sesiones colgadas'),
+                successDefault: $trad('Limpiado'),
             };
         }
 
@@ -110,8 +111,8 @@
             && (check.status === 'warning' || check.status === 'error')) {
             return {
                 command: 'repair_rotate_app_log',
-                label:   isEN ? 'Rotate log' : 'Rotar log',
-                successDefault: isEN ? 'Log rotated' : 'Log rotado',
+                label:   $trad('Rotar log'),
+                successDefault: $trad('Log rotado'),
             };
         }
 
@@ -126,7 +127,7 @@
             // Re-run the diagnostic so the green/red state updates immediately.
             await runDiag();
         } catch (e) {
-            toast.error((isEN ? 'Repair failed: ' : 'Reparación falló: ') + String(e));
+            toast.error(($trad('Reparación falló: ')) + String(e));
         } finally {
             repairing = new Set([...repairing].filter(n => n !== check.name));
         }
@@ -168,7 +169,7 @@
 
 <div class="view-wrap">
     <div class="view-hdr">
-        <div class="view-title"><Stethoscope size={13} stroke={2}/> {isEN ? 'Self-Diagnostics' : 'Auto-Diagnóstico'}</div>
+        <div class="view-title"><Stethoscope size={13} stroke={2}/> {$trad('Auto-Diagnóstico')}</div>
         <div style="display:flex;align-items:center;gap:8px;margin-left:auto;">
             {#if report}
                 <span class="sd-overall" style="color:{statusColorCSS(report.overall_status)}">
@@ -177,7 +178,7 @@
                 <span class="sd-elapsed">{report.total_elapsed_ms}ms</span>
             {/if}
             <button class="view-btn" on:click={runDiag} disabled={loading} style="display:flex;align-items:center;gap:4px;">
-                <RefreshCw size={12} stroke={2}/> {loading ? (isEN ? 'Running...' : 'Ejecutando...') : (isEN ? 'Re-run' : 'Re-ejecutar')}
+                <RefreshCw size={12} stroke={2}/> {loading ? ($trad('Ejecutando...')) : ($trad('Re-ejecutar'))}
             </button>
         </div>
     </div>
@@ -189,7 +190,7 @@
     {#if loading && !report}
         <div class="sd-loading">
             <div class="sd-spinner"></div>
-            <p>{isEN ? 'Running diagnostics...' : 'Ejecutando diagnósticos...'}</p>
+            <p>{$trad('Ejecutando diagnósticos...')}</p>
         </div>
     {/if}
 
@@ -200,13 +201,13 @@
              in:staggerIn={{ index: 0, step: 40, duration: 200 }}>
             {#if report.overall_status === 'ok'}
                 <CircleCheck size={20} stroke={2}/>
-                <span>{isEN ? 'All systems healthy' : 'Todos los sistemas saludables'}</span>
+                <span>{$trad('Todos los sistemas saludables')}</span>
             {:else if report.overall_status === 'warning'}
                 <AlertTriangle size={20} stroke={2}/>
-                <span>{isEN ? 'Some checks have warnings' : 'Algunos chequeos tienen advertencias'}</span>
+                <span>{$trad('Algunos chequeos tienen advertencias')}</span>
             {:else}
                 <CircleX size={20} stroke={2}/>
-                <span>{isEN ? 'Issues detected — review below' : 'Se detectaron problemas — revisar abajo'}</span>
+                <span>{$trad('Se detectaron problemas — revisar abajo')}</span>
             {/if}
             <span class="sd-banner-time">{new Date(report.timestamp * 1000).toLocaleString()}</span>
         </div>
@@ -231,14 +232,14 @@
                                 disabled={repairing.has(check.name)}
                                 title={_repair.label}>
                             <Wrench size={11} stroke={2}/>
-                            <span>{repairing.has(check.name) ? (isEN ? 'Repairing…' : 'Reparando…') : _repair.label}</span>
+                            <span>{repairing.has(check.name) ? ($trad('Reparando…')) : _repair.label}</span>
                         </button>
                     {/if}
                 </div>
                 <div class="sd-check-msg">{check.message}</div>
                 {#if check.details}
                 <details class="sd-check-details">
-                    <summary>{isEN ? 'Details' : 'Detalles'}</summary>
+                    <summary>{$trad('Detalles')}</summary>
                     <pre>{JSON.stringify(check.details, null, 2)}</pre>
                 </details>
                 {/if}

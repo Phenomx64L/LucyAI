@@ -1,4 +1,6 @@
 <script>
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     import { createEventDispatcher, onMount, onDestroy } from 'svelte';
     import { invoke } from '@tauri-apps/api/core';
     import { listen } from '@tauri-apps/api/event';
@@ -27,7 +29,6 @@
 
     // Props
     export let isOpen = false;
-    export let isEN = false;
 
     // State
     let loading = false;
@@ -215,7 +216,7 @@
         }
     };
 
-    const l = labels[isEN ? 'en-US' : 'es-MX'];
+    const l = labels[$trad('es-MX')];
 
     // ── Load configured state on mount (May 2026 UX polish) ──
     // Previously the modal showed every tab as "unconfigured" until the user
@@ -633,22 +634,20 @@
                                         <!-- Inline download UI (PromptGuard 2 from HuggingFace) -->
                                         <div class="dl-box">
                                             <label for="hf-token-input" style="display:block;font-size:11px;color:var(--txt2);margin-bottom:4px;">
-                                                {isEN ? 'HuggingFace token (read access to meta-llama/Llama-Prompt-Guard-2-86M):' : 'Token HuggingFace (acceso de lectura a meta-llama/Llama-Prompt-Guard-2-86M):'}
+                                                {$trad('Token HuggingFace (acceso de lectura a meta-llama/Llama-Prompt-Guard-2-86M):')}
                                             </label>
                                             <input id="hf-token-input" type="password" bind:value={hfToken} placeholder="hf_..." disabled={downloading}
                                                    style="width:100%;padding:5px 8px;background:#0f1520;border:1px solid var(--bdr);border-radius:4px;color:var(--txt);font-family:var(--mono);font-size:11px;" />
                                             <div style="display:flex;gap:8px;margin-top:6px;align-items:center;">
                                                 <button class="dl-btn" on:click={startDownload} disabled={downloading || !hfToken.trim()}>
                                                     {#if downloading}
-                                                        ↻ {isEN ? 'Downloading…' : 'Descargando…'}
+                                                        ↻ {$trad('Descargando…')}
                                                     {:else}
-                                                        ⬇ {isEN ? 'Download Model (≈280 MB)' : 'Descargar Modelo (≈280 MB)'}
+                                                        ⬇ {$trad('Descargar Modelo (≈280 MB)')}
                                                     {/if}
                                                 </button>
                                                 <span style="font-size:10px;color:var(--txt3);">
-                                                    {isEN
-                                                        ? 'Get token: huggingface.co/settings/tokens · License: huggingface.co/meta-llama/Llama-Prompt-Guard-2-86M'
-                                                        : 'Token: huggingface.co/settings/tokens · Licencia: huggingface.co/meta-llama/Llama-Prompt-Guard-2-86M'}
+                                                    {$trad('Token: huggingface.co/settings/tokens · Licencia: huggingface.co/meta-llama/Llama-Prompt-Guard-2-86M')}
                                                 </span>
                                             </div>
 

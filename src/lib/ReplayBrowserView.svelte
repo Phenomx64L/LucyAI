@@ -15,6 +15,8 @@
   historical input.
 -->
 <script lang="ts">
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     import { onMount, onDestroy, createEventDispatcher } from 'svelte';
     import { invoke } from '@tauri-apps/api/core';
     // v1.4.16 — shared empty-state + skeleton primitives.
@@ -146,7 +148,7 @@
     async function relabel(meta: ReplayMeta): Promise<void> {
         const { lucyPrompt } = await import('$lib/dialog-service');
         const next = await lucyPrompt(
-            isEN ? 'New label for this snapshot' : 'Nueva etiqueta del snapshot',
+            $trad('Nueva etiqueta del snapshot'),
             { defaultValue: meta.label });
         if (next == null) return;
         try {
@@ -161,8 +163,8 @@
         if (!await lucyConfirm(
             isEN ? `Delete snapshot #${meta.id}?` : `¿Borrar snapshot #${meta.id}?`,
             { tone: 'danger',
-              description: isEN ? 'This cannot be undone.' : 'No se puede deshacer.',
-              confirmLabel: isEN ? 'Delete' : 'Borrar' })) return;
+              description: $trad('No se puede deshacer.'),
+              confirmLabel: $trad('Borrar') })) return;
         try {
             await invoke('replay_delete', { id: meta.id });
             if (selected?.id === meta.id) selected = null;
@@ -173,11 +175,11 @@
     async function pruneOld(): Promise<void> {
         const { lucyConfirm } = await import('$lib/dialog-service');
         if (!await lucyConfirm(
-            isEN ? 'Delete snapshots older than 30 days?' : '¿Borrar snapshots con más de 30 días?',
-            { tone: 'warning', confirmLabel: isEN ? 'Delete' : 'Borrar' })) return;
+            $trad('¿Borrar snapshots con más de 30 días?'),
+            { tone: 'warning', confirmLabel: $trad('Borrar') })) return;
         try {
             const n = await invoke<number>('replay_clear_old', { days: 30 });
-            error = (isEN ? 'Deleted ' : 'Borrados: ') + n;
+            error = ($trad('Borrados: ')) + n;
             await loadList();
         } catch (e) { error = String(e); }
     }
@@ -193,10 +195,10 @@
         return 'd-far';
     }
     function driftLabel(d: DriftScore): string {
-        if (d.is_identical) return isEN ? 'IDENTICAL' : 'IDÉNTICO';
-        if (d.char_jaccard >= 0.85) return isEN ? 'near-identical' : 'casi idéntico';
-        if (d.char_jaccard >= 0.50) return isEN ? 'moderate drift' : 'deriva moderada';
-        return isEN ? 'high drift' : 'deriva alta';
+        if (d.is_identical) return $trad('IDÉNTICO');
+        if (d.char_jaccard >= 0.85) return $trad('casi idéntico');
+        if (d.char_jaccard >= 0.50) return $trad('deriva moderada');
+        return $trad('deriva alta');
     }
 
     function onKeyDown(ev: KeyboardEvent): void {
@@ -213,25 +215,25 @@
     onDestroy(() => window.removeEventListener('keydown', onKeyDown));
 </script>
 
-<div class="rp-overlay" role="dialog" aria-label={isEN ? 'Replay browser' : 'Navegador de replays'}>
+<div class="rp-overlay" role="dialog" aria-label={$trad('Navegador de replays')}>
     <div class="rp-header">
         <div class="rp-title">
             <span class="rp-glyph">⌕</span>
-            <span>{isEN ? 'Replay browser' : 'Navegador de replays'}</span>
-            <span class="rp-count">{snapshots.length} {isEN ? 'snapshots' : 'snapshots'}</span>
+            <span>{$trad('Navegador de replays')}</span>
+            <span class="rp-count">{snapshots.length} {$trad('snapshots')}</span>
         </div>
         <div class="rp-actions">
             <span class="rp-scope-toggle" role="tablist">
                 <button class:active={scope === 'all'} on:click={() => scope = 'all'}>
-                    {isEN ? 'All' : 'Todos'}
+                    {$trad('Todos')}
                 </button>
                 <button class:active={scope === 'tab'} on:click={() => scope = 'tab'}
                         disabled={!initialTabId}>
-                    {isEN ? 'This tab' : 'Esta tab'}
+                    {$trad('Esta tab')}
                 </button>
             </span>
-            <button class="rp-btn" on:click={loadList} title={isEN ? 'Refresh' : 'Recargar'} disabled={loading}>↻</button>
-            <button class="rp-btn" on:click={pruneOld} title={isEN ? 'Prune older than 30d' : 'Borrar > 30 días'}>🗑 30d+</button>
+            <button class="rp-btn" on:click={loadList} title={$trad('Recargar')} disabled={loading}>↻</button>
+            <button class="rp-btn" on:click={pruneOld} title={$trad('Borrar > 30 días')}>🗑 30d+</button>
             <button class="rp-btn rp-close" on:click={() => dispatch('close')} title="Esc">✕</button>
         </div>
     </div>
@@ -250,10 +252,8 @@
                 <!-- v1.4.16 — structured empty state. -->
                 <EmptyState
                     icon="⌕"
-                    title={isEN ? 'No snapshots yet' : 'Sin snapshots todavía'}
-                    description={isEN
-                        ? 'As you chat with Lucy, every turn is captured automatically. Snapshots let you replay a turn against a different model and see the drift.'
-                        : 'A medida que conversas con Lucy, cada turno se captura automáticamente. Los snapshots permiten re-ejecutar un turno contra otro modelo y ver la divergencia.'}
+                    title={$trad('Sin snapshots todavía')}
+                    description={$trad('A medida que conversas con Lucy, cada turno se captura automáticamente. Los snapshots permiten re-ejecutar un turno contra otro modelo y ver la divergencia.')}
                     compact={true} />
             {:else}
                 <ul class="rp-list">
@@ -265,7 +265,7 @@
                                     <span class="rp-row-model">{m.model}{m.effort ? '::' + m.effort : ''}</span>
                                     <span class="rp-row-time">{fmtDate(m.created_at)}</span>
                                     {#if m.replays_run > 0}
-                                        <span class="rp-row-runs" title={isEN ? 'Replayed count' : 'Veces re-ejecutado'}>↻ {m.replays_run}</span>
+                                        <span class="rp-row-runs" title={$trad('Veces re-ejecutado')}>↻ {m.replays_run}</span>
                                     {/if}
                                 </div>
                                 {#if m.label}<div class="rp-row-label">⚑ {m.label}</div>{/if}
@@ -277,8 +277,8 @@
                                 </div>
                             </button>
                             <div class="rp-row-actions">
-                                <button on:click|stopPropagation={() => relabel(m)} title={isEN ? 'Label' : 'Etiquetar'}>⚑</button>
-                                <button on:click|stopPropagation={() => deleteSnapshot(m)} title={isEN ? 'Delete' : 'Borrar'}>✕</button>
+                                <button on:click|stopPropagation={() => relabel(m)} title={$trad('Etiquetar')}>⚑</button>
+                                <button on:click|stopPropagation={() => deleteSnapshot(m)} title={$trad('Borrar')}>✕</button>
                             </div>
                         </li>
                     {/each}
@@ -293,10 +293,8 @@
                      baked in (the user already sees the list on the left). -->
                 <EmptyState
                     icon="←"
-                    title={isEN ? 'Pick a snapshot' : 'Elige un snapshot'}
-                    description={isEN
-                        ? 'Select one on the left to inspect the turn or re-run it against a different model / effort.'
-                        : 'Selecciona uno a la izquierda para inspeccionar el turno o re-ejecutarlo contra otro modelo / esfuerzo.'} />
+                    title={$trad('Elige un snapshot')}
+                    description={$trad('Selecciona uno a la izquierda para inspeccionar el turno o re-ejecutarlo contra otro modelo / esfuerzo.')} />
             {:else}
                 {@const s = selected}
                 <header class="rp-detail-hdr">
@@ -310,13 +308,13 @@
 
                 <!-- Input pane -->
                 <details class="rp-section" open>
-                    <summary>{isEN ? 'User prompt' : 'Prompt del usuario'} <span class="rp-bytes">{s.user_prompt.length} chars</span></summary>
+                    <summary>{$trad('Prompt del usuario')} <span class="rp-bytes">{s.user_prompt.length} chars</span></summary>
                     <pre class="rp-code">{s.user_prompt}</pre>
                 </details>
 
                 {#if s.context_block}
                 <details class="rp-section">
-                    <summary>{isEN ? 'Context block (memories / history / files)' : 'Bloque de contexto (memorias / historial / archivos)'} <span class="rp-bytes">{s.context_block.length} chars</span></summary>
+                    <summary>{$trad('Bloque de contexto (memorias / historial / archivos)')} <span class="rp-bytes">{s.context_block.length} chars</span></summary>
                     <pre class="rp-code">{s.context_block}</pre>
                 </details>
                 {/if}
@@ -324,28 +322,28 @@
                 <!-- Replay control row -->
                 <div class="rp-replay-bar">
                     <label class="rp-replay-label">
-                        {isEN ? 'Model for replay' : 'Modelo para replay'}:
+                        {$trad('Modelo para replay')}:
                         <input type="text"
                                bind:value={overrideModel}
-                               placeholder="{s.model}{s.effort ? '::' + s.effort : ''} ({isEN ? 'leave empty = same' : 'vacío = mismo'})"
+                               placeholder="{s.model}{s.effort ? '::' + s.effort : ''} ({$trad('vacío = mismo')})"
                                disabled={replayBusy}/>
                     </label>
                     <button class="rp-btn rp-btn-primary"
                             on:click={runReplay}
                             disabled={replayBusy}>
-                        {replayBusy ? (isEN ? '⟳ Running…' : '⟳ Ejecutando…') : (isEN ? '▶ Run replay' : '▶ Re-ejecutar')}
+                        {replayBusy ? ($trad('⟳ Ejecutando…')) : ($trad('▶ Re-ejecutar'))}
                     </button>
                 </div>
 
                 <!-- Side-by-side comparison -->
                 <div class="rp-compare">
                     <div class="rp-pane">
-                        <div class="rp-pane-hdr">{isEN ? 'Original' : 'Original'} <span class="rp-tag-muted">{s.original_latency_ms}ms</span></div>
+                        <div class="rp-pane-hdr">{$trad('Original')} <span class="rp-tag-muted">{s.original_latency_ms}ms</span></div>
                         <pre class="rp-code">{s.original_response}</pre>
                     </div>
                     <div class="rp-pane">
                         <div class="rp-pane-hdr">
-                            {isEN ? 'Replay' : 'Re-ejecución'}
+                            {$trad('Re-ejecución')}
                             {#if drift}
                                 <span class="rp-drift {driftClass(drift)}">
                                     {driftLabel(drift)}
@@ -358,7 +356,7 @@
                             {/if}
                         </div>
                         {#if replayOutput === null}
-                            <div class="rp-empty">{isEN ? 'No replay yet.' : 'Sin re-ejecución todavía.'}</div>
+                            <div class="rp-empty">{$trad('Sin re-ejecución todavía.')}</div>
                         {:else}
                             <pre class="rp-code">{replayOutput}</pre>
                         {/if}

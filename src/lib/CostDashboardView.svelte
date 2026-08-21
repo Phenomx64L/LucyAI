@@ -1,4 +1,6 @@
 <script>
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     import { onMount, createEventDispatcher } from 'svelte';
     import { getCostSummary } from '$lib/lucy-api';
     import { invoke } from '@tauri-apps/api/core';
@@ -199,7 +201,7 @@
         }
     };
 
-    $: lang = labels[isEN ? 'en-US' : 'es-MX'];
+    $: lang = labels[$trad('es-MX')];
 
     // Track current summary based on period
     $: currentSummary = selectedPeriod === 'day'
@@ -371,7 +373,7 @@
                 <div class="metric-card budget budget-disabled">
                     <div class="metric-label">{lang.budget}</div>
                     <div class="budget-text" style="opacity:.7;">
-                        {isEN ? 'Tracking disabled' : 'Control desactivado'}
+                        {$trad('Control desactivado')}
                     </div>
                     <button class="budget-enable-btn" type="button" on:click={openBudgetModal}>
                         <Settings size={11} stroke={2}/> {lang.editBudget}
@@ -385,7 +387,7 @@
             {@const _tierAgg = costByTier(currentSummary.per_model)}
             {#if _tierAgg.tiers.length > 0}
                 <div class="per-tier-section">
-                    <h3>{isEN ? 'Per LLM Tier' : 'Por capa LLM'}</h3>
+                    <h3>{$trad('Por capa LLM')}</h3>
                     <div class="per-tier-list">
                         {#each _tierAgg.tiers as t (t.tier)}
                             <div class="per-tier-row"

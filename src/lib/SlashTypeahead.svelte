@@ -38,6 +38,8 @@
      CSS terms: bottom: 100%) so it can't be clipped by a smaller
      viewport AND it doesn't push the chat content. -->
 <script lang="ts">
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     import { createEventDispatcher, tick } from 'svelte';
 
     /** Current textarea value. */
@@ -201,7 +203,7 @@
 </script>
 
 {#if visible}
-<div class="sl-th-pop" role="listbox" aria-label={isEN ? 'Slash commands' : 'Comandos slash'}>
+<div class="sl-th-pop" role="listbox" aria-label={$trad('Comandos slash')}>
     {#each matches as item, i (item.cmd)}
         <button type="button"
                 class="sl-th-row"
@@ -218,11 +220,11 @@
     <div class="sl-th-foot">
         <span class="sl-th-hint">
             <kbd>↑</kbd><kbd>↓</kbd>
-            {isEN ? 'navigate' : 'navegar'}
+            {$trad('navegar')}
             <kbd>↵</kbd>
-            {isEN ? 'select' : 'seleccionar'}
+            {$trad('seleccionar')}
             <kbd>Esc</kbd>
-            {isEN ? 'close' : 'cerrar'}
+            {$trad('cerrar')}
         </span>
     </div>
 </div>

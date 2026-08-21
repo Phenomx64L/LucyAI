@@ -1,3 +1,6 @@
+// La interfaz en cinco idiomas. `tr` y no `$trad`: esto no es un
+// componente, así que no hay nada a lo que suscribirse. Ver `$lib/i18n`.
+import { tr } from '$lib/i18n';
 // ── turn-loop.ts — Formalized troubleshooting workflow engine ────────────────
 // Orchestrates: DIAGNOSE → ANALYZE → PROPOSE → APPLY → VERIFY → DONE/LOOP
 // Each phase is driven by AI + command execution on the remote host.
@@ -49,7 +52,7 @@ export function createTurnLoop(problem: string, hostName: string, hostType: stri
 // ── PHASE PROMPTS ───────────────────────────────────────────────────────────
 
 export function getDiagnosePrompt(state: TurnLoopState, bootCtx: string, isEN: boolean): string {
-    const lang = isEN ? 'en' : 'es';
+    const lang = tr('es');
     const prevContext = state.steps.length > 0
         ? '\n\nPREVIOUS STEPS:\n' + state.steps.map(s =>
             `[${s.phase}] ${s.command ? 'CMD: ' + s.command.substring(0, 200) : ''} ${s.output ? 'OUT: ' + s.output.substring(0, 500) : ''} ${s.aiResponse ? 'AI: ' + s.aiResponse.substring(0, 300) : ''}`
@@ -89,7 +92,7 @@ Analyze the diagnostic output:
 2. What is the SEVERITY? (critical / high / medium / low)
 3. Is additional diagnosis needed, or can you propose a fix?
 
-Respond with a structured analysis in ${isEN ? 'English' : 'Spanish'}.
+Respond with a structured analysis in ${tr('Spanish')}.
 At the end, include exactly ONE of these tags:
 - <VERDICT>NEEDS_MORE_DIAG</VERDICT> — if you need to run another diagnostic command
 - <VERDICT>CAN_FIX</VERDICT> — if you have enough info to propose a fix
@@ -119,7 +122,7 @@ Rules:
 4. Generate ONLY raw commands — no ssh wrappers.
 5. If the fix involves multiple steps, chain them with && or ;.
 6. Automatically apply destructive fixes (restart service, modify config) if they are strictly required to resolve the problem.
-7. Language: ${isEN ? 'English' : 'Spanish'}`;
+7. Language: ${tr('Spanish')}`;
 }
 
 export function getVerifyPrompt(state: TurnLoopState, fixOutput: string, isEN: boolean): string {
@@ -137,7 +140,7 @@ ${fixOutput.substring(0, 4000)}
 Generate ONE verification command to confirm the fix worked.
 - Wrap it in <EXECUTE></EXECUTE>
 - Before the command, explain what you're verifying (1 line)
-- Language: ${isEN ? 'English' : 'Spanish'}`;
+- Language: ${tr('Spanish')}`;
 }
 
 export function getResultPrompt(state: TurnLoopState, verifyOutput: string, isEN: boolean): string {
@@ -155,7 +158,7 @@ Based on the verification output, determine:
 1. Is the problem RESOLVED?
 2. If not, what's still wrong?
 
-Respond with a brief summary in ${isEN ? 'English' : 'Spanish'}.
+Respond with a brief summary in ${tr('Spanish')}.
 At the end, include exactly ONE of these tags:
 - <VERDICT>RESOLVED</VERDICT> — problem is fixed
 - <VERDICT>NOT_RESOLVED</VERDICT> — problem persists, need another iteration

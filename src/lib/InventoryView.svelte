@@ -1,4 +1,6 @@
 <script>
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     import { onMount, createEventDispatcher } from 'svelte';
     import { invoke } from '@tauri-apps/api/core';
     // v1.7.17 — In-app dialogs.
@@ -90,11 +92,11 @@
 
     async function saveBaseline() {
         if (!snapshot) {
-            toast(isEN ? 'Run a scan first.' : 'Escanea primero.', 'warn');
+            toast($trad('Escanea primero.'), 'warn');
             return;
         }
         const label = await lucyPrompt(
-            isEN ? 'Label for this baseline (optional)' : 'Etiqueta para este baseline (opcional)',
+            $trad('Etiqueta para este baseline (opcional)'),
             { defaultValue: new Date().toISOString().slice(0, 10),
               placeholder: 'YYYY-MM-DD' });
         if (label === null) return;
@@ -122,11 +124,11 @@
 
     async function computeDrift() {
         if (!snapshot) {
-            toast(isEN ? 'Run a scan first.' : 'Escanea primero.', 'warn');
+            toast($trad('Escanea primero.'), 'warn');
             return;
         }
         if (!baseline) {
-            toast(isEN ? 'No baseline saved for this host yet.' : 'Sin baseline guardado para este host.', 'warn');
+            toast($trad('Sin baseline guardado para este host.'), 'warn');
             return;
         }
         driftLoading = true; driftError = '';
@@ -145,7 +147,7 @@
             const t = driftReport.totals;
             const n = t.added + t.removed + t.changed;
             toast(n === 0
-                ? (isEN ? '✓ No drift detected since baseline.' : '✓ Sin deriva desde el baseline.')
+                ? ($trad('✓ Sin deriva desde el baseline.'))
                 : (isEN ? `Drift: +${t.added} / -${t.removed} / Δ${t.changed}`
                         : `Deriva: +${t.added} / -${t.removed} / Δ${t.changed}`),
                 n === 0 ? 'info' : 'warn',
@@ -158,15 +160,15 @@
 
     async function deleteBaseline() {
         if (!await lucyConfirm(
-            isEN ? 'Delete the baseline for this host?' : '¿Borrar el baseline de este host?',
+            $trad('¿Borrar el baseline de este host?'),
             { tone: 'danger',
-              description: isEN ? 'This cannot be undone.' : 'No se puede deshacer.',
-              confirmLabel: isEN ? 'Delete' : 'Borrar' })) return;
+              description: $trad('No se puede deshacer.'),
+              confirmLabel: $trad('Borrar') })) return;
         try {
             await invoke('inventory_delete_baseline', { hostId: selectedHost });
             baseline = null;
             driftReport = null;
-            toast(isEN ? 'Baseline removed.' : 'Baseline borrado.');
+            toast($trad('Baseline borrado.'));
         } catch (e) {
             toast('Delete error: ' + e, 'error');
         }
@@ -174,7 +176,7 @@
 
     function fmtRelTime(unixSec) {
         const d = Math.floor(Date.now()/1000) - unixSec;
-        if (d < 60)    return isEN ? 'just now' : 'ahora';
+        if (d < 60)    return $trad('ahora');
         if (d < 3600)  return `${Math.floor(d/60)}m`;
         if (d < 86400) return `${Math.floor(d/3600)}h`;
         return `${Math.floor(d/86400)}d`;
@@ -195,8 +197,7 @@
 
     async function runCveScan() {
         if (!snapshot?.software?.length) {
-            toast(isEN ? 'No software in snapshot — scan inventory first.'
-                       : 'Sin software en el snapshot — escanea inventario primero.', 'warn');
+            toast($trad('Sin software en el snapshot — escanea inventario primero.'), 'warn');
             return;
         }
         cveScanning = true;
@@ -242,7 +243,7 @@
                 certs: snapshot.certs || [],
                 scheduled: snapshot.scheduled || [],
             }, isEN);
-            toast(isEN ? 'PDF exported' : 'PDF exportado');
+            toast($trad('PDF exportado'));
         } catch(e) {
             if (String(e) !== 'Cancelled') toast('Error: ' + e, 'error');
         }
@@ -252,7 +253,7 @@
     function relTime(ts) {
         if (!ts) return '';
         const d = Date.now() - ts;
-        if (d < 60000) return isEN ? 'just now' : 'ahora';
+        if (d < 60000) return $trad('ahora');
         if (d < 3600000) return `${Math.floor(d/60000)}m`;
         if (d < 86400000) return `${Math.floor(d/3600000)}h`;
         return `${Math.floor(d/86400000)}d`;
@@ -261,14 +262,14 @@
 
 <div class="view-wrap">
   <div class="view-hdr">
-    <div class="view-title" style="display:flex;align-items:center;gap:6px;"><ScanSearch size={13} stroke={2}/> {isEN ? 'Infrastructure Inventory' : 'Inventario de Infraestructura'}</div>
+    <div class="view-title" style="display:flex;align-items:center;gap:6px;"><ScanSearch size={13} stroke={2}/> {$trad('Inventario de Infraestructura')}</div>
     <div style="display:flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:wrap;">
       <select class="view-select" bind:value={selectedHost}>
         <option value="local">⊡ Local ({hostName})</option>
         {#each hosts as h}<option value={h.id}>{h.type==='windows'?'⊡':'◈'} {h.name}</option>{/each}
       </select>
       <button class="view-btn" on:click={runScan} disabled={scanning} style="display:flex;align-items:center;gap:5px;">
-        {#if scanning}↻ {isEN ? 'Scanning...' : 'Escaneando...'}{:else}<ScanSearch size={12} stroke={2}/> {isEN ? 'Scan' : 'Escanear'}{/if}
+        {#if scanning}↻ {$trad('Escaneando...')}{:else}<ScanSearch size={12} stroke={2}/> {$trad('Escanear')}{/if}
       </button>
       {#if snapshot}
         <!-- Sprint B #2 — Drift detection group: baseline save + drift compute -->
@@ -278,19 +279,19 @@
                     ? `Compute drift vs baseline (${fmtRelTime(baseline.updated_at)} old${baseline.label ? ': ' + baseline.label : ''})`
                     : `Calcular deriva vs baseline (${fmtRelTime(baseline.updated_at)} de antigüedad${baseline.label ? ': ' + baseline.label : ''})`}
                   style="display:flex;align-items:center;gap:5px;">
-            {#if driftLoading}↻{:else}◑{/if} {isEN ? 'Drift' : 'Deriva'}
+            {#if driftLoading}↻{:else}◑{/if} {$trad('Deriva')}
           </button>
         {/if}
         <button class="view-btn" on:click={saveBaseline}
                 title={baseline
-                  ? (isEN ? 'Overwrite baseline with current snapshot' : 'Sobrescribir baseline con snapshot actual')
-                  : (isEN ? 'Save current snapshot as the trusted baseline for this host' : 'Guardar snapshot actual como baseline de confianza')}
+                  ? ($trad('Sobrescribir baseline con snapshot actual'))
+                  : ($trad('Guardar snapshot actual como baseline de confianza'))}
                 style="display:flex;align-items:center;gap:5px;">
-          ◇ {baseline ? (isEN ? 'Update baseline' : 'Actualizar baseline') : (isEN ? 'Set baseline' : 'Set baseline')}
+          ◇ {baseline ? ($trad('Actualizar baseline')) : ($trad('Set baseline'))}
         </button>
         <!-- Tier A #4 — CVE scan trigger. Requires a snapshot with software list. -->
         <button class="view-btn" on:click={runCveScan} disabled={cveScanning || !snapshot.software?.length}
-                title={isEN ? 'Scan installed software against curated CVE DB' : 'Escanear software contra DB curada de CVEs'}
+                title={$trad('Escanear software contra DB curada de CVEs')}
                 style="display:flex;align-items:center;gap:5px;">
           {#if cveScanning}↻{:else}🛡{/if} CVEs
         </button>
@@ -311,11 +312,11 @@
   <div class="inv-summary">
     <button class="inv-card" class:active={activeTab==='ports'} on:click={() => activeTab='ports'}>
       <span class="inv-card-num">{snapshot.ports.length}</span>
-      <span class="inv-card-lbl">{isEN ? 'Open Ports' : 'Puertos'}</span>
+      <span class="inv-card-lbl">{$trad('Puertos')}</span>
     </button>
     <button class="inv-card" class:active={activeTab==='services'} on:click={() => activeTab='services'}>
       <span class="inv-card-num">{snapshot.services.length}</span>
-      <span class="inv-card-lbl">{isEN ? 'Services' : 'Servicios'}</span>
+      <span class="inv-card-lbl">{$trad('Servicios')}</span>
     </button>
     <button class="inv-card" class:active={activeTab==='software'} on:click={() => activeTab='software'}>
       <span class="inv-card-num">{snapshot.software.length}</span>
@@ -323,11 +324,11 @@
     </button>
     <button class="inv-card" class:active={activeTab==='certs'} on:click={() => activeTab='certs'}>
       <span class="inv-card-num" style={snapshot.certs.some(c=>c.days_left<30)?'color:var(--red)':''}>{snapshot.certs.length}</span>
-      <span class="inv-card-lbl">{isEN ? 'SSL Certs' : 'Certificados'}</span>
+      <span class="inv-card-lbl">{$trad('Certificados')}</span>
     </button>
     <button class="inv-card" class:active={activeTab==='scheduled'} on:click={() => activeTab='scheduled'}>
       <span class="inv-card-num">{snapshot.scheduled.length}</span>
-      <span class="inv-card-lbl">{isEN ? 'Scheduled' : 'Programadas'}</span>
+      <span class="inv-card-lbl">{$trad('Programadas')}</span>
     </button>
     {#if cveResult}
       <!-- Tier A #4 — CVE summary card. Color reflects worst severity. -->
@@ -347,7 +348,7 @@
       {@const _color = _n === 0 ? 'color:var(--acc)' : _t.removed > 0 ? 'color:#ef4444' : 'color:#f59e0b'}
       <button class="inv-card inv-card-cve" class:active={activeTab==='drift'} on:click={() => activeTab='drift'}>
         <span class="inv-card-num" style={_color}>{_n}</span>
-        <span class="inv-card-lbl">{isEN ? 'drift' : 'deriva'}</span>
+        <span class="inv-card-lbl">{$trad('deriva')}</span>
       </button>
     {/if}
   </div>
@@ -355,46 +356,46 @@
   <!-- Search -->
   <div class="inv-search">
     <input class="inv-search-inp" type="text" bind:value={searchQuery}
-      placeholder={isEN ? 'Filter...' : 'Filtrar...'}>
+      placeholder={$trad('Filtrar...')}>
   </div>
 
   <div class="inv-scroll">
     {#if activeTab === 'ports'}
     <table class="inv-table">
-      <thead><tr><th>{isEN ? 'Port' : 'Puerto'}</th><th>{isEN ? 'Process' : 'Proceso'}</th><th>{isEN ? 'State' : 'Estado'}</th></tr></thead>
+      <thead><tr><th>{$trad('Puerto')}</th><th>{$trad('Proceso')}</th><th>{isEN ? 'State' : 'Estado'}</th></tr></thead>
       <tbody>
         {#each filteredPorts as p}
         <tr><td class="mono">{p.port}</td><td>{p.process || '-'}</td><td><span class="badge ok">LISTEN</span></td></tr>
         {/each}
-        {#if !filteredPorts.length}<tr><td colspan="3" class="empty">{isEN ? 'No ports found' : 'Sin puertos'}</td></tr>{/if}
+        {#if !filteredPorts.length}<tr><td colspan="3" class="empty">{$trad('Sin puertos')}</td></tr>{/if}
       </tbody>
     </table>
 
     {:else if activeTab === 'services'}
     <table class="inv-table">
-      <thead><tr><th>{isEN ? 'Service' : 'Servicio'}</th><th>{isEN ? 'Description' : 'Descripción'}</th><th>{isEN ? 'Status' : 'Estado'}</th></tr></thead>
+      <thead><tr><th>{$trad('Servicio')}</th><th>{$trad('Descripción')}</th><th>{isEN ? 'Status' : 'Estado'}</th></tr></thead>
       <tbody>
         {#each filteredServices as s}
         <tr><td class="mono">{s.name}</td><td>{s.description || '-'}</td><td><span class="badge ok">{s.status}</span></td></tr>
         {/each}
-        {#if !filteredServices.length}<tr><td colspan="3" class="empty">{isEN ? 'No services found' : 'Sin servicios'}</td></tr>{/if}
+        {#if !filteredServices.length}<tr><td colspan="3" class="empty">{$trad('Sin servicios')}</td></tr>{/if}
       </tbody>
     </table>
 
     {:else if activeTab === 'software'}
     <table class="inv-table">
-      <thead><tr><th>Software</th><th>{isEN ? 'Version' : 'Versión'}</th></tr></thead>
+      <thead><tr><th>Software</th><th>{$trad('Versión')}</th></tr></thead>
       <tbody>
         {#each filteredSoftware as s}
         <tr><td>{s.name}</td><td class="mono">{s.version || '-'}</td></tr>
         {/each}
-        {#if !filteredSoftware.length}<tr><td colspan="2" class="empty">{isEN ? 'No software found' : 'Sin software'}</td></tr>{/if}
+        {#if !filteredSoftware.length}<tr><td colspan="2" class="empty">{$trad('Sin software')}</td></tr>{/if}
       </tbody>
     </table>
 
     {:else if activeTab === 'certs'}
     <table class="inv-table">
-      <thead><tr><th>Subject</th><th>{isEN ? 'Expires' : 'Expira'}</th><th>{isEN ? 'Days Left' : 'Días rest.'}</th></tr></thead>
+      <thead><tr><th>Subject</th><th>{$trad('Expira')}</th><th>{$trad('Días rest.')}</th></tr></thead>
       <tbody>
         {#each snapshot.certs as c}
         <tr>
@@ -405,18 +406,18 @@
           </td>
         </tr>
         {/each}
-        {#if !snapshot.certs.length}<tr><td colspan="3" class="empty">{isEN ? 'No certificates found' : 'Sin certificados'}</td></tr>{/if}
+        {#if !snapshot.certs.length}<tr><td colspan="3" class="empty">{$trad('Sin certificados')}</td></tr>{/if}
       </tbody>
     </table>
 
     {:else if activeTab === 'scheduled'}
     <table class="inv-table">
-      <thead><tr><th>{isEN ? 'Task / Cron Entry' : 'Tarea / Entrada Cron'}</th></tr></thead>
+      <thead><tr><th>{$trad('Tarea / Entrada Cron')}</th></tr></thead>
       <tbody>
         {#each snapshot.scheduled as s}
         <tr><td class="mono" style="font-size:11px;">{s.entry}</td></tr>
         {/each}
-        {#if !snapshot.scheduled.length}<tr><td class="empty">{isEN ? 'No scheduled tasks' : 'Sin tareas programadas'}</td></tr>{/if}
+        {#if !snapshot.scheduled.length}<tr><td class="empty">{$trad('Sin tareas programadas')}</td></tr>{/if}
       </tbody>
     </table>
 
@@ -427,17 +428,17 @@
     {/if}
     <div class="drift-meta">
       {#if driftReport.has_baseline}
-        {isEN ? 'Comparing against baseline saved' : 'Comparando contra baseline guardado'}
+        {$trad('Comparando contra baseline guardado')}
         <strong>{fmtRelTime(driftReport.baseline_age_secs > 0 ? Math.floor(Date.now()/1000) - driftReport.baseline_age_secs : Math.floor(Date.now()/1000))}</strong>
-        {isEN ? 'ago' : 'antes'}{baseline?.label ? ` (${baseline.label})` : ''}
+        {$trad('antes')}{baseline?.label ? ` (${baseline.label})` : ''}
         ·
         <span style="color:var(--acc);">+{driftReport.totals.added}</span>
         <span style="color:#ef4444;">-{driftReport.totals.removed}</span>
         <span style="color:#f59e0b;">Δ{driftReport.totals.changed}</span>
         ·
-        <button class="drift-mini-btn" on:click={deleteBaseline}>{isEN ? 'Forget baseline' : 'Borrar baseline'}</button>
+        <button class="drift-mini-btn" on:click={deleteBaseline}>{$trad('Borrar baseline')}</button>
       {:else}
-        {isEN ? 'No baseline saved.' : 'Sin baseline guardado.'}
+        {$trad('Sin baseline guardado.')}
       {/if}
     </div>
     {#each driftReport.categories as cat}
@@ -453,7 +454,7 @@
         </div>
         {#if cat.added.length}
           <div class="drift-list">
-            <div class="drift-list-hdr">+ {isEN ? 'Added' : 'Añadido'}</div>
+            <div class="drift-list-hdr">+ {$trad('Añadido')}</div>
             {#each cat.added as item}
               <div class="drift-row add">
                 <span class="drift-icon">+</span>
@@ -471,7 +472,7 @@
         {/if}
         {#if cat.removed.length}
           <div class="drift-list">
-            <div class="drift-list-hdr">− {isEN ? 'Removed' : 'Removido'}</div>
+            <div class="drift-list-hdr">− {$trad('Removido')}</div>
             {#each cat.removed as item}
               <div class="drift-row rem">
                 <span class="drift-icon">−</span>
@@ -489,7 +490,7 @@
         {/if}
         {#if cat.changed.length}
           <div class="drift-list">
-            <div class="drift-list-hdr">Δ {isEN ? 'Changed' : 'Cambiado'}</div>
+            <div class="drift-list-hdr">Δ {$trad('Cambiado')}</div>
             {#each cat.changed as ch}
               <div class="drift-row chg">
                 <span class="drift-icon">Δ</span>
@@ -509,24 +510,24 @@
     {/each}
     {#if driftReport.totals.added + driftReport.totals.removed + driftReport.totals.changed === 0}
       <div class="empty" style="color:var(--acc);">
-        ✓ {isEN ? 'No drift detected since baseline.' : 'Sin deriva desde el baseline.'}
+        ✓ {$trad('Sin deriva desde el baseline.')}
       </div>
     {/if}
 
     {:else if activeTab === 'cves' && cveResult}
     <!-- Tier A #4 — CVE matches. Curated DB scan results. -->
     <div class="cve-meta">
-      {isEN ? 'Scanned' : 'Escaneados'}: {cveResult.scanned_count} ·
+      {$trad('Escaneados')}: {cveResult.scanned_count} ·
       DB: {cveResult.db_size} CVEs ·
       <span style="color:#94a3b8;">{cveResult.stale_warning}</span>
     </div>
     <table class="inv-table">
       <thead><tr>
-        <th>{isEN ? 'Severity' : 'Severidad'}</th>
+        <th>{$trad('Severidad')}</th>
         <th>CVE</th>
-        <th>{isEN ? 'Product' : 'Producto'}</th>
-        <th>{isEN ? 'Installed' : 'Instalado'}</th>
-        <th>{isEN ? 'Description' : 'Descripción'}</th>
+        <th>{$trad('Producto')}</th>
+        <th>{$trad('Instalado')}</th>
+        <th>{$trad('Descripción')}</th>
         <th>CVSS</th>
       </tr></thead>
       <tbody>
@@ -542,7 +543,7 @@
         {/each}
         {#if !cveResult.matches.length}
           <tr><td colspan="6" class="empty" style="color:var(--acc);">
-            ✓ {isEN ? 'No known CVEs match the installed software in this snapshot.' : 'Sin CVEs conocidos contra el software instalado.'}
+            ✓ {$trad('Sin CVEs conocidos contra el software instalado.')}
           </td></tr>
         {/if}
       </tbody>
@@ -550,9 +551,9 @@
     {/if}
   </div>
   {:else if !scanning}
-  <div class="view-loading"><span style="color:var(--txt3)">{isEN ? 'Select a host and click Scan' : 'Selecciona un host y haz clic en Escanear'}</span></div>
+  <div class="view-loading"><span style="color:var(--txt3)">{$trad('Selecciona un host y haz clic en Escanear')}</span></div>
   {:else}
-  <div class="view-loading"><span style="color:var(--acc)">↻ {isEN ? 'Scanning...' : 'Escaneando...'}</span></div>
+  <div class="view-loading"><span style="color:var(--acc)">↻ {$trad('Escaneando...')}</span></div>
   {/if}
 </div>
 

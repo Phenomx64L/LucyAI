@@ -1,4 +1,6 @@
 <script lang="ts">
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     // v1.4.23 — composer layout extracted to a single global stylesheet
     // (40+ selectors: .chip*, .chips*, .ibar/.igrp/.ibox/.iside, .ia-*,
     // .mbdg, .ollama-dot, .sbtn*, .sec-banner*, .pending-msg-*,
@@ -267,7 +269,7 @@
     <button class="chips-toggle" on:click={() => dispatch('togglechips')}
         title={chipsHidden
             ? (isEN ? `Show ${userChips.length} Lucy shortcuts` : `Mostrar ${userChips.length} atajos de Lucy`)
-            : (isEN ? 'Hide Lucy shortcuts' : 'Ocultar atajos de Lucy')}>
+            : ($trad('Ocultar atajos de Lucy'))}>
         <span class="chips-lucy-label">Lucy ↗</span>
         {#if chipsHidden}<span class="chips-count">{userChips.length}</span>{/if}
         <span class="chips-chevron">{chipsHidden ? '▸' : '▾'}</span>
@@ -284,7 +286,7 @@
             </div>
         {/each}
         <button class="chip chip-add" on:click={() => dispatch('addchip')}
-            title={isEN ? 'Add message shortcut for Lucy' : 'Agregar atajo de mensaje para Lucy'}>＋</button>
+            title={$trad('Agregar atajo de mensaje para Lucy')}>＋</button>
     {/if}
 </div>
 
@@ -311,16 +313,16 @@
 <div class="chat-search-bar">
     <span class="cs-ico">◎</span>
     <input id="chat-search-inp" class="cs-inp" bind:value={chatSearch}
-        placeholder={isEN ? 'Search in conversation…' : 'Buscar en conversación…'}
+        placeholder={$trad('Buscar en conversación…')}
         on:input={(e) => dispatch('chatSearchChange', { value: chatSearch })}
         on:keydown={(e) => { if (e.key === 'Escape') dispatch('closeChatSearch'); }} />
-    {#if chatSearch}<span class="cs-count">{chatSearchCount} {isEN ? 'results' : 'resultados'}</span>{/if}
+    {#if chatSearch}<span class="cs-count">{chatSearchCount} {$trad('resultados')}</span>{/if}
     <button class="cs-close" on:click={() => dispatch('closeChatSearch')}>✕</button>
 </div>
 {/if}
 
 <!-- ── INPUT BAR ── -->
-<div class="ibar" role="region" aria-label={isEN ? 'Message input area' : 'Área de entrada de mensaje'}
+<div class="ibar" role="region" aria-label={$trad('Área de entrada de mensaje')}
     on:dragover|preventDefault={(e) => { if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'; e.currentTarget.classList.add('drag-over'); }}
     on:dragleave={(e) => e.currentTarget.classList.remove('drag-over')}
     on:drop|preventDefault={(e) => { e.currentTarget.classList.remove('drag-over'); dispatch('filedrop', { event: e }); }}>
@@ -329,8 +331,8 @@
     {#if tab.pendingMessage}
     <div class="pending-msg-bar">
         <span class="pending-msg-dot"></span>
-        <span class="pending-msg-text">{isEN ? 'Queued' : 'En espera'}: "{tab.pendingMessage.text.length > 50 ? tab.pendingMessage.text.slice(0, 50) + '…' : tab.pendingMessage.text}"</span>
-        <button class="pending-msg-cancel" title={isEN ? 'Cancel queued message' : 'Cancelar mensaje en espera'}
+        <span class="pending-msg-text">{$trad('En espera')}: "{tab.pendingMessage.text.length > 50 ? tab.pendingMessage.text.slice(0, 50) + '…' : tab.pendingMessage.text}"</span>
+        <button class="pending-msg-cancel" title={$trad('Cancelar mensaje en espera')}
             on:click={() => dispatch('cancelpending')}>✕</button>
     </div>
     {/if}
@@ -344,15 +346,15 @@
     <div class="heavy-nudge" role="status">
         <span class="heavy-nudge-glyph">⚡</span>
         <span class="heavy-nudge-text">
-            {isEN ? 'Complex prompt detected' : 'Prompt complejo detectado'}
+            {$trad('Prompt complejo detectado')}
             <small>· {_heavyReason}</small>
         </span>
         <button class="heavy-nudge-act" on:click={_dispatchUpgrade}
-            title={isEN ? 'Switch to Claude Sonnet for better synthesis' : 'Cambiar a Claude Sonnet para mejor síntesis'}>
-            {isEN ? 'Upgrade →' : 'Mejorar →'}
+            title={$trad('Cambiar a Claude Sonnet para mejor síntesis')}>
+            {$trad('Mejorar →')}
         </button>
         <button class="heavy-nudge-x" on:click={() => _nudgeDismissed = true}
-            title={isEN ? 'Dismiss' : 'Descartar'} aria-label="Dismiss">✕</button>
+            title={$trad('Descartar')} aria-label="Dismiss">✕</button>
     </div>
     {/if}
 
@@ -389,9 +391,9 @@
             }} />
         <textarea class="ibox" rows="1"
             placeholder={tab.pendingMessage
-                ? (isEN ? 'Message queued — waiting for Lucy…' : 'Mensaje en espera — esperando a Lucy…')
+                ? ($trad('Mensaje en espera — esperando a Lucy…'))
                 : tab.isProcessing
-                    ? (isEN ? 'Type here — will send when Lucy finishes…' : 'Escribe aquí — se enviará cuando Lucy termine…')
+                    ? ($trad('Escribe aquí — se enviará cuando Lucy termine…'))
                     : cmdPlaceholder}
             bind:value={_draft}
             bind:this={_textareaEl}
@@ -424,15 +426,15 @@
              the underlying handlers are wired. -->
         {#if false}
             <div class="ihints" aria-hidden="true">
-                <kbd>Ctrl+P</kbd> <span>{isEN ? 'palette' : 'paleta'}</span>
+                <kbd>Ctrl+P</kbd> <span>{$trad('paleta')}</span>
                 <span class="ihint-sep">·</span>
-                <kbd>Tab</kbd> <span>{isEN ? 'autocomplete' : 'autocompletar'}</span>
+                <kbd>Tab</kbd> <span>{$trad('autocompletar')}</span>
                 <span class="ihint-sep">·</span>
-                <kbd>/</kbd> <span>{isEN ? 'commands' : 'comandos'}</span>
+                <kbd>/</kbd> <span>{$trad('comandos')}</span>
                 <span class="ihint-sep">·</span>
-                <kbd>@</kbd> <span>{isEN ? 'host' : 'host'}</span>
+                <kbd>@</kbd> <span>{$trad('host')}</span>
                 <span class="ihint-sep">·</span>
-                <kbd>Esc</kbd> <span>{isEN ? 'cancel' : 'cancelar'}</span>
+                <kbd>Esc</kbd> <span>{$trad('cancelar')}</span>
             </div>
         {/if}
 
@@ -444,25 +446,25 @@
                         on:mousedown|preventDefault={() => applySuggestion(s.flag)}>
                         <span class="flag-flag">{s.flag}</span>
                         <span class="flag-desc">{s.desc}</span>
-                        {#if s.destructive}<span class="flag-warn" title={isEN ? 'destructive' : 'destructivo'}>⚠</span>{/if}
+                        {#if s.destructive}<span class="flag-warn" title={$trad('destructivo')}>⚠</span>{/if}
                     </button>
                 {/each}
-                <div class="flag-foot">{isEN ? 'Tab/Enter: insert · Esc: close' : 'Tab/Enter: insertar · Esc: cerrar'}</div>
+                <div class="flag-foot">{$trad('Tab/Enter: insertar · Esc: cerrar')}</div>
             </div>
         {/if}
 
         <div class="iside">
-            <button class="ia-btn" title={isEN ? 'Attach file' : 'Adjuntar archivo'}
+            <button class="ia-btn" title={$trad('Adjuntar archivo')}
                 on:click={() => dispatch('attach')} disabled={!!tab.pendingMessage}>
                 <Paperclip size={15} stroke={1.8} />
             </button>
             <button class="ia-btn {tab.isListening ? 'mic-on' : ''}"
-                title={isEN ? 'Voice input' : 'Entrada de voz'}
+                title={$trad('Entrada de voz')}
                 on:click={() => dispatch('togglemic')}
                 disabled={tab.isProcessing && !tab.isListening}>
                 {#if tab.isListening}<MicOff size={15} stroke={1.8} />{:else}<Mic size={15} stroke={1.8} />{/if}
             </button>
-            <button class="ia-btn" title={isEN ? 'Clear session (Ctrl+L)' : 'Limpiar sesión (Ctrl+L)'}
+            <button class="ia-btn" title={$trad('Limpiar sesión (Ctrl+L)')}
                 on:click={() => dispatch('clearsession')} disabled={tab.isProcessing}>
                 <Eraser size={15} stroke={1.8} />
             </button>
@@ -470,8 +472,8 @@
                  directive to every prompt sent. Visible state via .brief-on class. -->
             <button class="ia-btn brief-btn" class:brief-on={briefMode}
                 title={briefMode
-                    ? (isEN ? 'Brief mode ON — Lucy answers in 3 lines max' : 'Modo conciso ACTIVO — Lucy responde en 3 líneas máx.')
-                    : (isEN ? 'Brief mode OFF — toggle for short answers' : 'Modo conciso INACTIVO — activa para respuestas cortas')}
+                    ? ($trad('Modo conciso ACTIVO — Lucy responde en 3 líneas máx.'))
+                    : ($trad('Modo conciso INACTIVO — activa para respuestas cortas'))}
                 on:click={() => dispatch('togglebrief')}>
                 <span class="brief-glyph" aria-hidden="true">≡</span>
             </button>
@@ -480,10 +482,10 @@
             {#if isActiveTab && costPrediction}
                 <span class="cost-predict cost-predict-{costPrediction.level}"
                     title={costPrediction.level === 'free'
-                        ? (isEN ? 'Local model — no API cost' : 'Modelo local — sin costo de API')
-                        : `${isEN ? 'Estimated cost' : 'Costo estimado'}: $${costPrediction.cost.toFixed(4)}\n${isEN ? 'Input' : 'Entrada'}: ~${costPrediction.inputTokens} tokens\n${isEN ? 'Output' : 'Salida'}: ~${costPrediction.outputTokens} tokens\n${isEN ? 'Model' : 'Modelo'}: ${costPrediction.model}`}>
+                        ? ($trad('Modelo local — sin costo de API'))
+                        : `${$trad('Costo estimado')}: $${costPrediction.cost.toFixed(4)}\n${$trad('Entrada')}: ~${costPrediction.inputTokens} tokens\n${$trad('Salida')}: ~${costPrediction.outputTokens} tokens\n${$trad('Modelo')}: ${costPrediction.model}`}>
                     {#if costPrediction.level === 'free'}
-                        <span class="cp-icon">●</span>{isEN ? 'free' : 'gratis'}
+                        <span class="cp-icon">●</span>{$trad('gratis')}
                     {:else}
                         <span class="cp-icon">≈</span>
                         <span class="cp-tokens">{formatTokens(costPrediction.totalTokens)}</span>
@@ -526,7 +528,7 @@
                         bind:value={tab.nvidiaCustomModel}
                         disabled={tab.isProcessing}
                         placeholder="owner/model  (ej: nicoboss/DeepSeek-R1-Distill-Qwen-32B-Uncensored)"
-                        title={isEN ? 'Type the exact NVIDIA NIM model ID (owner/model-name)' : 'Escribe el ID exacto del modelo NVIDIA NIM (owner/model-name)'} />
+                        title={$trad('Escribe el ID exacto del modelo NVIDIA NIM (owner/model-name)')} />
                 {/if}
             </div>
         </div>
@@ -541,8 +543,8 @@
         <button class="sbtn sbtn-pause" class:on={tab._paused}
             on:click={() => dispatch('togglepause')}
             title={tab._paused
-                ? (isEN ? 'Resume' : 'Reanudar')
-                : (isEN ? 'Pause after current step' : 'Pausar tras el paso actual')}>
+                ? ($trad('Reanudar'))
+                : ($trad('Pausar tras el paso actual'))}>
             {#if tab._paused}
                 <svg width="11" height="11" viewBox="0 0 11 11" fill="currentColor"><path d="M2 1.5v8l7-4z"/></svg>
             {:else}
@@ -551,13 +553,13 @@
         </button>
         <button class="sbtn sbtn-skip"
             on:click={() => dispatch('skipnexttool')}
-            title={isEN ? 'Skip next tool call' : 'Saltar próxima herramienta'}>
+            title={$trad('Saltar próxima herramienta')}>
             <svg width="11" height="11" viewBox="0 0 11 11" fill="currentColor">
                 <path d="M2 1.5v8l5-4z"/><rect x="8" y="1.5" width="1.5" height="8" rx="0.5"/>
             </svg>
         </button>
         <button class="sbtn sbtn-stop" on:click={() => dispatch('stop')}
-            title={isEN ? 'Stop (Escape)' : 'Detener (Escape)'}>
+            title={$trad('Detener (Escape)')}>
             <svg width="13" height="13" viewBox="0 0 13 13" fill="currentColor">
                 <rect x="1.5" y="1.5" width="10" height="10" rx="2"/>
             </svg>

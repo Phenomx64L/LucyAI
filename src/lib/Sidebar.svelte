@@ -1,4 +1,6 @@
 <script lang="ts">
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     // v1.5.4 — full sidebar layout extracted to a single global stylesheet
     // to close the long-tail dedup loop. NexShellView / DashboardView
     // pattern reused: Sidebar.svelte's scoped style retains its
@@ -130,9 +132,9 @@
     style={!sidebarCollapsed ? `width:${sidebarWidth}px` : ''}>
 
     <button class="sb-tog" on:click={() => { sidebarCollapsed = !sidebarCollapsed; }}
-        title={sidebarCollapsed ? (isEN ? 'Expand sidebar' : 'Expandir sidebar') : (isEN ? 'Collapse sidebar' : 'Colapsar sidebar')}>
+        title={sidebarCollapsed ? ($trad('Expandir sidebar')) : ($trad('Colapsar sidebar'))}>
         {sidebarCollapsed ? '›' : '‹'}
-        {#if !sidebarCollapsed}<span class="sb-togtxt">{isEN ? 'Collapse' : 'Colapsar'}</span>{/if}
+        {#if !sidebarCollapsed}<span class="sb-togtxt">{$trad('Colapsar')}</span>{/if}
     </button>
 
     <!-- ── Sistema (collapsible — Sprint 1 UI-2) ──
@@ -142,7 +144,7 @@
          on:click={() => toggleSection('sistema')}
          on:keydown={(e) => e.key === 'Enter' && toggleSection('sistema')}>
         {#if !sidebarCollapsed}
-            <span>{isEN ? 'System' : 'Sistema'}</span>
+            <span>{$trad('Sistema')}</span>
             <span class="sb-accordion-arrow" class:open={sistemaOpen}>{sistemaOpen ? '▾' : '▸'}</span>
         {:else}
             <span style="font-size:10px;">≡</span>
@@ -181,12 +183,12 @@
     </div>
     <div class="sb-it" class:act={activeView==='inventory'} role="button" tabindex="0"
          on:click={() => dispatch('setview', { view: 'inventory' })} on:keydown
-         title={isEN ? 'Infrastructure Inventory' : 'Inventario — puertos, servicios, software, certificados'}>
-        <span class="sb-ico"><Network size={20} /></span><span class="sb-txt">{isEN ? 'Inventory' : 'Inventario'}</span>
+         title={$trad('Inventario — puertos, servicios, software, certificados')}>
+        <span class="sb-ico"><Network size={20} /></span><span class="sb-txt">{$trad('Inventario')}</span>
     </div>
     <div class="sb-it" class:act={activeView==='compliance'} data-concept="security" role="button" tabindex="0"
          on:click={() => dispatch('setview', { view: 'compliance' })} on:keydown
-         title={isEN ? 'Compliance — CIS Benchmark audits' : 'Compliance — auditorías CIS Benchmark'}>
+         title={$trad('Compliance — auditorías CIS Benchmark')}>
         <span class="sb-ico"><ShieldCheck size={20} /></span><span class="sb-txt">Compliance</span>
     </div>
     <!-- v1.7.35 — Auditoría moved to Registros section below. It is
@@ -195,8 +197,8 @@
          other audit-related entries makes the mental model cleaner. -->
     <div class="sb-it" class:act={activeView==='memory'} data-concept="memory" role="button" tabindex="0"
          on:click={() => dispatch('setview', { view: 'memory' })} on:keydown
-         title={isEN ? 'Memory Browser — memories, crystals, insights, graph' : 'Explorador de Memoria — memorias, cristales, insights, grafo'}>
-        <span class="sb-ico"><Brain size={20} /></span><span class="sb-txt">{isEN ? 'Memory' : 'Memoria'}</span>
+         title={$trad('Explorador de Memoria — memorias, cristales, insights, grafo')}>
+        <span class="sb-ico"><Brain size={20} /></span><span class="sb-txt">{$trad('Memoria')}</span>
     </div>
 
     <!-- v1.7.40 — MemoryFeed widget removed. Browsing N memories needs
@@ -209,18 +211,18 @@
          the whole window cleanly. -->
     <div class="sb-it" data-concept="memory" role="button" tabindex="0"
          on:click={() => dispatch('openkggraph')} on:keydown
-         title={isEN ? 'Knowledge Graph — force-directed view of memory + relationships' : 'Grafo de conocimiento — vista force-directed de memoria + relaciones'}>
-        <span class="sb-ico"><Share3 size={20} /></span><span class="sb-txt">{isEN ? 'Knowledge Graph' : 'Grafo'}</span>
+         title={$trad('Grafo de conocimiento — vista force-directed de memoria + relaciones')}>
+        <span class="sb-ico"><Share3 size={20} /></span><span class="sb-txt">{$trad('Grafo')}</span>
     </div>
     <div class="sb-it" class:act={activeView==='capacity'} data-concept="infra" role="button" tabindex="0"
          on:click={() => dispatch('setview', { view: 'capacity' })} on:keydown
-         title={isEN ? 'Capacity Planning — historical trends & projections' : 'Capacidad — tendencias históricas y proyecciones'}>
-        <span class="sb-ico"><TrendingUp size={20} /></span><span class="sb-txt">{isEN ? 'Capacity' : 'Capacidad'}</span>
+         title={$trad('Capacidad — tendencias históricas y proyecciones')}>
+        <span class="sb-ico"><TrendingUp size={20} /></span><span class="sb-txt">{$trad('Capacidad')}</span>
     </div>
     <div class="sb-it" class:act={activeView==='diagnostics'} data-concept="infra" role="button" tabindex="0"
          on:click={() => dispatch('setview', { view: 'diagnostics' })} on:keydown
-         title={isEN ? 'Self-Diagnostics — unified health checks' : 'Auto-Diagnóstico — chequeos de salud unificados'}>
-        <span class="sb-ico"><Stethoscope size={20} /></span><span class="sb-txt">{isEN ? 'Diagnostics' : 'Diagnóstico'}</span>
+         title={$trad('Auto-Diagnóstico — chequeos de salud unificados')}>
+        <span class="sb-ico"><Stethoscope size={20} /></span><span class="sb-txt">{$trad('Diagnóstico')}</span>
     </div>
 
     </div>
@@ -243,7 +245,7 @@
                   role="button" tabindex="0">{runbooksOpen ? '▾' : '▸'}</span>
             <button on:click|stopPropagation={() => dispatch('openmodal', { modal: 'newrunbook' })}
                     style="background:none;border:none;color:var(--acc);cursor:pointer;font-size:15px;font-weight:bold;line-height:1;padding:0 5px;"
-                    title={isEN ? 'New runbook' : 'Nuevo runbook'}>+</button>
+                    title={$trad('Nuevo runbook')}>+</button>
         {:else}
             <span style="font-size:10px;">≡</span>
         {/if}
@@ -251,7 +253,7 @@
     {#if runbooksOpen || sidebarCollapsed}
     <div class="sb-accordion-body" data-section="runbooks">
     {#if !$runbooks.length && !sidebarCollapsed}
-        <div style="padding:4px 14px 8px;font-size:11px;color:var(--txt3);font-style:italic;">{isEN ? 'No runbooks' : 'Sin runbooks'}</div>
+        <div style="padding:4px 14px 8px;font-size:11px;color:var(--txt3);font-style:italic;">{$trad('Sin runbooks')}</div>
     {/if}
     {#each $runbooks as rb}
     <div class="sb-it sb-action-item" role="button" tabindex="0"
@@ -283,15 +285,15 @@
                   on:click={() => toggleSection('acciones')}
                   on:keydown={(e) => e.key === 'Enter' && toggleSection('acciones')}
                   role="button" tabindex="0">
-                <span>{isEN ? 'Direct actions' : 'Acciones directas'}</span>
-                <span class="sb-noai-badge" title={isEN ? 'Execute PowerShell directly, no AI' : 'Ejecutan PowerShell directamente, sin IA'}>{isEN ? 'NO AI' : 'SIN IA'}</span>
+                <span>{$trad('Acciones directas')}</span>
+                <span class="sb-noai-badge" title={$trad('Ejecutan PowerShell directamente, sin IA')}>{$trad('SIN IA')}</span>
             </span>
             <span class="sb-accordion-arrow" class:open={accionesOpen}
                   on:click={() => toggleSection('acciones')}
                   on:keydown role="button" tabindex="0">{accionesOpen ? '▾' : '▸'}</span>
             <button on:click|stopPropagation={() => dispatch('openmodal', { modal: 'newaction' })}
                     style="background:none;border:none;color:var(--acc);cursor:pointer;font-size:16px;font-weight:bold;line-height:1;padding:0 5px;"
-                    title={isEN ? 'Add direct action' : 'Añadir acción directa'}>+</button>
+                    title={$trad('Añadir acción directa')}>+</button>
         {:else}
             <span style="font-size:10px;">≡</span>
         {/if}
@@ -313,9 +315,9 @@
         <span class="sb-txt">{accion.nombre}</span>
         {#if !sidebarCollapsed}
         <button class="sb-edit" on:click|stopPropagation={() => dispatch('editaction', { index: i })}
-                title={isEN ? 'Edit' : 'Editar'}>✎</button>
+                title={$trad('Editar')}>✎</button>
         <button class="sb-del" on:click|stopPropagation={() => dispatch('deleteaction', { index: i })}
-                title={isEN ? 'Delete' : 'Eliminar'}>✖</button>
+                title={$trad('Eliminar')}>✖</button>
         {/if}
     </div>
     {/each}
@@ -355,7 +357,7 @@
         <!-- Activity Feed (24h) — vive aquí porque su naturaleza es
              registro/histórico, no acción. Antes estaba sobre Runbooks y
              desplazaba Memoria/Capacidad/Diagnóstico fuera del viewport. -->
-        <ActivityFeedWidget {isEN} {sidebarCollapsed}
+        <ActivityFeedWidget {sidebarCollapsed}
             on:navigate={(e) => dispatch('setview', { view: e.detail.view })} />
 
         <!-- v1.7.35 — Reordered + relabelled for clarity. The four items
@@ -368,11 +370,9 @@
         <div class="sb-it" class:act={activeView==='audittrail'} data-concept="security"
              role="button" tabindex="0"
              on:click={() => dispatch('setview', { view: 'audittrail' })} on:keydown
-             title={isEN
-                ? 'Audit Trail — interactive ledger of every executed command'
-                : 'Auditoría — visor interactivo de cada comando ejecutado'}>
+             title={$trad('Auditoría — visor interactivo de cada comando ejecutado')}>
             <span class="sb-ico"><ClipboardList size={18}/></span>
-            <span class="sb-txt">{isEN ? 'Audit Trail' : 'Auditoría'}</span>
+            <span class="sb-txt">{$trad('Auditoría')}</span>
             {#if auditAlerts > 0}<span class="sb-bdg y">{auditAlerts}</span>{/if}
         </div>
 
@@ -384,16 +384,14 @@
                 ? 'Open the raw audit log file in Notepad (%APPDATA%\\Lucy\\logs\\lucy_audit.log)'
                 : 'Abrir el archivo de audit log crudo en Notepad (%APPDATA%\\Lucy\\logs\\lucy_audit.log)'}>
             <span class="sb-ico"><FileCode size={18}/></span>
-            <span class="sb-txt">{isEN ? 'Audit Log (raw)' : 'Audit Log (raw)'}</span>
+            <span class="sb-txt">{$trad('Audit Log (raw)')}</span>
         </div>
 
         <div class="sb-it" role="button" tabindex="0"
              on:click={() => dispatch('exportarlog')} on:keydown
-             title={isEN
-                ? 'Copy the audit log to your Downloads folder for sharing'
-                : 'Copiar el audit log a tu carpeta de Descargas para compartirlo'}>
+             title={$trad('Copiar el audit log a tu carpeta de Descargas para compartirlo')}>
             <span class="sb-ico"><Download size={18}/></span>
-            <span class="sb-txt">{isEN ? 'Export Log' : 'Exportar Log'}</span>
+            <span class="sb-txt">{$trad('Exportar Log')}</span>
         </div>
 
         <!-- Custom-command memory modal. Renamed from "Comandos" because
@@ -402,11 +400,9 @@
              makes it unambiguous that these are AI-learned aliases. -->
         <div class="sb-it" role="button" tabindex="0"
              on:click={() => dispatch('memoriaabierta')} on:keydown
-             title={isEN
-                ? 'Custom phrases you taught Lucy ("when I say restart_iis, run iisreset")'
-                : 'Frases custom que le enseñaste a Lucy ("cuando diga reinicia_iis, ejecuta iisreset")'}>
+             title={$trad('Frases custom que le enseñaste a Lucy ("cuando diga reinicia_iis, ejecuta iisreset")')}>
             <span class="sb-ico"><Brain size={18}/></span>
-            <span class="sb-txt">{isEN ? 'Learned commands' : 'Comandos aprendidos'}</span>
+            <span class="sb-txt">{$trad('Comandos aprendidos')}</span>
             {#if customCmdCount > 0}<span class="sb-bdg b">{customCmdCount}</span>{/if}
         </div>
     </div>
@@ -422,13 +418,13 @@
     <!-- ── Utilidades ── -->
     <div class="sb-it" role="button" tabindex="0"
          on:click={() => dispatch('openmodal', { modal: 'tutorial' })} on:keydown
-         title={isEN ? 'Interactive guided tour' : 'Tour guiado interactivo de Lucy'}>
-        <span class="sb-ico"><GraduationCap size={18}/></span><span class="sb-txt">{isEN ? 'Show Tutorial' : 'Ver Tutorial'}</span>
+         title={$trad('Tour guiado interactivo de Lucy')}>
+        <span class="sb-ico"><GraduationCap size={18}/></span><span class="sb-txt">{$trad('Ver Tutorial')}</span>
     </div>
     <div class="sb-it" data-concept="security" role="button" tabindex="0"
          on:click={() => dispatch('openmodal', { modal: 'permissions' })} on:keydown
-         title={isEN ? 'Manage permission rules' : 'Gestionar reglas de permisos'}>
-        <span class="sb-ico"><ShieldCheck size={18}/></span><span class="sb-txt">{isEN ? 'Permissions' : 'Permisos'}</span>
+         title={$trad('Gestionar reglas de permisos')}>
+        <span class="sb-ico"><ShieldCheck size={18}/></span><span class="sb-txt">{$trad('Permisos')}</span>
     </div>
     <!-- Skills module disabled — never reached production-ready behaviour and
          duplicates Runbooks functionality. Hidden from the sidebar pending a
@@ -437,37 +433,37 @@
     <!--
     <div class="sb-it" role="button" tabindex="0"
          on:click={() => dispatch('openmodal', { modal: 'skills' })} on:keydown
-         title={isEN ? 'Manage skills' : 'Gestionar skills y runbooks'}>
-        <span class="sb-ico"><Zap size={18}/></span><span class="sb-txt">{isEN ? 'Skills' : 'Skills'}</span>
+         title={$trad('Gestionar skills y runbooks')}>
+        <span class="sb-ico"><Zap size={18}/></span><span class="sb-txt">{$trad('Skills')}</span>
     </div>
     -->
     {#if false}<Zap size={1}/>{/if}
     <div class="sb-it" data-concept="security" role="button" tabindex="0"
          on:click={() => dispatch('openmodal', { modal: 'principles' })} on:keydown
-         title={isEN ? 'Behavioral principles' : 'Principios — reglas que Lucy sigue'}>
-        <span class="sb-ico"><Tag size={18}/></span><span class="sb-txt">{isEN ? 'Principles' : 'Principios'}</span>
+         title={$trad('Principios — reglas que Lucy sigue')}>
+        <span class="sb-ico"><Tag size={18}/></span><span class="sb-txt">{$trad('Principios')}</span>
     </div>
     <div class="sb-it" data-concept="automation" role="button" tabindex="0"
          on:click={() => dispatch('openmodal', { modal: 'schedules' })} on:keydown
-         title={isEN ? 'Scheduled tasks' : 'Tareas programadas'}>
-        <span class="sb-ico"><Bell size={18}/></span><span class="sb-txt">{isEN ? 'Schedules' : 'Programadas'}</span>
+         title={$trad('Tareas programadas')}>
+        <span class="sb-ico"><Bell size={18}/></span><span class="sb-txt">{$trad('Programadas')}</span>
     </div>
     <div class="sb-it" data-concept="ai" role="button" tabindex="0"
          on:click={() => dispatch('toggleforks')} on:keydown
-         title={isEN ? 'Sub-Agent Monitor' : 'Monitor de Sub-Agentes'}
+         title={$trad('Monitor de Sub-Agentes')}
          class:sb-it-active={showForksMonitor}>
-        <span class="sb-ico"><Brain size={18}/></span><span class="sb-txt">{isEN ? 'Sub-Agents' : 'Sub-Agentes'}</span>
+        <span class="sb-ico"><Brain size={18}/></span><span class="sb-txt">{$trad('Sub-Agentes')}</span>
     </div>
     <div class="sb-it" data-concept="memory" role="button" tabindex="0"
          on:click={() => dispatch('togglepdf')} on:keydown
-         title={isEN ? 'PDF Intelligence — Ingest manuals & docs' : 'PDF Intelligence — Ingresa manuales y docs'}
+         title={$trad('PDF Intelligence — Ingresa manuales y docs')}
          class:sb-it-active={showPdfPanel}>
-        <span class="sb-ico"><FilePdf size={18}/></span><span class="sb-txt">{isEN ? 'PDF Docs' : 'PDF Docs'}</span>
+        <span class="sb-ico"><FilePdf size={18}/></span><span class="sb-txt">{$trad('PDF Docs')}</span>
     </div>
     <div class="sb-it" role="button" tabindex="0"
          on:click={() => dispatch('openmodal', { modal: 'settings' })} on:keydown
-         title={isEN ? 'Settings & Preferences' : 'Configuración y Preferencias'}>
-        <span class="sb-ico"><Settings size={18}/></span><span class="sb-txt">{isEN ? 'Settings' : 'Configuración'}</span>
+         title={$trad('Configuración y Preferencias')}>
+        <span class="sb-ico"><Settings size={18}/></span><span class="sb-txt">{$trad('Configuración')}</span>
     </div>
 </aside>
 

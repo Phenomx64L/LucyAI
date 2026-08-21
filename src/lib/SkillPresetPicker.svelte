@@ -8,6 +8,8 @@
      also press the deactivate button on the active card itself.
 ─────────────────────────────────────────────────────────────────────── -->
 <script lang="ts">
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     import { Dialog } from 'bits-ui';
     import { createEventDispatcher } from 'svelte';
     import {
@@ -45,9 +47,7 @@
         const nm = isEN ? p.name.en : p.name.es;
         sonnerToast.success(
             isEN ? `✦ Preset activated: ${nm}` : `✦ Plantilla activada: ${nm}`,
-            { description: isEN
-                ? 'Will shape Lucy\'s next response. A purple chip will appear in chat.'
-                : 'Moldeará la próxima respuesta de Lucy. Verás un chip morado en el chat.',
+            { description: $trad('Moldeará la próxima respuesta de Lucy. Verás un chip morado en el chat.'),
               duration: 3500,
             },
         );
@@ -58,10 +58,8 @@
         try { clearActiveSecuritySkill(); } catch { /* ignore */ }
         setActivePresetId(null);
         sonnerToast.success(
-            isEN ? '✓ Preset deactivated' : '✓ Plantilla desactivada',
-            { description: isEN
-                ? 'Lucy will respond with default behaviour from the next turn.'
-                : 'Lucy responderá con comportamiento por defecto desde el siguiente turno.',
+            $trad('✓ Plantilla desactivada'),
+            { description: $trad('Lucy responderá con comportamiento por defecto desde el siguiente turno.'),
               duration: 2500,
             },
         );
@@ -79,12 +77,10 @@
             <div class="spp-card">
                 <header class="spp-hdr">
                     <Dialog.Title class="spp-title">
-                        ✦ {isEN ? 'Skill Presets' : 'Plantillas de habilidad'}
+                        ✦ {$trad('Plantillas de habilidad')}
                     </Dialog.Title>
                     <Dialog.Description class="spp-sub">
-                        {isEN
-                            ? 'Pick a behavioural framing for Lucy. Adapted from ECC. The preset is prepended to the system prompt — it shapes behaviour, never removes your core memory or guardrails.'
-                            : 'Elige un encuadre de comportamiento para Lucy. Adaptado de ECC. Se antepone al system prompt — modifica comportamiento, nunca elimina tu memoria core ni guardrails.'}
+                        {$trad('Elige un encuadre de comportamiento para Lucy. Adaptado de ECC. Se antepone al system prompt — modifica comportamiento, nunca elimina tu memoria core ni guardrails.')}
                     </Dialog.Description>
                     <Dialog.Close class="spp-x" aria-label="Close">✕</Dialog.Close>
                 </header>
@@ -105,7 +101,7 @@
                                                 <span class="spp-card-name">{isEN ? p.name.en : p.name.es}</span>
                                                 {#if $activeSkillPresetId === p.id}
                                                     <span class="spp-active-tag">
-                                                        {isEN ? 'ACTIVE' : 'ACTIVO'}
+                                                        {$trad('ACTIVO')}
                                                     </span>
                                                 {/if}
                                             </div>
@@ -122,18 +118,14 @@
                 <footer class="spp-foot">
                     <span class="spp-hint">
                         {#if $activeSkillPresetId}
-                            {isEN
-                                ? 'A preset is active. Click "Deactivate" to return to default behaviour.'
-                                : 'Hay una plantilla activa. Click en "Desactivar" para volver al comportamiento por defecto.'}
+                            {$trad('Hay una plantilla activa. Click en "Desactivar" para volver al comportamiento por defecto.')}
                         {:else}
-                            {isEN
-                                ? 'No preset active. Lucy uses default behaviour.'
-                                : 'Sin plantilla activa. Lucy usa comportamiento por defecto.'}
+                            {$trad('Sin plantilla activa. Lucy usa comportamiento por defecto.')}
                         {/if}
                     </span>
                     {#if $activeSkillPresetId}
                         <button class="spp-deactivate" on:click={deactivate}>
-                            {isEN ? 'Deactivate' : 'Desactivar'}
+                            {$trad('Desactivar')}
                         </button>
                     {/if}
                 </footer>

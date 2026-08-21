@@ -1,4 +1,6 @@
 <script>
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     import { createEventDispatcher } from 'svelte';
     import { invoke } from '@tauri-apps/api/core';
     import ShieldCheck from '@tabler/icons-svelte/icons/shield-check';
@@ -146,7 +148,7 @@
                     remediation: r.remediation,
                 })),
             }, isEN);
-            toast(isEN ? 'PDF exported' : 'PDF exportado');
+            toast($trad('PDF exportado'));
         } catch(e) {
             if (String(e) !== 'Cancelled') toast('Error: ' + e, 'error');
         }
@@ -156,7 +158,7 @@
     function relTime(ts) {
         if (!ts) return '';
         const d = Date.now() - ts;
-        if (d < 60000) return isEN ? 'just now' : 'ahora';
+        if (d < 60000) return $trad('ahora');
         if (d < 3600000) return `${Math.floor(d/60000)}m`;
         return `${Math.floor(d/3600000)}h`;
     }
@@ -164,14 +166,14 @@
 
 <div class="view-wrap">
   <div class="view-hdr">
-    <div class="view-title" style="display:flex;align-items:center;gap:6px;"><ShieldCheck size={13} stroke={2}/> {isEN ? 'Compliance Scanning' : 'Auditoría de Compliance'}</div>
+    <div class="view-title" style="display:flex;align-items:center;gap:6px;"><ShieldCheck size={13} stroke={2}/> {$trad('Auditoría de Compliance')}</div>
     <div style="display:flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:wrap;">
       <select class="view-select" bind:value={selectedHost}>
         <option value="local">⊡ Local ({hostName})</option>
         {#each hosts as h}<option value={h.id}>{h.type==='windows'?'⊡':'◈'} {h.name}</option>{/each}
       </select>
       <button class="view-btn" on:click={runScan} disabled={scanning} style="display:flex;align-items:center;gap:5px;">
-        {#if scanning}↻ {isEN ? 'Scanning...' : 'Escaneando...'}{:else}<ShieldCheck size={12} stroke={2}/> Run CIS Scan{/if}
+        {#if scanning}↻ {$trad('Escaneando...')}{:else}<ShieldCheck size={12} stroke={2}/> Run CIS Scan{/if}
       </button>
       {#if report}
         <button class="view-btn" on:click={exportPdf} disabled={exporting} title="Export PDF" style="display:flex;align-items:center;gap:5px;">
@@ -193,25 +195,25 @@
       <span class="comp-score-val">{passRate}%</span>
     </div>
     <div class="comp-score-stats">
-      <div class="comp-stat pass">✓ {passCount} {isEN ? 'Passed' : 'Pasaron'}</div>
-      <div class="comp-stat fail">✗ {failCount} {isEN ? 'Failed' : 'Fallaron'}</div>
+      <div class="comp-stat pass">✓ {passCount} {$trad('Pasaron')}</div>
+      <div class="comp-stat fail">✗ {failCount} {$trad('Fallaron')}</div>
       <div class="comp-stat total">{enrichedResults.length} total · {report.osType === 'windows' ? 'Windows CIS' : 'Linux CIS'}</div>
     </div>
     <div class="comp-filters">
       <select class="view-select" bind:value={filterStatus}>
-        <option value="all">{isEN ? 'All' : 'Todos'}</option>
+        <option value="all">{$trad('Todos')}</option>
         <option value="pass">✓ Pass</option>
         <option value="fail">✗ Fail</option>
       </select>
       <select class="view-select" bind:value={filterSeverity}>
-        <option value="all">{isEN ? 'All Severity' : 'Severidad'}</option>
+        <option value="all">{$trad('Severidad')}</option>
         <option value="critical">Critical</option>
         <option value="high">High</option>
         <option value="medium">Medium</option>
         <option value="low">Low</option>
       </select>
       <select class="view-select" bind:value={filterCategory}>
-        <option value="all">{isEN ? 'All Categories' : 'Categorías'}</option>
+        <option value="all">{$trad('Categorías')}</option>
         {#each categories as cat}<option value={cat}>{cat}</option>{/each}
       </select>
     </div>
@@ -241,13 +243,13 @@
     </div>
     {/each}
     {#if !filteredResults.length}
-    <div style="text-align:center;color:var(--txt3);padding:30px;font-size:13px;">{isEN ? 'No results match filters' : 'Sin resultados con estos filtros'}</div>
+    <div style="text-align:center;color:var(--txt3);padding:30px;font-size:13px;">{$trad('Sin resultados con estos filtros')}</div>
     {/if}
   </div>
   {:else if !scanning}
-  <div class="view-loading"><span style="color:var(--txt3)">{isEN ? 'Select a host and run a CIS Benchmark scan' : 'Selecciona un host y ejecuta un escaneo CIS Benchmark'}</span></div>
+  <div class="view-loading"><span style="color:var(--txt3)">{$trad('Selecciona un host y ejecuta un escaneo CIS Benchmark')}</span></div>
   {:else}
-  <div class="view-loading"><span style="color:var(--acc)">↻ {isEN ? 'Running compliance checks...' : 'Ejecutando checks de compliance...'}</span></div>
+  <div class="view-loading"><span style="color:var(--acc)">↻ {$trad('Ejecutando checks de compliance...')}</span></div>
   {/if}
 </div>
 

@@ -20,6 +20,8 @@
      live in +page.svelte — this component only emits intent.
 ─────────────────────────────────────────────────────────────────────── -->
 <script>
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     import { createEventDispatcher, tick } from 'svelte';
     export let open = false;
     export let x    = 0;
@@ -30,7 +32,6 @@
     // `any` is the honest annotation rather than a fictional interface.
     /** @type {any} */
     export let msg  = null;       // the message object the menu acts on
-    export let isEN = false;
 
     const dispatch = createEventDispatcher();
 
@@ -76,28 +77,28 @@
          class="ctx-menu"
          style="left:{adjX || x}px; top:{adjY || y}px"
          role="menu"
-         aria-label={isEN ? 'Message actions' : 'Acciones del mensaje'}>
+         aria-label={$trad('Acciones del mensaje')}>
 
         <button class="ctx-item" on:click={() => pick('copy-md')}>
             <span class="ctx-ico">⌘</span>
-            {isEN ? 'Copy as Markdown' : 'Copiar como Markdown'}
+            {$trad('Copiar como Markdown')}
         </button>
         <button class="ctx-item" on:click={() => pick('copy-txt')}>
             <span class="ctx-ico">¶</span>
-            {isEN ? 'Copy plain text' : 'Copiar texto plano'}
+            {$trad('Copiar texto plano')}
         </button>
 
         <div class="ctx-sep"></div>
 
         <button class="ctx-item" on:click={() => pick('save-memory')}>
             <span class="ctx-ico">★</span>
-            {isEN ? 'Save as Memory' : 'Guardar como memoria'}
+            {$trad('Guardar como memoria')}
         </button>
         <button class="ctx-item" on:click={() => pick('pin')}>
             <span class="ctx-ico">·</span>
             {msg?.pinned
-                ? (isEN ? 'Unpin from context' : 'Quitar pin del contexto')
-                : (isEN ? 'Pin to context' : 'Fijar al contexto')}
+                ? ($trad('Quitar pin del contexto'))
+                : ($trad('Fijar al contexto'))}
         </button>
 
         {#if isLucy}
@@ -108,15 +109,15 @@
                  and only opens the panel when it does. -->
             <button class="ctx-item" on:click={() => pick('open-as-artifact')}>
                 <span class="ctx-ico">◐</span>
-                {isEN ? 'Open as artifact' : 'Abrir como artefacto'}
+                {$trad('Abrir como artefacto')}
             </button>
             <button class="ctx-item" on:click={() => pick('branch')}>
                 <span class="ctx-ico">⌥</span>
-                {isEN ? 'Branch from here' : 'Bifurcar desde aquí'}
+                {$trad('Bifurcar desde aquí')}
             </button>
             <button class="ctx-item" on:click={() => pick('replay')}>
                 <span class="ctx-ico">⏪</span>
-                {isEN ? 'Replay this turn' : 'Reproducir este turno'}
+                {$trad('Reproducir este turno')}
             </button>
         {/if}
 
@@ -124,7 +125,7 @@
 
         <button class="ctx-item ctx-danger" on:click={() => pick('delete')}>
             <span class="ctx-ico">✕</span>
-            {isEN ? 'Delete message' : 'Eliminar mensaje'}
+            {$trad('Eliminar mensaje')}
         </button>
     </div>
 {/if}

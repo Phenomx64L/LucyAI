@@ -17,6 +17,8 @@
        updated    — list of servers changed (parent reloads cache)
 ─────────────────────────────────────────────────────────────────────── -->
 <script>
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
   import { createEventDispatcher, onMount } from 'svelte';
   import { autoAnimate } from '$lib/actions/autoAnimate';
   // v1.4.13 — Dialog primitives from bits-ui replace the hand-rolled
@@ -65,35 +67,33 @@
   }
 
   const T = {
-    title:     isEN ? 'MCP Servers' : 'Servidores MCP',
-    subtitle:  isEN
-      ? 'Register MCP servers once and Lucy will call them by name. Tools discovered via tools/list are cached for the system prompt.'
-      : 'Registra servidores MCP una vez y Lucy los invoca por nombre. Las tools descubiertas vía tools/list se cachean para el system prompt.',
-    add:       isEN ? '+ Add server' : '+ Añadir servidor',
-    name:      isEN ? 'Name' : 'Nombre',
-    command:   isEN ? 'Command' : 'Comando',
-    envKeys:   isEN ? 'Secrets to inject (env vars)' : 'Secretos a inyectar (env vars)',
-    enabled:   isEN ? 'Enabled' : 'Habilitado',
-    save:      isEN ? 'Save' : 'Guardar',
-    cancel:    isEN ? 'Cancel' : 'Cancelar',
-    edit:      isEN ? 'Edit' : 'Editar',
-    delete:    isEN ? 'Delete' : 'Eliminar',
-    test:      isEN ? 'Test' : 'Probar',
-    discover:  isEN ? 'Discover tools' : 'Descubrir tools',
-    tools:     isEN ? 'Cached tools' : 'Tools en caché',
-    noServers: isEN ? 'No servers registered yet.' : 'Aún no hay servidores registrados.',
-    noTools:   isEN ? 'No tools cached. Click "Discover tools" to populate.' : 'Sin tools en caché. Pulsa "Descubrir tools" para llenarla.',
-    namePh:    isEN ? 'e.g. filesystem' : 'ej. filesystem',
+    title:     $trad('Servidores MCP'),
+    subtitle:  $trad('Registra servidores MCP una vez y Lucy los invoca por nombre. Las tools descubiertas vía tools/list se cachean para el system prompt.'),
+    add:       $trad('+ Añadir servidor'),
+    name:      $trad('Nombre'),
+    command:   $trad('Comando'),
+    envKeys:   $trad('Secretos a inyectar (env vars)'),
+    enabled:   $trad('Habilitado'),
+    save:      $trad('Guardar'),
+    cancel:    $trad('Cancelar'),
+    edit:      $trad('Editar'),
+    delete:    $trad('Eliminar'),
+    test:      $trad('Probar'),
+    discover:  $trad('Descubrir tools'),
+    tools:     $trad('Tools en caché'),
+    noServers: $trad('Aún no hay servidores registrados.'),
+    noTools:   $trad('Sin tools en caché. Pulsa "Descubrir tools" para llenarla.'),
+    namePh:    $trad('ej. filesystem'),
     cmdPh:     'npx -y @modelcontextprotocol/server-filesystem C:/Users/eleue/Desktop',
-    runTool:   isEN ? 'Run' : 'Invocar',
-    runPanel:  isEN ? 'Invoke tool' : 'Invocar tool',
-    runArgs:   isEN ? 'Arguments (JSON)' : 'Argumentos (JSON)',
-    confirmDel: isEN ? 'Delete this MCP server registration?' : '¿Eliminar este servidor MCP?',
-    status_ok:    isEN ? 'OK' : 'OK',
-    status_err:   isEN ? 'Error' : 'Error',
-    status_pend:  isEN ? 'Pending' : 'Pendiente',
-    presets:   isEN ? 'Presets' : 'Plantillas',
-    close:     isEN ? 'Close' : 'Cerrar',
+    runTool:   $trad('Invocar'),
+    runPanel:  $trad('Invocar tool'),
+    runArgs:   $trad('Argumentos (JSON)'),
+    confirmDel: $trad('¿Eliminar este servidor MCP?'),
+    status_ok:    $trad('OK'),
+    status_err:   $trad('Error'),
+    status_pend:  $trad('Pendiente'),
+    presets:   $trad('Plantillas'),
+    close:     $trad('Cerrar'),
   };
 
   // ── Curated presets — these are the official anthropic/community servers
@@ -104,37 +104,37 @@
       name: 'filesystem',
       command: 'npx -y @modelcontextprotocol/server-filesystem C:/Users/eleue/Desktop',
       envKeys: [],
-      hint: isEN ? 'Read/write files under a sandboxed root.' : 'Lee/escribe archivos bajo una raíz sandboxed.',
+      hint: $trad('Lee/escribe archivos bajo una raíz sandboxed.'),
     },
     {
       name: 'github',
       command: 'npx -y @modelcontextprotocol/server-github',
       envKeys: ['GITHUB_PERSONAL_ACCESS_TOKEN'],
-      hint: isEN ? 'Issues, PRs, code search. Needs GITHUB_PERSONAL_ACCESS_TOKEN.' : 'Issues, PRs, búsqueda de código. Requiere GITHUB_PERSONAL_ACCESS_TOKEN.',
+      hint: $trad('Issues, PRs, búsqueda de código. Requiere GITHUB_PERSONAL_ACCESS_TOKEN.'),
     },
     {
       name: 'brave-search',
       command: 'npx -y @modelcontextprotocol/server-brave-search',
       envKeys: ['BRAVE_API_KEY'],
-      hint: isEN ? 'Web search via Brave API.' : 'Búsqueda web vía Brave API.',
+      hint: $trad('Búsqueda web vía Brave API.'),
     },
     {
       name: 'postgres',
       command: 'npx -y @modelcontextprotocol/server-postgres postgresql://user:pass@host:5432/db',
       envKeys: [],
-      hint: isEN ? 'Read-only SQL queries. Edit URL before saving.' : 'Queries SQL read-only. Edita la URL antes de guardar.',
+      hint: $trad('Queries SQL read-only. Edita la URL antes de guardar.'),
     },
     {
       name: 'puppeteer',
       command: 'npx -y @modelcontextprotocol/server-puppeteer',
       envKeys: [],
-      hint: isEN ? 'Headless browser scraping.' : 'Scraping con browser headless.',
+      hint: $trad('Scraping con browser headless.'),
     },
     {
       name: 'slack',
       command: 'npx -y @modelcontextprotocol/server-slack',
       envKeys: ['SLACK_BOT_TOKEN', 'SLACK_TEAM_ID'],
-      hint: isEN ? 'Post / read channels. Needs SLACK_BOT_TOKEN + SLACK_TEAM_ID.' : 'Postea / lee canales. Requiere SLACK_BOT_TOKEN + SLACK_TEAM_ID.',
+      hint: $trad('Postea / lee canales. Requiere SLACK_BOT_TOKEN + SLACK_TEAM_ID.'),
     },
   ];
 
@@ -193,7 +193,7 @@
     const name = (form.name || '').trim();
     const command = (form.command || '').trim();
     if (!name || !command) {
-      error = isEN ? 'Name and command are required.' : 'Nombre y comando son obligatorios.';
+      error = $trad('Nombre y comando son obligatorios.');
       return;
     }
     try {
@@ -211,7 +211,7 @@
       editingOriginalName = '';
       await reload();
       dispatch('updated');
-      flash(isEN ? 'Saved' : 'Guardado');
+      flash($trad('Guardado'));
     } catch (e) {
       error = String(e);
     }
@@ -222,7 +222,7 @@
       await invoke('mcp_server_delete', { name });
       await reload();
       dispatch('updated');
-      flash(isEN ? 'Deleted' : 'Eliminado');
+      flash($trad('Eliminado'));
     } catch (e) {
       error = String(e);
     } finally {
@@ -279,7 +279,7 @@
     try {
       const r = await p;
       if (r.ok) flash(`${s.name}: ${r.tools_count} tools · ${r.latency_ms} ms`);
-      else      error = `${s.name}: ${r.error || (isEN ? 'failed' : 'falló')}`;
+      else      error = `${s.name}: ${r.error || ($trad('falló'))}`;
     } catch (e) {
       error = String(e);
     } finally {
@@ -308,7 +308,7 @@
       expandedName = updated.name;
       dispatch('updated');
       const count = Array.isArray(updated.tools_cache) ? updated.tools_cache.length : 0;
-      flash(`${s.name}: ${count} ${isEN ? 'tools cached' : 'tools cacheadas'} · ${updated.last_latency_ms} ms`);
+      flash(`${s.name}: ${count} ${$trad('tools cacheadas')} · ${updated.last_latency_ms} ms`);
     } catch (e) {
       error = String(e);
     } finally {
@@ -443,9 +443,7 @@
           <EmptyState
             icon="🔌"
             title={T.noServers}
-            description={isEN
-                ? 'Register your first MCP server to extend Lucy with external tools (filesystem, github, postgres, brave-search…).'
-                : 'Registra tu primer servidor MCP para extender Lucy con herramientas externas (filesystem, github, postgres, brave-search…).'}>
+            description={$trad('Registra tu primer servidor MCP para extender Lucy con herramientas externas (filesystem, github, postgres, brave-search…).')}>
             <button slot="action" class="btn pri" on:click={openAdd}>{T.add}</button>
           </EmptyState>
         {:else}
@@ -460,15 +458,15 @@
                          pure Windows audit) without deleting the server. -->
                     <button class="srv-toggle" class:on={s.enabled}
                       title={s.enabled
-                          ? (isEN ? 'Enabled — click to disable' : 'Habilitado — clic para deshabilitar')
-                          : (isEN ? 'Disabled — click to enable' : 'Deshabilitado — clic para habilitar')}
+                          ? ($trad('Habilitado — clic para deshabilitar'))
+                          : ($trad('Deshabilitado — clic para habilitar'))}
                       on:click={() => doToggleEnabled(s)} disabled={busyName === s.name}>
                       <span class="srv-toggle-knob"></span>
                     </button>
                     <span class="srv-name">{s.name}</span>
                     <span class="pill {statusClass(s)}">{statusLabel(s)}</span>
                     {#if !s.enabled}
-                      <span class="pill off">{isEN ? 'disabled' : 'deshabilitado'}</span>
+                      <span class="pill off">{$trad('deshabilitado')}</span>
                     {/if}
                     <span class="pill tools" title="{T.tools}">
                       {toolCount(s)} tools
@@ -490,11 +488,11 @@
                   {#if s.env_keys && s.env_keys.length > 0}
                     <span class="meta-row">env:&nbsp;
                       {#each s.env_keys as k}
-                        <code class="env-chip {mcpSecrets[k] ? 'present' : 'missing'}" title={mcpSecrets[k] ? (isEN ? 'present in Keyring' : 'presente en Keyring') : (isEN ? 'NOT in Keyring' : 'NO está en el Keyring')}>{k}</code>
+                        <code class="env-chip {mcpSecrets[k] ? 'present' : 'missing'}" title={mcpSecrets[k] ? ($trad('presente en Keyring')) : ($trad('NO está en el Keyring'))}>{k}</code>
                       {/each}
                     </span>
                   {/if}
-                  <span class="meta-row">{isEN ? 'last discover' : 'última discovery'}: {fmtTs(s.last_discovered)}{s.last_latency_ms ? ` · ${s.last_latency_ms} ms` : ''}</span>
+                  <span class="meta-row">{$trad('última discovery')}: {fmtTs(s.last_discovered)}{s.last_latency_ms ? ` · ${s.last_latency_ms} ms` : ''}</span>
                   {#if s.last_error}
                     <span class="meta-row err">↳ {s.last_error}</span>
                   {/if}
@@ -541,16 +539,14 @@
           <label class="field">
             <span>{T.command}</span>
             <input type="text" bind:value={form.command} placeholder={T.cmdPh} spellcheck="false" />
-            <small class="hint">{isEN ? 'Full shell command. Lucy auto-prepends "-y" for npx.' : 'Comando completo. Lucy añade "-y" automáticamente a npx.'}</small>
+            <small class="hint">{$trad('Comando completo. Lucy añade "-y" automáticamente a npx.')}</small>
           </label>
 
           <div class="field">
             <span>{T.envKeys}</span>
             {#if secretKeys.length === 0}
               <p class="hint warn">
-                {isEN
-                  ? 'No MCP secrets in the Keyring yet. Add them in the MCP Secrets section of Settings first.'
-                  : 'Aún no hay secretos MCP en el Keyring. Añádelos primero en la sección "Variables / API Keys para MCP" de Configuración.'}
+                {$trad('Aún no hay secretos MCP en el Keyring. Añádelos primero en la sección "Variables / API Keys para MCP" de Configuración.')}
               </p>
             {:else}
               <div class="env-grid">

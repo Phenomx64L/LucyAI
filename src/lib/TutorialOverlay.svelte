@@ -6,6 +6,8 @@
      Events : done
 ──────────────────────────────────────────────────────────────────────────── -->
 <script>
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     import { createEventDispatcher, tick, onMount, onDestroy } from 'svelte';
     import { safeSetLSString } from '$lib/safe-ls';
 
@@ -743,7 +745,7 @@
 <div class="tut-tip"
      style={tipStyle(spot, W, H)}
      role="dialog"
-     aria-label={isEN ? 'Tutorial' : 'Tutorial de Lucy'}
+     aria-label={$trad('Tutorial de Lucy')}
      on:keydown={onKey}
      tabindex="-1">
 
@@ -753,7 +755,7 @@
   <!-- Header -->
   <div class="tut-hdr">
     <span class="tut-badge">{step + 1} / {STEPS.length}</span>
-    <button class="tut-skip" on:click={done}>{isEN ? 'Exit' : 'Salir'} ✕</button>
+    <button class="tut-skip" on:click={done}>{$trad('Salir')} ✕</button>
   </div>
 
   <!-- Scrollable content area -->
@@ -767,7 +769,7 @@
     {#each STEPS as _, i}
       <button class="tut-dot" class:on={i === step}
               role="tab" aria-selected={i === step}
-              aria-label="{isEN ? 'Step' : 'Paso'} {i + 1}"
+              aria-label="{$trad('Paso')} {i + 1}"
               on:click={() => goToStep(i)}></button>
     {/each}
   </div>
@@ -775,10 +777,10 @@
   <!-- Navigation buttons -->
   <div class="tut-foot">
     <button class="tut-btn tut-ghost" on:click={prev} disabled={step === 0}>
-      ← {isEN ? 'Back' : 'Atrás'}
+      ← {$trad('Atrás')}
     </button>
     <button class="tut-btn tut-pri" on:click={next}>
-      {#if isLast}{isEN ? '✓ Done!' : '✓ ¡Listo!'}{:else}{isEN ? 'Next →' : 'Siguiente →'}{/if}
+      {#if isLast}{$trad('✓ ¡Listo!')}{:else}{$trad('Siguiente →')}{/if}
     </button>
   </div>
 </div>

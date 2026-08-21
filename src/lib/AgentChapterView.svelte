@@ -24,6 +24,8 @@
     - Keyboard: arrow keys to navigate chapters when focused.
 -->
 <script context="module" lang="ts">
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     export interface ChapterStep {
         /** Numeric step index, 1-based. */
         index: number;
@@ -45,7 +47,6 @@
     export let elapsedMs: number = 0;
     export let steps: ChapterStep[] = [];
     export let finalHtml: string = '';
-    export let isEN: boolean = false;
 
     const dispatch = createEventDispatcher<{ flip: { mode: 'linear' | 'chapter' } }>();
 
@@ -78,9 +79,9 @@
 <div class="chap-book" role="document" aria-label="Agent investigation chapters">
     <!-- ── Side index ── -->
     <nav class="chap-index" aria-label="Chapter navigation">
-        <button class="chap-tab" class:active={activeIdx === 0} on:click={() => setActive(0)} title={isEN ? 'Cover' : 'Portada'}>
+        <button class="chap-tab" class:active={activeIdx === 0} on:click={() => setActive(0)} title={$trad('Portada')}>
             <span class="chap-num">◆</span>
-            <span class="chap-label">{isEN ? 'Cover' : 'Portada'}</span>
+            <span class="chap-label">{$trad('Portada')}</span>
         </button>
         {#each steps as st, i (st.index)}
             <button class="chap-tab"
@@ -96,15 +97,15 @@
         {#if finalHtml}
             <button class="chap-tab" class:active={activeIdx === chapterCount - 1} on:click={() => setActive(chapterCount - 1)}>
                 <span class="chap-num">◇</span>
-                <span class="chap-label">{isEN ? 'Conclusion' : 'Conclusión'}</span>
+                <span class="chap-label">{$trad('Conclusión')}</span>
             </button>
         {/if}
         <div class="chap-meta">
             <span class="chap-elapsed">{fmtElapsed(elapsedMs)}</span>
             <button class="chap-flip"
                     on:click={() => dispatch('flip', { mode: 'linear' })}
-                    title={isEN ? 'Switch to linear view' : 'Cambiar a vista lineal'}>
-                {isEN ? '↻ Linear' : '↻ Lineal'}
+                    title={$trad('Cambiar a vista lineal')}>
+                {$trad('↻ Lineal')}
             </button>
         </div>
     </nav>
@@ -113,13 +114,13 @@
     <article class="chap-page">
         {#if activeIdx === 0}
             <header class="chap-cover">
-                <div class="chap-cover-eyebrow">{isEN ? 'Investigation' : 'Investigación'}</div>
+                <div class="chap-cover-eyebrow">{$trad('Investigación')}</div>
                 <h2 class="chap-cover-title">{title}</h2>
                 {#if objective}
                     <p class="chap-cover-objective">{objective}</p>
                 {/if}
                 <div class="chap-cover-meta">
-                    <span>{steps.length} {isEN ? 'steps' : 'pasos'}</span>
+                    <span>{steps.length} {$trad('pasos')}</span>
                     <span class="dot">·</span>
                     <span>{fmtElapsed(elapsedMs)}</span>
                 </div>
@@ -133,7 +134,7 @@
             </header>
             {#if st.rationale}
                 <aside class="chap-rationale">
-                    <span class="chap-rationale-mark">{isEN ? 'Why' : 'Por qué'}</span>
+                    <span class="chap-rationale-mark">{$trad('Por qué')}</span>
                     <span>{st.rationale}</span>
                 </aside>
             {/if}
@@ -141,7 +142,7 @@
         {:else if finalHtml}
             <header class="chap-conclusion-head">
                 <span class="chap-conclusion-mark">◇</span>
-                <h3>{isEN ? 'Conclusion' : 'Conclusión'}</h3>
+                <h3>{$trad('Conclusión')}</h3>
             </header>
             <section class="chap-body">{@html finalHtml}</section>
         {/if}
@@ -150,11 +151,11 @@
         <footer class="chap-nav">
             <button class="chap-nav-btn"
                     disabled={activeIdx === 0}
-                    on:click={() => setActive(activeIdx - 1)}>← {isEN ? 'Prev' : 'Anterior'}</button>
+                    on:click={() => setActive(activeIdx - 1)}>← {$trad('Anterior')}</button>
             <span class="chap-pageno">{activeIdx + 1} / {chapterCount}</span>
             <button class="chap-nav-btn"
                     disabled={activeIdx === chapterCount - 1}
-                    on:click={() => setActive(activeIdx + 1)}>{isEN ? 'Next' : 'Siguiente'} →</button>
+                    on:click={() => setActive(activeIdx + 1)}>{$trad('Siguiente')} →</button>
         </footer>
     </article>
 </div>

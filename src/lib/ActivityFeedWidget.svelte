@@ -19,12 +19,13 @@
     • Persisted collapsed-state to localStorage (`lucy_activity_open`).
 -->
 <script lang="ts">
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     import { onMount, onDestroy, createEventDispatcher } from 'svelte';
     import { invoke } from '@tauri-apps/api/core';
     import { safeGetLS, safeSetLSString } from '$lib/safe-ls';
     import { relTime, sevClass, kindIcon } from '$lib/activity-feed-helpers';
 
-    export let isEN: boolean = false;
     /** Whether the parent sidebar is collapsed to icons. When true, hide details. */
     export let sidebarCollapsed: boolean = false;
 
@@ -118,8 +119,8 @@
     $: badgeText = (() => {
         if (!counters) return '';
         const bits: string[] = [];
-        if (counters.incidents_open > 0)   bits.push(`${counters.incidents_open} ${isEN ? 'open' : 'abierto'}`);
-        if (counters.incidents_resolved > 0) bits.push(`${counters.incidents_resolved} ${isEN ? 'resolved' : 'resuelto'}`);
+        if (counters.incidents_open > 0)   bits.push(`${counters.incidents_open} ${$trad('abierto')}`);
+        if (counters.incidents_resolved > 0) bits.push(`${counters.incidents_resolved} ${$trad('resuelto')}`);
         if (bits.length === 0 && counters.commands_run > 0) bits.push(`${counters.commands_run} cmds`);
         return bits.join(' · ');
     })();
@@ -130,9 +131,9 @@
     <!-- Header — clickable to toggle the body, badge on the right. -->
     <button class="af-hdr" type="button"
             on:click={togglePanel}
-            title={isEN ? 'Activity in the last 24 hours' : 'Actividad de las últimas 24 horas'}>
+            title={$trad('Actividad de las últimas 24 horas')}>
         <span class="af-hdr-glyph">⌒</span>
-        <span class="af-hdr-title">{isEN ? 'Activity (24h)' : 'Actividad (24h)'}</span>
+        <span class="af-hdr-title">{$trad('Actividad (24h)')}</span>
         {#if badgeText}
             <span class="af-hdr-badge" class:af-hdr-badge-alert={hasOpenIncidents || hasFailedSchedules}>
                 {badgeText}
@@ -144,14 +145,14 @@
     {#if panelOpen}
         <div class="af-body">
             {#if loading && !data}
-                <div class="af-empty">{isEN ? 'Loading…' : 'Cargando…'}</div>
+                <div class="af-empty">{$trad('Cargando…')}</div>
             {:else if error}
                 <div class="af-empty af-err" title={error}>
-                    {isEN ? 'Error loading' : 'Error al cargar'}
+                    {$trad('Error al cargar')}
                 </div>
             {:else if !data || data.events.length === 0}
                 <div class="af-empty">
-                    {isEN ? 'Nothing in the last 24h.' : 'Sin actividad en 24h.'}
+                    {$trad('Sin actividad en 24h.')}
                 </div>
             {:else}
                 {#each data.events as ev (ev.kind + ev.ts + ev.title)}
@@ -167,7 +168,7 @@
                 {/each}
             {/if}
             <button class="af-refresh" type="button" on:click={refresh} disabled={loading}>
-                {loading ? '…' : (isEN ? '↻ Refresh' : '↻ Actualizar')}
+                {loading ? '…' : ($trad('↻ Actualizar'))}
             </button>
         </div>
     {/if}

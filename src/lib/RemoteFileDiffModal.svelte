@@ -1,4 +1,6 @@
 <script>
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     // ── RemoteFileDiffModal ───────────────────────────────────────────────────
     // Reads a file from a remote host, lets the user edit/preview a unified
     // diff, then writes it back via write_remote_file.
@@ -33,7 +35,6 @@
     /** @type {import('$lib/stores').Host | null} */
     export let host       = null;     // { id, name, host, username, type, port, sshKeyPath }
     export let initialPath = '';
-    export let isEN       = false;
 
     // State
     let path           = '';
@@ -81,7 +82,7 @@
 
     async function applyChanges() {
         if (originalContent === editedContent) {
-            toast(isEN ? 'No changes to apply' : 'Sin cambios para aplicar', 'info');
+            toast($trad('Sin cambios para aplicar'), 'info');
             return;
         }
         saving = true;
@@ -102,10 +103,10 @@
             });
             lastResult = String(result);
             originalContent = editedContent; // diff cleared after successful apply
-            toast(isEN ? 'File updated' : 'Archivo actualizado', 'success');
+            toast($trad('Archivo actualizado'), 'success');
         } catch (e) {
             error = String(e?.message || e);
-            toast((isEN ? 'Apply failed: ' : 'Falló: ') + error.slice(0, 80), 'error');
+            toast(($trad('Falló: ')) + error.slice(0, 80), 'error');
         }
         saving = false;
     }
@@ -115,9 +116,9 @@
         if (originalContent !== editedContent) {
             const { lucyConfirm } = await import('$lib/dialog-service');
             const ok = await lucyConfirm(
-                isEN ? 'Discard unsaved changes?' : '¿Descartar cambios sin guardar?',
+                $trad('¿Descartar cambios sin guardar?'),
                 { tone: 'warning',
-                  confirmLabel: isEN ? 'Discard' : 'Descartar' });
+                  confirmLabel: $trad('Descartar') });
             if (!ok) return;
         }
         open = false;
@@ -194,7 +195,7 @@
                     placeholder="/etc/nginx/nginx.conf"
                     disabled={loading || saving}
                     on:keydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); loadFile(); } }} />
-                <button class="rfd-btn-mini" on:click={loadFile} disabled={loading || saving} title={isEN ? 'Load (Enter)' : 'Cargar (Enter)'}>
+                <button class="rfd-btn-mini" on:click={loadFile} disabled={loading || saving} title={$trad('Cargar (Enter)')}>
                     <Refresh size={13} stroke={2}/>
                 </button>
             </div>
@@ -202,29 +203,29 @@
         </div>
 
         {#if loading}
-            <div class="rfd-status rfd-loading">↻ {isEN ? 'Reading remote file…' : 'Leyendo archivo remoto…'}</div>
+            <div class="rfd-status rfd-loading">↻ {$trad('Leyendo archivo remoto…')}</div>
         {:else if error}
             <div class="rfd-status rfd-error">
                 <AlertTriangle size={13}/> {error}
             </div>
         {:else if originalContent || editedContent}
             <div class="rfd-statbar">
-                <span class="rfd-stat">{originalContent.split('\n').length} {isEN ? 'lines' : 'líneas'}</span>
+                <span class="rfd-stat">{originalContent.split('\n').length} {$trad('líneas')}</span>
                 <span class="rfd-stat">{originalContent.length} bytes</span>
                 {#if hasChanges}
                     <span class="rfd-stat rfd-stat-add">+{addCount}</span>
                     <span class="rfd-stat rfd-stat-rem">−{remCount}</span>
                 {:else}
-                    <span class="rfd-stat rfd-stat-clean">✓ {isEN ? 'no changes' : 'sin cambios'}</span>
+                    <span class="rfd-stat rfd-stat-clean">✓ {$trad('sin cambios')}</span>
                 {/if}
                 {#if lastResult}<span class="rfd-stat rfd-stat-saved">✓ {lastResult}</span>{/if}
             </div>
             <div class="rfd-body">
                 <div class="rfd-pane">
-                    <div class="rfd-pane-hdr">{isEN ? 'Diff Preview' : 'Vista previa diff'}</div>
+                    <div class="rfd-pane-hdr">{$trad('Vista previa diff')}</div>
                     <div class="rfd-diff">
                         {#if !hasChanges}
-                            <div class="rfd-empty">{isEN ? 'Edit the file on the right to see the diff here' : 'Edita el archivo a la derecha para ver el diff aquí'}</div>
+                            <div class="rfd-empty">{$trad('Edita el archivo a la derecha para ver el diff aquí')}</div>
                         {:else}
                             {#each diff as d}
                                 {#if d.type === 'eq'}
@@ -239,30 +240,30 @@
                     </div>
                 </div>
                 <div class="rfd-pane">
-                    <div class="rfd-pane-hdr">{isEN ? 'Edit (Ctrl+S = Apply)' : 'Editar (Ctrl+S = Aplicar)'}</div>
+                    <div class="rfd-pane-hdr">{$trad('Editar (Ctrl+S = Aplicar)')}</div>
                     <textarea class="rfd-edit" spellcheck="false"
                         bind:value={editedContent}
                         disabled={saving}
-                        placeholder={isEN ? 'File content…' : 'Contenido del archivo…'}></textarea>
+                        placeholder={$trad('Contenido del archivo…')}></textarea>
                 </div>
             </div>
         {:else}
-            <div class="rfd-status">{isEN ? 'Enter a path above and press Enter to load.' : 'Ingresa una ruta arriba y presiona Enter.'}</div>
+            <div class="rfd-status">{$trad('Ingresa una ruta arriba y presiona Enter.')}</div>
         {/if}
 
         <div class="rfd-foot">
             <label class="rfd-bk">
                 <input type="checkbox" bind:checked={createBackup} disabled={saving}/>
-                <span>{isEN ? 'Create .lucy.bak backup before applying' : 'Crear backup .lucy.bak antes de aplicar'}</span>
+                <span>{$trad('Crear backup .lucy.bak antes de aplicar')}</span>
             </label>
             <div class="rfd-btns">
                 <button class="rfd-btn rfd-btn-ghost" on:click={close} disabled={saving}>
-                    <XIcon size={13}/> {isEN ? 'Cancel' : 'Cancelar'}
+                    <XIcon size={13}/> {$trad('Cancelar')}
                 </button>
                 <button class="rfd-btn rfd-btn-pri" on:click={applyChanges}
                     disabled={!hasChanges || saving || loading}
-                    title={hasChanges ? (isEN ? 'Write back to remote (Ctrl+S)' : 'Escribir en remoto (Ctrl+S)') : ''}>
-                    {#if saving}↻ {isEN ? 'Applying…' : 'Aplicando…'}{:else}<Check size={13}/> {isEN ? 'Apply Changes' : 'Aplicar Cambios'}{/if}
+                    title={hasChanges ? ($trad('Escribir en remoto (Ctrl+S)')) : ''}>
+                    {#if saving}↻ {$trad('Aplicando…')}{:else}<Check size={13}/> {$trad('Aplicar Cambios')}{/if}
                 </button>
             </div>
         </div>

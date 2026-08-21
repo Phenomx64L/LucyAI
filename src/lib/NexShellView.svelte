@@ -1,4 +1,6 @@
 <script>
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     // v1.4.22 — Broadcast .bc-* layout extracted to a single global stylesheet
     // so the duplicate-selector trap (tab-strip v1.4.17 → v1.4.19) doesn't recur.
     import '$lib/styles/nexshell.css';
@@ -412,10 +414,8 @@
         if (/\.rpm\.lock|recurso no disponible temporalmente|resource temporarily unavailable|another app is currently holding|waiting for process with pid|existing lock .* is held|could not get lock .*(?:dpkg|apt)/i.test(text)) {
             return {
                 id: 'pkg-lock', icon: '🔒',
-                title: isEN ? 'Package manager is locked' : 'Gestor de paquetes bloqueado',
-                hint: isEN
-                    ? 'Another dnf/PackageKit/apt process holds the lock. Identify it first — don\'t delete the lock blindly.'
-                    : 'Otro proceso (dnf/PackageKit/apt) tiene el lock. Identifícalo primero — no borres el lock a ciegas.',
+                title: $trad('Gestor de paquetes bloqueado'),
+                hint: $trad('Otro proceso (dnf/PackageKit/apt) tiene el lock. Identifícalo primero — no borres el lock a ciegas.'),
                 fixCmd: linux
                     ? 'ps -eo pid,user,etime,cmd | grep -E "dnf|packagekit|rpm|apt" | grep -v grep'
                     : 'Get-Process msiexec,TrustedInstaller -ErrorAction SilentlyContinue',
@@ -428,8 +428,8 @@
             const miss = cnf[1];
             return {
                 id: 'cmd-not-found', icon: '❓',
-                title: (isEN ? 'Command not found: ' : 'Comando no encontrado: ') + miss,
-                hint: isEN ? 'Find which package provides it.' : 'Busca qué paquete lo provee.',
+                title: ($trad('Comando no encontrado: ')) + miss,
+                hint: $trad('Busca qué paquete lo provee.'),
                 fixCmd: linux
                     ? `dnf provides ${miss} 2>/dev/null | head -20 || apt-cache search ${miss} 2>/dev/null | head -20`
                     : `Get-Command ${miss} -ErrorAction SilentlyContinue`,
@@ -439,8 +439,8 @@
         if (/permission denied|acceso denegado|operation not permitted|operación no permitida|must be (?:root|superuser)|debe ser (?:root|superusuario)|are you root\??/i.test(text)) {
             return {
                 id: 'perm-denied', icon: '⛔',
-                title: isEN ? 'Permission denied' : 'Permiso denegado',
-                hint: isEN ? 'Retry the previous command with elevated privileges.' : 'Reintenta el comando anterior con privilegios elevados.',
+                title: $trad('Permiso denegado'),
+                hint: $trad('Reintenta el comando anterior con privilegios elevados.'),
                 fixCmd: linux ? 'sudo !!' : 'Start-Process powershell -Verb RunAs',
             };
         }
@@ -450,8 +450,8 @@
                       || text.match(/unit ([\w.@\-]+)\.service/i) || [])[1];
             return {
                 id: 'svc-failed', icon: '🚨',
-                title: isEN ? 'Service failed to start' : 'El servicio falló al arrancar',
-                hint: isEN ? 'Inspect the journal for the root cause.' : 'Revisa el journal para ver la causa raíz.',
+                title: $trad('El servicio falló al arrancar'),
+                hint: $trad('Revisa el journal para ver la causa raíz.'),
                 fixCmd: svc ? `journalctl -xeu ${svc}.service --no-pager | tail -40` : 'journalctl -xe --no-pager | tail -40',
             };
         }
@@ -459,8 +459,8 @@
         if (/no space left on device|no queda espacio en el dispositivo|disk quota exceeded/i.test(text)) {
             return {
                 id: 'disk-full', icon: '💽',
-                title: isEN ? 'No space left on device' : 'Sin espacio en disco',
-                hint: isEN ? 'Find what is filling the disk.' : 'Identifica qué está llenando el disco.',
+                title: $trad('Sin espacio en disco'),
+                hint: $trad('Identifica qué está llenando el disco.'),
                 fixCmd: linux
                     ? 'df -h; echo "── biggest dirs ──"; du -xh / 2>/dev/null | sort -rh | head -20'
                     : 'Get-PSDrive -PSProvider FileSystem | Select Name,Used,Free',
@@ -472,8 +472,8 @@
             const p = pm ? pm[1] : '';
             return {
                 id: 'port-in-use', icon: '🔌',
-                title: isEN ? 'Address already in use' : 'Dirección/puerto ya en uso',
-                hint: isEN ? 'Find which process owns the port.' : 'Identifica qué proceso tiene el puerto.',
+                title: $trad('Dirección/puerto ya en uso'),
+                hint: $trad('Identifica qué proceso tiene el puerto.'),
                 fixCmd: linux
                     ? `ss -ltnp ${p ? `| grep ':${p}'` : ''}`.trim()
                     : `Get-NetTCPConnection ${p ? `-LocalPort ${p}` : ''}`.trim(),
@@ -507,9 +507,7 @@
     function nsCmdExplain(shellId, cmd) {
         const s = getShell(shellId);
         if (!s) return;
-        nsInputSet(shellId, 'lucyIn', (isEN
-            ? 'Explain what this command did and whether it errored (check its output above): '
-            : 'Explícame qué hizo este comando y si tuvo algún error (revisa su salida arriba): ') + '`' + cmd + '`');
+        nsInputSet(shellId, 'lucyIn', ($trad('Explícame qué hizo este comando y si tuvo algún error (revisa su salida arriba): ')) + '`' + cmd + '`');
         setTimeout(() => {
             const el = document.getElementById(`ns-lucy-${shellId}`);
             if (el instanceof HTMLElement) el.focus();
@@ -618,9 +616,7 @@
         // "done" does NOT mean the task finished. Warn loudly so neither the
         // user nor the agent assumes success.
         if (exitCode === 255) {
-            rsLogTo(id, 'err', isEN
-                ? '⚠ SSH connection closed (exit 255) — NOT a clean finish. The command may STILL be running on the remote host. Reconnect and verify before assuming it completed.'
-                : '⚠ La conexión SSH se cerró (exit 255) — NO es una finalización limpia. El comando PUEDE seguir ejecutándose en el host remoto. Reconéctate y verifica antes de darlo por terminado.');
+            rsLogTo(id, 'err', $trad('⚠ La conexión SSH se cerró (exit 255) — NO es una finalización limpia. El comando PUEDE seguir ejecutándose en el host remoto. Reconéctate y verifica antes de darlo por terminado.'));
         }
         // Log to audit trail
         const lastCmd = [...(s.history || [])].reverse().find(h => h.type === 'cmd' || h.type === 'lucy-in');
@@ -734,7 +730,7 @@
     function guardCancel() {
         const shellId = activeShellId;
         if (shellId && guardAssessment) {
-            rsLogTo(shellId, 'info', `⬡ ${isEN ? 'Command blocked by guard' : 'Comando bloqueado por guardia'}: ${guardAssessment.command.substring(0, 80)}`);
+            rsLogTo(shellId, 'info', `⬡ ${$trad('Comando bloqueado por guardia')}: ${guardAssessment.command.substring(0, 80)}`);
         }
         guardAssessment = null;
         guardPendingAction = null;
@@ -746,9 +742,9 @@
         if (tl) {
             tl.active = false;
             tl.phase = 'failed';
-            tl.summary = isEN ? 'Stopped by user' : 'Detenido por el usuario';
+            tl.summary = $trad('Detenido por el usuario');
             turnLoops = { ...turnLoops };
-            rsLogTo(shellId, 'info', `↻ Turn-Loop ${isEN ? 'stopped' : 'detenido'}`);
+            rsLogTo(shellId, 'info', `↻ Turn-Loop ${$trad('detenido')}`);
         }
     }
 
@@ -791,7 +787,7 @@
         if (!s) return;
         const tl = createTurnLoop(problem, s.host.name, s.host.type === 'linux' ? 'Linux' : 'Windows');
         turnLoops = { ...turnLoops, [shellId]: tl };
-        rsLogTo(shellId, 'info', `↻ Turn-Loop ${isEN ? 'started' : 'iniciado'}: "${problem.substring(0, 80)}"`);
+        rsLogTo(shellId, 'info', `↻ Turn-Loop ${$trad('iniciado')}: "${problem.substring(0, 80)}"`);
 
         while (tl.active && tl.iteration <= tl.maxIterations) {
             turnLoops = { ...turnLoops };
@@ -799,7 +795,7 @@
             // ── STUCK CHECK (before each iteration) ──
             const stuckSignal = detectStuck(tl);
             if (stuckSignal.isStuck) {
-                rsLogTo(shellId, 'err', `⚠ ${isEN ? 'Stuck detected' : 'Estancamiento detectado'}: ${stuckSignal.reason}`);
+                rsLogTo(shellId, 'err', `⚠ ${$trad('Estancamiento detectado')}: ${stuckSignal.reason}`);
                 if (stuckSignal.severity === 'critical') {
                     tl.phase = 'failed'; tl.active = false;
                     tl.summary = isEN ? `Stopped: ${stuckSignal.reason}` : `Detenido: ${stuckSignal.reason}`;
@@ -813,7 +809,7 @@
             // ── PHASE 1: DIAGNOSE ──
             tl.phase = 'diagnose';
             turnLoops = { ...turnLoops };
-            rsLogTo(shellId, 'lucy-out', `◎ **Turn-Loop [${tl.iteration}/${tl.maxIterations}]** — ${isEN ? 'Diagnosing...' : 'Diagnosticando...'}`);
+            rsLogTo(shellId, 'lucy-out', `◎ **Turn-Loop [${tl.iteration}/${tl.maxIterations}]** — ${$trad('Diagnosticando...')}`);
 
             let diagResp;
             try {
@@ -825,7 +821,7 @@
             if (diagClean) rsLogTo(shellId, 'lucy-out', diagClean);
 
             if (!diagCmd) {
-                rsLogTo(shellId, 'info', `↻ ${isEN ? 'No diagnostic command generated' : 'Sin comando diagnostico generado'}`);
+                rsLogTo(shellId, 'info', `↻ ${$trad('Sin comando diagnostico generado')}`);
                 tl.steps.push({ phase: 'diagnose', timestamp: Date.now(), aiResponse: diagClean });
                 tl.phase = 'failed'; tl.active = false; break;
             }
@@ -841,7 +837,7 @@
             // ── PHASE 2: ANALYZE ──
             tl.phase = 'analyze';
             turnLoops = { ...turnLoops };
-            rsLogTo(shellId, 'lucy-out', `◑ ${isEN ? 'Analyzing results...' : 'Analizando resultados...'}`);
+            rsLogTo(shellId, 'lucy-out', `◑ ${$trad('Analizando resultados...')}`);
 
             let analyzeResp;
             try {
@@ -855,14 +851,14 @@
             const verdict1 = extractVerdict(analyzeResp);
             if (verdict1 === 'NO_ISSUE') {
                 tl.phase = 'done'; tl.resolved = true; tl.active = false;
-                tl.summary = isEN ? 'No issue detected.' : 'No se detecto problema.';
+                tl.summary = $trad('No se detecto problema.');
                 rsLogTo(shellId, 'info', `✓ Turn-Loop: ${tl.summary}`);
                 break;
             }
             // Si no hay VERDICT, asumir CAN_FIX y continuar al PROPOSE en vez de hacer más diag
             if (verdict1 === 'NEEDS_MORE_DIAG') {
                 // Run another diagnostic in same iteration
-                rsLogTo(shellId, 'info', `◎ ${isEN ? 'Running additional diagnosis...' : 'Ejecutando diagnostico adicional...'}`);
+                rsLogTo(shellId, 'info', `◎ ${$trad('Ejecutando diagnostico adicional...')}`);
                 tl.phase = 'diagnose';
                 turnLoops = { ...turnLoops };
                 let diag2Resp;
@@ -884,7 +880,7 @@
             // ── PHASE 3: PROPOSE ──
             tl.phase = 'propose';
             turnLoops = { ...turnLoops };
-            rsLogTo(shellId, 'lucy-out', `→ ${isEN ? 'Proposing fix...' : 'Proponiendo solucion...'}`);
+            rsLogTo(shellId, 'lucy-out', `→ ${$trad('Proponiendo solucion...')}`);
 
             let proposeResp;
             try {
@@ -897,7 +893,7 @@
             tl.steps.push({ phase: 'propose', timestamp: Date.now(), command: proposeCmd, aiResponse: proposeClean });
 
             if (!proposeCmd) {
-                rsLogTo(shellId, 'info', `↻ ${isEN ? 'No fix command proposed' : 'Sin comando de fix propuesto'}`);
+                rsLogTo(shellId, 'info', `↻ ${$trad('Sin comando de fix propuesto')}`);
                 tl.phase = 'failed'; tl.active = false; break;
             }
             if (!tl.active) break;
@@ -936,8 +932,8 @@
             });
 
             if (!fixApplied) {
-                rsLogTo(shellId, 'info', `⬡ ${isEN ? 'Fix was blocked/cancelled. Stopping loop.' : 'Fix bloqueado/cancelado. Deteniendo loop.'}`);
-                tl.steps.push({ phase: 'apply', timestamp: Date.now(), command: cleanFixCmd, aiResponse: isEN ? 'Blocked by guard' : 'Bloqueado por guardia' });
+                rsLogTo(shellId, 'info', `⬡ ${$trad('Fix bloqueado/cancelado. Deteniendo loop.')}`);
+                tl.steps.push({ phase: 'apply', timestamp: Date.now(), command: cleanFixCmd, aiResponse: $trad('Bloqueado por guardia') });
                 tl.phase = 'failed'; tl.active = false; break;
             }
             tl.steps.push({ phase: 'apply', timestamp: Date.now(), command: cleanFixCmd, output: fixOut });
@@ -947,7 +943,7 @@
             // ── PHASE 5: VERIFY ──
             tl.phase = 'verify';
             turnLoops = { ...turnLoops };
-            rsLogTo(shellId, 'lucy-out', `✓ ${isEN ? 'Verifying fix...' : 'Verificando solucion...'}`);
+            rsLogTo(shellId, 'lucy-out', `✓ ${$trad('Verificando solucion...')}`);
 
             let verifyResp;
             try {
@@ -983,31 +979,31 @@
             // Si la IA no devuelve VERDICT tag, tratar como PARTIAL para evitar
             // que el loop continúe indefinidamente con un veredicto silencioso.
             if (verdict2 === null) {
-                tl.summary = resultClean || (isEN ? 'No verdict from AI — manual review recommended.' : 'Sin veredicto de la IA — revisión manual recomendada.');
+                tl.summary = resultClean || ($trad('Sin veredicto de la IA — revisión manual recomendada.'));
                 tl.phase = 'done'; tl.resolved = false; tl.active = false;
-                rsLogTo(shellId, 'info', `! Turn-Loop: ${isEN ? 'No VERDICT tag in AI response. Stopping.' : 'Sin tag VERDICT en respuesta IA. Deteniendo.'}`);
+                rsLogTo(shellId, 'info', `! Turn-Loop: ${$trad('Sin tag VERDICT en respuesta IA. Deteniendo.')}`);
                 break;
             }
 
             if (verdict2 === 'RESOLVED') {
                 tl.phase = 'done'; tl.resolved = true; tl.active = false;
                 tl.summary = resultClean;
-                rsLogTo(shellId, 'info', `✓ Turn-Loop: ${isEN ? 'Problem resolved!' : 'Problema resuelto!'}`);
+                rsLogTo(shellId, 'info', `✓ Turn-Loop: ${$trad('Problema resuelto!')}`);
                 break;
             } else if (verdict2 === 'PARTIAL') {
                 tl.summary = resultClean;
                 tl.phase = 'done'; tl.resolved = false; tl.active = false;
-                rsLogTo(shellId, 'info', `! Turn-Loop: ${isEN ? 'Partially resolved. Manual intervention may be needed.' : 'Parcialmente resuelto. Puede necesitar intervencion manual.'}`);
+                rsLogTo(shellId, 'info', `! Turn-Loop: ${$trad('Parcialmente resuelto. Puede necesitar intervencion manual.')}`);
                 break;
             } else {
                 // NOT_RESOLVED — loop again
                 tl.iteration++;
                 if (tl.iteration > tl.maxIterations) {
                     tl.phase = 'failed'; tl.active = false;
-                    tl.summary = isEN ? 'Max iterations reached without full resolution.' : 'Iteraciones maximas alcanzadas sin resolucion completa.';
+                    tl.summary = $trad('Iteraciones maximas alcanzadas sin resolucion completa.');
                     rsLogTo(shellId, 'info', `! Turn-Loop: ${tl.summary}`);
                 } else {
-                    rsLogTo(shellId, 'info', `↻ ${isEN ? 'Not resolved. Starting iteration' : 'No resuelto. Iniciando iteracion'} ${tl.iteration}...`);
+                    rsLogTo(shellId, 'info', `↻ ${$trad('No resuelto. Iniciando iteracion')} ${tl.iteration}...`);
                 }
             }
         }
@@ -1023,7 +1019,7 @@
 
         const run = createSkillRun(skill, userInput);
         skillRuns = { ...skillRuns, [shellId]: run };
-        rsLogTo(shellId, 'info', `≡ ${isEN ? 'Skill started' : 'Skill iniciado'}: ${skill.icon} ${isEN ? skill.nameEN : skill.name}`);
+        rsLogTo(shellId, 'info', `≡ ${$trad('Skill iniciado')}: ${skill.icon} ${isEN ? skill.nameEN : skill.name}`);
 
         const bootCtx = tlBootCtx(shellId);
         const hostType = s.host.type === 'linux' ? 'Linux' : 'Windows';
@@ -1077,7 +1073,7 @@
                 });
 
                 if (!executed) {
-                    rsLogTo(shellId, 'info', `⬡ ${isEN ? 'Command blocked. Skipping phase.' : 'Comando bloqueado. Saltando fase.'}`);
+                    rsLogTo(shellId, 'info', `⬡ ${$trad('Comando bloqueado. Saltando fase.')}`);
                 }
             }
 
@@ -1100,15 +1096,15 @@
             // If verdict says DONE or ESCALATE, stop
             if (verdict === 'DONE' || verdict === 'ESCALATE') {
                 rsLogTo(shellId, 'info', verdict === 'DONE'
-                    ? `✓ ${isEN ? 'Skill completed successfully.' : 'Skill completado exitosamente.'}`
-                    : `! ${isEN ? 'Skill escalated. Manual intervention needed.' : 'Skill escalado. Se necesita intervención manual.'}`);
+                    ? `✓ ${$trad('Skill completado exitosamente.')}`
+                    : `! ${$trad('Skill escalado. Se necesita intervención manual.')}`);
                 break;
             }
         }
 
         run.active = false;
         skillRuns = { ...skillRuns };
-        rsLogTo(shellId, 'info', `≡ ${isEN ? 'Skill finished' : 'Skill finalizado'}: ${skill.icon} ${isEN ? skill.nameEN : skill.name}`);
+        rsLogTo(shellId, 'info', `≡ ${$trad('Skill finalizado')}: ${skill.icon} ${isEN ? skill.nameEN : skill.name}`);
     }
 
     function skOpenBrowser(shellId) {
@@ -1249,10 +1245,10 @@
         // ── RDP mode: launch mstsc.exe and skip WinRM connection ──────────────
         if (isRdp) {
             rsLogTo(id, 'info', `⊡ Modo RDP — lanzando sesión de Escritorio Remoto hacia ${h.name} (${h.host})…`);
-            rsLogTo(id, 'info', `· ${isEN ? 'Lucy operates in clipboard copilot mode: she generates commands, you paste them in the RDP window and return the output.' : 'Lucy opera en modo copiloto de portapapeles: genera comandos, pégalos en la ventana RDP y devuelve el resultado.'}`);
+            rsLogTo(id, 'info', `· ${$trad('Lucy opera en modo copiloto de portapapeles: genera comandos, pégalos en la ventana RDP y devuelve el resultado.')}`);
             try {
                 await invoke('launch_rdp', { host: h.host, port: h.port || 3389 });
-                rsLogTo(id, 'info', `✓ mstsc.exe lanzado · ${isEN ? 'Connect to the remote desktop and ask Lucy for help.' : 'Conéctate al escritorio remoto y pide ayuda a Lucy.'}`);
+                rsLogTo(id, 'info', `✓ mstsc.exe lanzado · ${$trad('Conéctate al escritorio remoto y pide ayuda a Lucy.')}`);
             } catch(e) {
                 rsLogTo(id, 'err', `✗ No se pudo lanzar mstsc.exe: ${e}`);
             }
@@ -1339,7 +1335,7 @@
             if (lastErr) throw lastErr;
             const s = getShell(id);
             if (s) { s.connected = true; rshellSessions = [...rshellSessions]; }
-            rsLogTo(id, 'info', `✓ ${isEN ? 'Connected to' : 'Conectado a'} ${h.name} · ${h.type === 'linux' ? 'SSH activo' : 'WinRM'}`);
+            rsLogTo(id, 'info', `✓ ${$trad('Conectado a')} ${h.name} · ${h.type === 'linux' ? 'SSH activo' : 'WinRM'}`);
             rsLogTo(id, 'out', out.replace('Lucy:OK\n','').trim());
 
             invoke('nexshell_bootstrap', {
@@ -2041,14 +2037,14 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
                 }
                 const out = await invoke('execute_powershell', { script: cmd });
                 ftResult = `✓ ${ftDirection === 'upload' ? 'Subido' : 'Descargado'} correctamente`;
-                rsLogTo(ftShellId, 'info', `⊞ ${isEN ? 'Transfer complete' : 'Transferencia completada'}: ${ftLocalPath} ↔ ${s.host.host}:${ftRemotePath}`);
+                rsLogTo(ftShellId, 'info', `⊞ ${$trad('Transferencia completada')}: ${ftLocalPath} ↔ ${s.host.host}:${ftRemotePath}`);
             } else {
                 const ps = ftDirection === 'upload'
                     ? `Copy-Item -Path "${ftLocalPath}" -Destination "${ftRemotePath}" -ToSession (New-PSSession -ComputerName ${s.host.host})`
                     : `Copy-Item -Path "${ftRemotePath}" -Destination "${ftLocalPath}" -FromSession (New-PSSession -ComputerName ${s.host.host})`;
                 await invoke('execute_powershell', { script: ps });
-                ftResult = `✓ ${isEN ? 'Transfer complete' : 'Transferencia completada'}`;
-                rsLogTo(ftShellId, 'info', `⊞ ${isEN ? 'Transfer complete' : 'Transferencia completada'}`);
+                ftResult = `✓ ${$trad('Transferencia completada')}`;
+                rsLogTo(ftShellId, 'info', `⊞ ${$trad('Transferencia completada')}`);
             }
         } catch(e) {
             ftResult = `✗ Error: ${String(e).substring(0,200)}`;
@@ -2160,13 +2156,13 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
             rshellSessions = [...rshellSessions];
 
             const statusMsg = result.status === 'ok'
-                ? (isEN ? 'Provider healthy' : 'Proveedor operativo')
+                ? ($trad('Proveedor operativo'))
                 : (isEN ? `Provider error: ${result.message}` : `Error del proveedor: ${result.message}`);
             rsLogTo(shellId, result.status === 'ok' ? 'info' : 'err', `[Health] ${statusMsg}`);
         } catch (e) {
             s.rdpAgentProviderStatus = 'error';
             rshellSessions = [...rshellSessions];
-            rsLogTo(shellId, 'err', `[Health] ${isEN ? 'Health check failed' : 'Verificación de salud fallida'}: ${e}`);
+            rsLogTo(shellId, 'err', `[Health] ${$trad('Verificación de salud fallida')}: ${e}`);
         }
     }
 
@@ -2175,7 +2171,7 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
         if (!s) return;
         s.history = [];
         rshellSessions = [...rshellSessions];
-        toast(isEN ? 'Terminal cleared' : 'Terminal limpiada', 'success');
+        toast($trad('Terminal limpiada'), 'success');
     }
 
     // ── Incident Response / SRE Mode helpers ─────────────────────────────
@@ -2196,7 +2192,7 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
         const s = getShell(shellId);
         if (!s) return;
         if (s.incidentId) {
-            toast(isEN ? 'Incident already active' : 'Ya hay un incidente activo', 'info');
+            toast($trad('Ya hay un incidente activo'), 'info');
             s.incidentPanelOpen = true;
             rshellSessions = [...rshellSessions];
             return;
@@ -2236,7 +2232,7 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
             s.incidentPhase = incident.phase;
             s.incidentPanelOpen = true;
             rshellSessions = [...rshellSessions];
-            rsLogTo(shellId, 'info', `🚨 ${isEN ? 'Incident started' : 'Incidente iniciado'}: "${incident.title}" [${incident.id.slice(0,8)}]`);
+            rsLogTo(shellId, 'info', `🚨 ${$trad('Incidente iniciado')}: "${incident.title}" [${incident.id.slice(0,8)}]`);
         } catch (e) {
             toast(String(e), 'error');
         }
@@ -2286,7 +2282,7 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
         s.incidentPhase = null;
         s.incidentPanelOpen = false;
         rshellSessions = [...rshellSessions];
-        rsLogTo(shellId, 'info', `✓ ${isEN ? 'Incident closed' : 'Incidente cerrado'}`);
+        rsLogTo(shellId, 'info', `✓ ${$trad('Incidente cerrado')}`);
     }
 
     function handleIncidentPhaseChanged(shellId, ev) {
@@ -2365,15 +2361,15 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
     </div>
     <div style="display:flex;align-items:center;gap:8px;">
       <button class="ns-panel-toggle" on:click={() => nsHostsCollapsed = !nsHostsCollapsed}
-        title={nsHostsCollapsed ? (isEN ? 'Expand hosts panel' : 'Mostrar panel de hosts') : (isEN ? 'Collapse hosts panel' : 'Colapsar panel de hosts')}>
-        {nsHostsCollapsed ? (isEN ? '▶ Hosts' : '▶ Hosts') : (isEN ? '◀ Collapse' : '◀ Colapsar')}
+        title={nsHostsCollapsed ? ($trad('Mostrar panel de hosts')) : ($trad('Colapsar panel de hosts'))}>
+        {nsHostsCollapsed ? ($trad('▶ Hosts')) : ($trad('◀ Colapsar'))}
       </button>
-      <button class="ns-add-btn" on:click={() => abrirHostModal()}>{isEN ? '+ Add host' : '+ Añadir host'}</button>
+      <button class="ns-add-btn" on:click={() => abrirHostModal()}>{$trad('+ Añadir host')}</button>
       <button class="ns-guard-btn" class:active={$guardConfig.enabled}
         on:click={() => { $guardConfig = { ...$guardConfig, enabled: !$guardConfig.enabled }; }}
         title={$guardConfig.enabled
-          ? (isEN ? 'Command Guard: ON (click to disable)' : 'Guardia: ACTIVO (clic para desactivar)')
-          : (isEN ? 'Command Guard: OFF (click to enable)' : 'Guardia: INACTIVO (clic para activar)')}>
+          ? ($trad('Guardia: ACTIVO (clic para desactivar)'))
+          : ($trad('Guardia: INACTIVO (clic para activar)'))}>
         ⬡{$guardConfig.enabled ? '' : ' OFF'}
       </button>
     </div>
@@ -2388,12 +2384,12 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
 
       <!-- Search + Sort toolbar -->
       <div class="ns-col-toolbar">
-        <input class="ns-search" placeholder={isEN ? 'Search host…' : 'Buscar host…'} bind:value={nexshellFilter}/>
-        <select class="ns-sort-sel" bind:value={nsSort} title={isEN ? 'Sort hosts' : 'Ordenar hosts'}>
-          <option value="status">⬤ {isEN ? 'Status' : 'Estado'}</option>
-          <option value="name">A–Z {isEN ? 'Name' : 'Nombre'}</option>
-          <option value="type">⊞ {isEN ? 'Type' : 'Tipo'}</option>
-          <option value="activity">⏱ {isEN ? 'Activity' : 'Actividad'}</option>
+        <input class="ns-search" placeholder={$trad('Buscar host…')} bind:value={nexshellFilter}/>
+        <select class="ns-sort-sel" bind:value={nsSort} title={$trad('Ordenar hosts')}>
+          <option value="status">⬤ {$trad('Estado')}</option>
+          <option value="name">A–Z {$trad('Nombre')}</option>
+          <option value="type">⊞ {$trad('Tipo')}</option>
+          <option value="activity">⏱ {$trad('Actividad')}</option>
         </select>
       </div>
 
@@ -2405,7 +2401,7 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
         {/each}
       </div>
 
-      <div class="ns-col-lbl">{isEN ? 'CONFIGURED HOSTS' : 'HOSTS CONFIGURADOS'} <span class="ns-col-count">{nsHostsSorted.length}</span></div>
+      <div class="ns-col-lbl">{$trad('HOSTS CONFIGURADOS')} <span class="ns-col-count">{nsHostsSorted.length}</span></div>
 
       {#each nsHostsSorted as h, i (h.id)}
         {@const sess = rshellSessions.find(s => s.host.id === h.id)}
@@ -2430,7 +2426,7 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
             {#if h.color && h.color !== '#10b981'}<span class="ns-color-dot" style="background:{h.color};"></span>{/if}
             {#if sess}
               <span class="ns-conn-pill {sess.connected ? 'ns-conn-ok' : 'ns-conn-wait'}">{sess.connected ? '● Conectado' : '⟳ Conectando…'}</span>
-              {#if sess._rec}<span class="ns-rec-badge" title={isEN ? 'Recording active' : 'Grabando'}>● REC</span>{/if}
+              {#if sess._rec}<span class="ns-rec-badge" title={$trad('Grabando')}>● REC</span>{/if}
             {:else if h.lastActivity}
               <span class="ns-activity-ts">{nsRelTime(h.lastActivity)}</span>
             {/if}
@@ -2454,8 +2450,8 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
                         class:ns-act-recording={sess._rec}
                         on:click|stopPropagation={() => sess._rec ? rsRecordingStop(sess.id) : rsRecordingStart(sess.id)}
                         title={sess._rec
-                            ? (isEN ? 'Stop recording' : 'Detener grabación')
-                            : (isEN ? 'Start recording' : 'Iniciar grabación')}>
+                            ? ($trad('Detener grabación'))
+                            : ($trad('Iniciar grabación'))}>
                     {sess._rec ? '■ REC' : '● REC'}
                 </button>
               {/if}
@@ -2471,17 +2467,17 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
                     rsDetenerTodosTails(sess.id);
                     cerrarShell(sess.id);
                     abrirRShell(h);
-                  }}><Zap size={11}/> {isEN ? 'Reconnect' : 'Reconectar'}</button>
+                  }}><Zap size={11}/> {$trad('Reconectar')}</button>
               {/if}
               <button class="ns-act-btn ns-act-close" on:click|stopPropagation={() => { rsDetenerTodosTails(sess.id); cerrarShell(sess.id); }}><X size={12}/></button>
             {:else}
-              <button class="ns-act-btn ns-act-connect" on:click|stopPropagation={() => abrirRShell(h)}><Zap size={11}/> {isEN ? 'Connect' : 'Conectar'}</button>
+              <button class="ns-act-btn ns-act-connect" on:click|stopPropagation={() => abrirRShell(h)}><Zap size={11}/> {$trad('Conectar')}</button>
             {/if}
             <button class="ns-act-btn ns-act-edit" on:click|stopPropagation={() => abrirHostModal(h)}><Edit2 size={11}/></button>
             <!-- Tier S #3 — Open the recording player scoped to this host -->
             <button class="ns-act-btn ns-act-play"
                     on:click|stopPropagation={() => { recPlayerHostId = h.id; recPlayerOpenId = null; showRecPlayer = true; }}
-                    title={isEN ? 'Open recordings for this host' : 'Ver grabaciones de este host'}>►</button>
+                    title={$trad('Ver grabaciones de este host')}>►</button>
           </div>
         </div>
       {/each}
@@ -2489,8 +2485,8 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
       {#if !hosts.length}
         <div class="ns-empty-hosts">
           <span style="font-size:32px;">⊟</span>
-          <p>{isEN ? 'No hosts configured' : 'Sin hosts configurados'}</p>
-          <button class="ns-add-btn" on:click={() => abrirHostModal()}>{isEN ? '+ Add first host' : '+ Añadir primer host'}</button>
+          <p>{$trad('Sin hosts configurados')}</p>
+          <button class="ns-add-btn" on:click={() => abrirHostModal()}>{$trad('+ Añadir primer host')}</button>
         </div>
       {/if}
 
@@ -2506,19 +2502,19 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
           <div class="ns-welcome-ico" style="animation: host-hover 3s ease-in-out infinite;">
             <Rocket size={48} color="var(--acc)"/>
           </div>
-          <h3 class="ns-welcome-title">NexShell — {isEN ? 'Smart Shell' : 'Shell Inteligente'}</h3>
-          <p class="ns-welcome-sub">{isEN ? 'Connect to a host to start. Lucy co-pilots every session.' : 'Conecta a un host para comenzar. Lucy co-pilota cada sesión.'}</p>
+          <h3 class="ns-welcome-title">NexShell — {$trad('Shell Inteligente')}</h3>
+          <p class="ns-welcome-sub">{$trad('Conecta a un host para comenzar. Lucy co-pilota cada sesión.')}</p>
           <div class="ns-caps-grid">
-            <div class="ns-cap-item"><span style="color:var(--txt2);"><Hash size={18}/></span><span>{isEN ? 'Exit code + duration per command' : 'Exit code + duración por comando'}</span></div>
-            <div class="ns-cap-item"><span style="color:var(--txt2);"><GitBranch size={18}/></span><span>{isEN ? 'Git, K8s, Docker context on connect' : 'Contexto Git, K8s, Docker al conectar'}</span></div>
-            <div class="ns-cap-item"><span style="color:var(--txt2);"><Sparkles size={18}/></span><span>{isEN ? 'Real-time AI autocomplete' : 'Autocompletado IA en tiempo real'}</span></div>
-            <div class="ns-cap-item"><span style="color:var(--txt2);"><Mic size={18}/></span><span>{isEN ? 'Natural language commands' : 'Órdenes en lenguaje natural'}</span></div>
-            <div class="ns-cap-item"><span style="color:var(--txt2);"><Timer size={18}/></span><span>{isEN ? 'Background tasks (Ctrl+Enter)' : 'Tareas en background (Ctrl+Enter)'}</span></div>
-            <div class="ns-cap-item"><span style="color:var(--txt2);"><Radio size={18}/></span><span>{isEN ? 'Simultaneous multi-host broadcast' : 'Broadcast multi-host simultáneo'}</span></div>
-            <div class="ns-cap-item"><span style="color:var(--txt2);"><Globe size={18}/></span><span>{isEN ? 'Reads URL docs in context' : 'Lee documentación de URLs en contexto'}</span></div>
-            <div class="ns-cap-item"><span style="color:var(--txt2);"><BookMarked size={18}/></span><span>{isEN ? 'Playbooks: script sequences' : 'Playbooks: secuencias de comandos'}</span></div>
-            <div class="ns-cap-item"><span style="color:var(--txt2);"><FolderSync size={18}/></span><span>{isEN ? 'File transfer' : 'Transferencia de archivos'}</span></div>
-            <div class="ns-cap-item"><span style="color:var(--txt2);"><Activity size={18}/></span><span>{isEN ? 'Real-time log tailing' : 'Log tail en tiempo real'}</span></div>
+            <div class="ns-cap-item"><span style="color:var(--txt2);"><Hash size={18}/></span><span>{$trad('Exit code + duración por comando')}</span></div>
+            <div class="ns-cap-item"><span style="color:var(--txt2);"><GitBranch size={18}/></span><span>{$trad('Contexto Git, K8s, Docker al conectar')}</span></div>
+            <div class="ns-cap-item"><span style="color:var(--txt2);"><Sparkles size={18}/></span><span>{$trad('Autocompletado IA en tiempo real')}</span></div>
+            <div class="ns-cap-item"><span style="color:var(--txt2);"><Mic size={18}/></span><span>{$trad('Órdenes en lenguaje natural')}</span></div>
+            <div class="ns-cap-item"><span style="color:var(--txt2);"><Timer size={18}/></span><span>{$trad('Tareas en background (Ctrl+Enter)')}</span></div>
+            <div class="ns-cap-item"><span style="color:var(--txt2);"><Radio size={18}/></span><span>{$trad('Broadcast multi-host simultáneo')}</span></div>
+            <div class="ns-cap-item"><span style="color:var(--txt2);"><Globe size={18}/></span><span>{$trad('Lee documentación de URLs en contexto')}</span></div>
+            <div class="ns-cap-item"><span style="color:var(--txt2);"><BookMarked size={18}/></span><span>{$trad('Playbooks: secuencias de comandos')}</span></div>
+            <div class="ns-cap-item"><span style="color:var(--txt2);"><FolderSync size={18}/></span><span>{$trad('Transferencia de archivos')}</span></div>
+            <div class="ns-cap-item"><span style="color:var(--txt2);"><Activity size={18}/></span><span>{$trad('Log tail en tiempo real')}</span></div>
           </div>
         </div>
 
@@ -2534,7 +2530,7 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
               <span class="ns-stab-name">{s.host.name}</span>
               <span class="ns-stab-dot {s.connected?'ok':'wait'}">●</span>
               {#if s.running||s.lucyRunning}<span class="ns-stab-spin">◌</span>{/if}
-              <button class="ns-stab-close" on:click|stopPropagation={() => { rsDetenerTodosTails(s.id); cerrarShell(s.id); }} title="{isEN ? 'Close session' : 'Cerrar sesión'}"><X size={11}/></button>
+              <button class="ns-stab-close" on:click|stopPropagation={() => { rsDetenerTodosTails(s.id); cerrarShell(s.id); }} title="{$trad('Cerrar sesión')}"><X size={11}/></button>
             </div>
           {/each}
         </div>
@@ -2574,11 +2570,11 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
             </div>
             <div style="display:flex;gap:5px;align-items:center;">
               <!-- ── Group 1: Terminal view (search, clear, logs) ───────────── -->
-              <button class="rshell-feat-btn" title="{isEN ? 'Search output (Ctrl+F)' : 'Buscar en salida (Ctrl+F)'}"
+              <button class="rshell-feat-btn" title="{$trad('Buscar en salida (Ctrl+F)')}"
                 on:click={() => nsSearchOpen(s.id)}>⌕</button>
-              <button class="rshell-feat-btn rs-feat-danger" title="{isEN ? 'Clear terminal' : 'Limpiar terminal'}"
+              <button class="rshell-feat-btn rs-feat-danger" title="{$trad('Limpiar terminal')}"
                 on:click={() => rsClearHistory(s.id)}><Trash2 size={13}/></button>
-              <button class="rshell-feat-btn" title="{isEN ? 'Download debug logs' : 'Descargar logs de depuración'}"
+              <button class="rshell-feat-btn" title="{$trad('Descargar logs de depuración')}"
                 on:click={() => downloadDebugLogs()}><FileText size={13}/></button>
 
               <span class="rshell-toolbar-sep"></span>
@@ -2586,8 +2582,8 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
               <!-- ── Incident Mode (SRE) — structured troubleshooting session ── -->
               <button class="rshell-feat-btn {s.incidentId ? 'rs-feat-incident-active' : ''}"
                 title="{s.incidentId
-                    ? (isEN ? 'Toggle incident panel (session active)' : 'Abrir/cerrar panel de incidente (sesión activa)')
-                    : (isEN ? 'Start Incident Mode — structured troubleshooting' : 'Iniciar Modo Incidente — troubleshooting estructurado')}"
+                    ? ($trad('Abrir/cerrar panel de incidente (sesión activa)'))
+                    : ($trad('Iniciar Modo Incidente — troubleshooting estructurado'))}"
                 on:click={() => s.incidentId ? toggleIncidentPanel(s.id) : startIncidentMode(s.id)}>
                 <Siren size={13}/>
               </button>
@@ -2597,10 +2593,10 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
               <!-- ── Group 2: Remote operations (playbooks, files, tail, broadcast) ── -->
               <button class="rshell-feat-btn" title="Playbooks"
                 on:click={() => { playbookShellId=s.id; pbForm={name:'',commands:''}; showPlaybookModal=true; }}><BookOpen size={13}/></button>
-              <button class="rshell-feat-btn" title="{isEN ? 'File transfer' : 'Transferir archivos'}"
+              <button class="rshell-feat-btn" title="{$trad('Transferir archivos')}"
                 on:click={() => { ftShellId=s.id; ftDirection='upload'; ftLocalPath=''; ftRemotePath=''; ftResult=''; showFileTransferModal=true; }}><FolderSync size={13}/></button>
               <button class="rshell-feat-btn {rsTailActivo(s.id)?'rs-feat-active':''}"
-                title="{rsTailActivo(s.id)?(isEN?'Stop tail':'Detener tail'):(isEN?'Start log tail':'Iniciar tail de logs')}"
+                title="{rsTailActivo(s.id)?($trad('Detener tail')):($trad('Iniciar tail de logs'))}"
                 on:click={() => { if(rsTailActivo(s.id)) { rsDetenerTodosTails(s.id); } else { tailShellId=s.id; tailPath=''; showTailModal=true; } }}><Antenna size={13}/></button>
               {#if !s.rdpMode}
               <button class="rshell-feat-btn" title="Broadcast" on:click={() => abrirBroadcast(s.id)}><Radio size={13}/></button>
@@ -2611,12 +2607,12 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
               <span class="rshell-toolbar-sep"></span>
               <button class="rshell-feat-btn rdp-agent-btn"
                 class:rdp-agent-active={s.rdpAgentRunning}
-                title="{isEN ? 'RDP Computer-Use Agent — Lucy controls the GUI autonomously' : 'Agente GUI — Lucy controla el escritorio remoto de forma autónoma'}"
+                title="{$trad('Agente GUI — Lucy controla el escritorio remoto de forma autónoma')}"
                 on:click={() => { const sx=getShell(s.id); if(sx){sx.rdpAgentPanel=!sx.rdpAgentPanel; rshellSessions=[...rshellSessions];} }}>
                 <Cpu size={13} style="display:inline;vertical-align:middle;" />
-                {isEN ? 'Agent' : 'Agente'}{#if s.rdpAgentRunning} <Loader size={11} style="display:inline;margin-left:4px;animation:spin 1.2s linear infinite;" />{/if}
+                {$trad('Agente')}{#if s.rdpAgentRunning} <Loader size={11} style="display:inline;margin-left:4px;animation:spin 1.2s linear infinite;" />{/if}
               </button>
-              <button class="rshell-feat-btn rdp-reconnect-btn" title="{isEN ? 'Open new RDP session' : 'Abrir nueva sesión RDP'}"
+              <button class="rshell-feat-btn rdp-reconnect-btn" title="{$trad('Abrir nueva sesión RDP')}"
                 on:click={() => invoke('launch_rdp', { host: s.host.host, port: s.host.port || 3389 }).catch(e => toast(String(e), 'error'))}>
                 ↗ RDP
               </button>
@@ -2630,14 +2626,14 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
             <span class="ns-search-ico">⌕</span>
             <input id="ns-sf-{s.id}"
               class="ns-search-input"
-              placeholder="{isEN ? 'Search output…' : 'Buscar en salida…'}"
+              placeholder="{$trad('Buscar en salida…')}"
               bind:value={nsSearch[s.id].query}
               on:input={() => { nsSearch = { ...nsSearch, [s.id]: { ...nsSearch[s.id], currentIdx: 0 } }; }}
               on:keydown={(e) => nsSearchKeydown(e, s.id)} />
             {#if nsSearch[s.id].query.trim()}
               {@const idxs = nsGetMatchIdxs(s.id, nsSearch[s.id].query)}
               <span class="ns-search-count" class:ns-search-zero={!idxs.length}>
-                {idxs.length ? `${Math.min(nsSearch[s.id].currentIdx + 1, idxs.length)}/${idxs.length}` : (isEN ? '0 matches' : '0 coincidencias')}
+                {idxs.length ? `${Math.min(nsSearch[s.id].currentIdx + 1, idxs.length)}/${idxs.length}` : ($trad('0 coincidencias'))}
               </span>
               <button class="ns-search-nav" on:click={() => nsSearchNav(s.id, -1)} title="Anterior (Shift+Enter)">↑</button>
               <button class="ns-search-nav" on:click={() => nsSearchNav(s.id, 1)} title="Siguiente (Enter)">↓</button>
@@ -2651,7 +2647,7 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
           <div class="rdp-banner">
             <span class="rdp-banner-ico">⊡</span>
             <span class="rdp-banner-txt">
-              {isEN ? 'RDP Clipboard Copilot — Lucy generates commands. Copy them into the RDP window, paste results back.' : 'Copiloto RDP — Lucy genera comandos. Cópialos en la ventana RDP y pega el resultado aquí.'}
+              {$trad('Copiloto RDP — Lucy genera comandos. Cópialos en la ventana RDP y pega el resultado aquí.')}
             </span>
           </div>
           {/if}
@@ -2675,7 +2671,7 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
             <div class="rdp-agent-config-row">
               <Plug size={14} style="color:#8b5cf6;flex-shrink:0;margin-right:4px;" />
               <span style="font-size:11px;color:#888;flex-shrink:0;">
-                {isEN ? 'Vision Engine:' : 'Motor de Visión:'}
+                {$trad('Motor de Visión:')}
               </span>
               <!-- Fixed to Claude Sonnet 4.5 — empirically the most reliable for GUI
                    Computer Use (OSWorld benchmark leader, ~5x cheaper than Opus,
@@ -2683,12 +2679,10 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
                    picking a weaker model for this specialized task. -->
               <span
                 class="rdp-agent-model-fixed"
-                title={isEN
-                    ? 'Claude Sonnet 4.5 — specialized for Computer Use. Fixed for reliability.'
-                    : 'Claude Sonnet 4.5 — especializado en Computer Use. Fijo por confiabilidad.'}
+                title={$trad('Claude Sonnet 4.5 — especializado en Computer Use. Fijo por confiabilidad.')}
               >
                 ◉ Claude Sonnet 4.5
-                <span style="font-size:9px;color:#666;margin-left:4px;">({isEN ? 'locked' : 'fijo'})</span>
+                <span style="font-size:9px;color:#666;margin-left:4px;">({$trad('fijo')})</span>
               </span>
 
             </div>
@@ -2707,11 +2701,11 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
               <button class="rdp-agent-run-btn"
                 disabled={!nsInputGet(s.id, 'rdpAgentTask').trim()}
                 on:click={() => startRdpAgent(s.id)}>
-                <Play size={13} style="display:inline;margin-right:4px;" /> {isEN ? 'Run' : 'Ejecutar'}
+                <Play size={13} style="display:inline;margin-right:4px;" /> {$trad('Ejecutar')}
               </button>
               {:else}
               <button class="rdp-agent-stop-btn" on:click={() => stopRdpAgent(s.id)}>
-                <Pause size={13} style="display:inline;margin-right:4px;" /> {isEN ? 'Stop' : 'Detener'}
+                <Pause size={13} style="display:inline;margin-right:4px;" /> {$trad('Detener')}
               </button>
               {/if}
             </div>
@@ -2728,7 +2722,7 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
                   alt="RDP screen"
                 />
                 <div class="rdp-agent-screen-label">
-                  {isEN ? 'Latest frame' : 'Último frame'}
+                  {$trad('Último frame')}
                   {#if s.rdpAgentRunning}<span class="rdp-agent-pulse">●</span>{/if}
                 </div>
               </div>
@@ -2742,16 +2736,16 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
                   {:else if entry.kind === 'text'}
                   <div class="rdpa-entry rdpa-text"><MessageCircle size={12} style="display:inline;margin-right:3px;" /> {entry.detail}</div>
                   {:else if entry.kind === 'screenshot'}
-                  <div class="rdpa-entry rdpa-shot"><Camera size={12} style="display:inline;margin-right:3px;" /> {isEN ? 'Screenshot captured' : 'Captura tomada'}</div>
+                  <div class="rdpa-entry rdpa-shot"><Camera size={12} style="display:inline;margin-right:3px;" /> {$trad('Captura tomada')}</div>
                   {:else if entry.kind === 'done'}
-                  <div class="rdpa-entry rdpa-done"><CheckCircle size={12} style="display:inline;margin-right:3px;" /> {entry.detail || (isEN ? 'Task complete' : 'Tarea completa')}</div>
+                  <div class="rdpa-entry rdpa-done"><CheckCircle size={12} style="display:inline;margin-right:3px;" /> {entry.detail || ($trad('Tarea completa'))}</div>
                   {:else if entry.kind === 'error'}
                   <div class="rdpa-entry rdpa-error"><AlertCircle size={12} style="display:inline;margin-right:3px;" /> {entry.detail}</div>
                   {/if}
                 {/each}
                 {#if s.rdpAgentRunning}
                 <div class="rdpa-entry rdpa-thinking">
-                  <span class="rdpa-dots">···</span> {isEN ? 'Working…' : 'Trabajando…'}
+                  <span class="rdpa-dots">···</span> {$trad('Trabajando…')}
                 </div>
                 {/if}
               </div>
@@ -2761,10 +2755,8 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
             <!-- How-it-works hint (shown when no log yet) -->
             {#if !s.rdpAgentLog.length && !s.rdpAgentRunning}
             <div class="rdp-agent-hint">
-              <strong>{isEN ? 'How it works:' : 'Cómo funciona:'}</strong>
-              {isEN
-                ? 'Lucy uses Claude\'s native Computer Use API to take screenshots of the mstsc window, then autonomously clicks, types and navigates to complete your task. The agentic loop runs up to 20 steps. Check Claude API health status before running.'
-                : 'Lucy usa la API Computer Use nativa de Claude para capturar la ventana mstsc y luego hace clic, escribe y navega de forma autónoma para completar tu tarea. El loop agentic ejecuta hasta 20 pasos. Verifica el estado de la API de Claude antes de ejecutar.'}
+              <strong>{$trad('Cómo funciona:')}</strong>
+              {$trad('Lucy usa la API Computer Use nativa de Claude para capturar la ventana mstsc y luego hace clic, escribe y navega de forma autónoma para completar tu tarea. El loop agentic ejecuta hasta 20 pasos. Verifica el estado de la API de Claude antes de ejecutar.')}
             </div>
             {/if}
           </div>
@@ -2782,7 +2774,7 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
           <div class="rshell-out" id="rshell-out-{s.id}">
             {#if s.history.some(e => e.restored)}
               <div style="font-size:10px;color:#1e3a5f;padding:4px 10px;border-bottom:1px solid #0f1a2e;opacity:0.7;">
-                ↻ {isEN ? 'Conversation restored from previous session' : 'Conversación restaurada de sesión anterior'}
+                ↻ {$trad('Conversación restaurada de sesión anterior')}
               </div>
             {/if}
             {#if nsHiddenCount(s.history, s.id) > 0}
@@ -2799,11 +2791,11 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
                 {#if entry.type === 'cmd'}
                   <span class="rsl-prompt">$</span><span class="rsl-cmd">{entry.text.replace(/^\$ /,'')}</span>
                   <span class="ns-cmd-acts">
-                    <button class="ns-cmd-act" type="button" title={isEN ? 'Copy command' : 'Copiar comando'}
+                    <button class="ns-cmd-act" type="button" title={$trad('Copiar comando')}
                       on:click={() => nsCmdCopy(entry.id, entry.text.replace(/^\$ /,''))}>{_nsCopiedId === entry.id ? '✓' : '⧉'}</button>
-                    <button class="ns-cmd-act" type="button" title={isEN ? 'Re-run (prefills the box)' : 'Re-ejecutar (lo deja en la barra)'}
+                    <button class="ns-cmd-act" type="button" title={$trad('Re-ejecutar (lo deja en la barra)')}
                       on:click={() => nsApplyFix(s.id, entry.text.replace(/^\$ /,''))}>↻</button>
-                    <button class="ns-cmd-act" type="button" title={isEN ? 'Ask Lucy to explain this' : 'Pide a Lucy que lo explique'}
+                    <button class="ns-cmd-act" type="button" title={$trad('Pide a Lucy que lo explique')}
                       on:click={() => nsCmdExplain(s.id, entry.text.replace(/^\$ /,''))}>?</button>
                   </span>
                 {:else if entry.type === 'lucy-in'}
@@ -2845,7 +2837,7 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
                       <code class="nfx-cmd">{entry.fix.fixCmd}</code>
                     </div>
                     <button class="nfx-btn" type="button" on:click={() => nsApplyFix(s.id, entry.fix.fixCmd)}>
-                      {isEN ? 'Apply fix' : 'Aplicar fix'}
+                      {$trad('Aplicar fix')}
                     </button>
                   </div>
                 {:else if entry.type === 'err'}
@@ -2870,10 +2862,10 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
               <div class="rsl-live-block">
                 <div class="rsl-live-hdr">
                   <span class="rsl-live-dot"></span>
-                  <span class="rsl-live-label">{isEN ? 'Running…' : 'En ejecución…'}</span>
+                  <span class="rsl-live-label">{$trad('En ejecución…')}</span>
                   {#if s._streamWatchdogBudget && s._streamWatchdogBudget > 5 * 60000}
                     <span class="rsl-watchdog"
-                          title={isEN ? 'Adaptive silence watchdog — this command type gets a longer grace window before it is considered hung' : 'Watchdog adaptativo de silencio — este tipo de comando recibe una ventana más larga antes de considerarse colgado'}>⏱ {Math.round(s._streamWatchdogBudget / 60000)}m</span>
+                          title={$trad('Watchdog adaptativo de silencio — este tipo de comando recibe una ventana más larga antes de considerarse colgado')}>⏱ {Math.round(s._streamWatchdogBudget / 60000)}m</span>
                   {/if}
                   <button class="rsl-live-input-btn"
                     on:click={() => { const sx=getShell(s.id); if(sx){ sx.waitingForInput=!sx.waitingForInput; sx.promptHint='Input'; sx.promptIsPassword=false; rshellSessions=[...rshellSessions]; } }}>⌨ Input</button>
@@ -2886,7 +2878,7 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
                     <input class="rsl-iprompt-input" type={s.promptIsPassword ? 'password' : 'text'}
                       bind:value={nsInput[s.id].interactiveInput}
                       on:keydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); rsEnviarInput(s.id); } else if (e.key === 'Escape') { const sx=getShell(s.id); if(sx){sx.waitingForInput=false;rshellSessions=[...rshellSessions];} } }}
-                      placeholder={s.promptHint || (isEN ? 'Type and press Enter…' : 'Escribe y presiona Enter…')}>
+                      placeholder={s.promptHint || ($trad('Escribe y presiona Enter…'))}>
                     <button class="rsl-iprompt-send" on:click={() => rsEnviarInput(s.id)}>↵</button>
                   </div>
                 {/if}
@@ -2895,7 +2887,7 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
               <!-- Guard evaluando / conectando — gap visual entre enviar y primer chunk -->
               <div class="rshell-line rsl-pending">
                 <span class="rsl-spin" style="opacity:0.5;">◌</span>
-                <span style="color:var(--txt3);font-size:11px;">{isEN ? 'Checking…' : 'Verificando…'}</span>
+                <span style="color:var(--txt3);font-size:11px;">{$trad('Verificando…')}</span>
               </div>
             {:else if s.lucyRunning}
               <div class="rshell-line rsl-running">
@@ -2908,21 +2900,21 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
           <!-- ── RDP CLIPBOARD STRIP ────────────────────────────────────────── -->
           {#if s.rdpMode && s.rdpClipboardCmd}
           <div class="rdp-clip-strip">
-            <span class="rdp-clip-label">📋 {isEN ? 'Copy & paste in RDP:' : 'Copia y pega en RDP:'}</span>
+            <span class="rdp-clip-label">📋 {$trad('Copia y pega en RDP:')}</span>
             <code class="rdp-clip-cmd">{s.rdpClipboardCmd}</code>
             <button class="rdp-clip-copy" on:click={() => {
-              navigator.clipboard.writeText(s.rdpClipboardCmd).then(() => toast(isEN ? 'Copied to clipboard' : 'Copiado al portapapeles', 'success'));
-            }}>📋 {isEN ? 'Copy' : 'Copiar'}</button>
+              navigator.clipboard.writeText(s.rdpClipboardCmd).then(() => toast($trad('Copiado al portapapeles'), 'success'));
+            }}>📋 {$trad('Copiar')}</button>
             <button class="rdp-clip-dismiss" on:click={() => { const sx=getShell(s.id); if(sx){sx.rdpClipboardCmd=null;rshellSessions=[...rshellSessions];} }} title="Descartar">✕</button>
           </div>
           {/if}
 
           <!-- Toggle bar para colapsar/expandir inputs -->
           <div class="ns-input-toggle-bar" role="button" tabindex="0" on:click={() => nsInputsCollapsed = !nsInputsCollapsed} on:keydown={(e) => { if(e.key==='Enter'||e.key===' ') nsInputsCollapsed = !nsInputsCollapsed; }}
-            title={nsInputsCollapsed ? (isEN ? 'Expand command panel' : 'Expandir panel de comandos') : (isEN ? 'Collapse command panel' : 'Colapsar panel de comandos')}>
-            <span class="ns-input-toggle-ico">{nsInputsCollapsed ? (isEN ? '▲ Show commands' : '▲ Mostrar comandos') : (isEN ? '▼ Hide commands' : '▼ Ocultar comandos')}</span>
+            title={nsInputsCollapsed ? ($trad('Expandir panel de comandos')) : ($trad('Colapsar panel de comandos'))}>
+            <span class="ns-input-toggle-ico">{nsInputsCollapsed ? ($trad('▲ Mostrar comandos')) : ($trad('▼ Ocultar comandos'))}</span>
             {#if nsInputsCollapsed && s.connected}
-              <span class="ns-input-toggle-hint">{isEN ? 'Click or Ctrl+I to expand · Type to auto-open' : 'Click o Ctrl+I para expandir · Escribe para abrir automáticamente'}</span>
+              <span class="ns-input-toggle-hint">{$trad('Click o Ctrl+I para expandir · Escribe para abrir automáticamente')}</span>
             {/if}
           </div>
 
@@ -2935,12 +2927,12 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
             <div class="rshell-input-wrap rdp-result-wrap">
               <div class="rshell-input-label">
                 <span class="rs-label-ico">📥</span>
-                <span>{isEN ? 'Paste result from RDP:' : 'Pega el resultado desde RDP:'}</span>
-                <span class="rs-hint">{isEN ? 'Run the command above in the RDP window, copy the output and paste it here' : 'Ejecuta el comando de arriba en la ventana RDP, copia el resultado y pégalo aquí'}</span>
+                <span>{$trad('Pega el resultado desde RDP:')}</span>
+                <span class="rs-hint">{$trad('Ejecuta el comando de arriba en la ventana RDP, copia el resultado y pégalo aquí')}</span>
               </div>
               <div class="rshell-input-row" style="align-items:flex-end;">
                 <textarea class="rsi-box rdp-result-box" rows="3"
-                  placeholder={isEN ? 'Paste output here and press Enter…' : 'Pega la salida aquí y presiona Enter…'}
+                  placeholder={$trad('Pega la salida aquí y presiona Enter…')}
                   bind:value={nsInput[s.id].rdpResultIn}
                   on:keydown={(e) => {
                     if (e.key === 'Enter' && !e.shiftKey) {
@@ -3028,8 +3020,8 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
                 <textarea class="rsi-box rs-lucy-box rs-lucy-ta" rows="1"
                   id={`ns-lucy-${s.id}`}
                   placeholder={s.rdpMode
-                    ? (isEN ? 'Ask Lucy, describe what you see, or paste a screenshot…' : 'Pregunta a Lucy, describe lo que ves, o pega una captura…')
-                    : (isEN ? '/fix [problem] for auto-troubleshoot · or ask Lucy anything...' : '/fix [problema] para auto-diagnostico · o pregunta lo que sea a Lucy...')}
+                    ? ($trad('Pregunta a Lucy, describe lo que ves, o pega una captura…'))
+                    : ($trad('/fix [problema] para auto-diagnostico · o pregunta lo que sea a Lucy...'))}
                   bind:value={nsInput[s.id].lucyIn}
                   on:keydown={(e) => rsKeyLucy(e, s.id)}
                   on:input={(e) => { const el = e.currentTarget; el.style.height='auto'; el.style.height=Math.min(el.scrollHeight,140)+'px'; }}
@@ -3074,7 +3066,7 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
       {/each}
       <div style="border-top:1px solid var(--bdr);padding-top:12px;">
         <div style="margin-bottom:8px;">
-          <label style="font-size:11px;color:var(--txt3);display:block;margin-bottom:4px;" for="pb-name">{isEN ? 'Name' : 'Nombre'} del playbook</label>
+          <label style="font-size:11px;color:var(--txt3);display:block;margin-bottom:4px;" for="pb-name">{$trad('Nombre')} del playbook</label>
           <input id="pb-name" class="minp" bind:value={pbForm.name} placeholder="Diagnóstico de sistema">
         </div>
         <div>
@@ -3130,7 +3122,7 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
           <div style="display:flex;gap:6px;">
             <input id="ft-local" class="minp" style="flex:1;" bind:value={ftLocalPath}
               placeholder="C:\Users\tu\archivo.txt">
-            <button class="mbtn ghost" title="{isEN ? 'Select' : 'Seleccionar'} archivo" on:click={rsPickFile}><FolderOpen size={13}/></button>
+            <button class="mbtn ghost" title="{$trad('Seleccionar')} archivo" on:click={rsPickFile}><FolderOpen size={13}/></button>
           </div>
         </div>
         <div>
@@ -3149,7 +3141,7 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
           <div style="display:flex;gap:6px;">
             <input id="ft-local" class="minp" style="flex:1;" bind:value={ftLocalPath}
               placeholder="C:\\Users\\tu\\Descargas\\">
-            <button class="mbtn ghost" title="{isEN ? 'Select' : 'Seleccionar'} carpeta destino" on:click={async () => {
+            <button class="mbtn ghost" title="{$trad('Seleccionar')} carpeta destino" on:click={async () => {
               const p = await invoke('pick_file_path').catch(()=>'');
               if(p) ftLocalPath = p.substring(0, p.lastIndexOf('\\') + 1) || p;
             }}><FolderOpen size={13}/></button>
@@ -3209,7 +3201,7 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
     </div>
     <div style="display:flex;flex-direction:column;gap:14px;">
       <div>
-        <label for={'bc-cmd-'+(broadcastShellId||'x')} style="font-size:11px;color:var(--txt3);display:block;margin-bottom:4px;">{isEN ? 'Command to execute on all selected hosts' : 'Comando a ejecutar en todos los hosts seleccionados'}</label>
+        <label for={'bc-cmd-'+(broadcastShellId||'x')} style="font-size:11px;color:var(--txt3);display:block;margin-bottom:4px;">{$trad('Comando a ejecutar en todos los hosts seleccionados')}</label>
         <input id={'bc-cmd-'+(broadcastShellId||'x')} class="minp" style="font-family:var(--mono);font-size:12px;"
           placeholder="systemctl status nginx · uptime · df -h ..."
           bind:value={broadcastCmd}>
@@ -3235,7 +3227,7 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
       </div>
       {#if broadcastResults.length > 0}
         <div>
-          <span style="font-size:11px;color:var(--txt3);display:block;margin-bottom:4px;">{isEN ? 'Results' : 'Resultados'} ({broadcastResults.filter(r=>r.exitCode===0).length}/{broadcastResults.length} OK)</span>
+          <span style="font-size:11px;color:var(--txt3);display:block;margin-bottom:4px;">{$trad('Resultados')} ({broadcastResults.filter(r=>r.exitCode===0).length}/{broadcastResults.length} OK)</span>
           <div class="bc-results">
             {#each broadcastResults as r}
               <div class="bc-result-row {r.exitCode === 0 ? 'bc-ok' : r.error ? 'bc-fail' : 'bc-warn'}">
@@ -3267,7 +3259,6 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
   assessment={guardAssessment}
   hostName={guardHostName}
   source={guardSource}
-  {isEN}
   on:confirm={guardConfirm}
   on:cancel={guardCancel}
 />
@@ -3276,25 +3267,25 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
 <!-- ── In-app two-step prompt for starting an incident (replaces window.prompt()) ── -->
 <PromptModal
   open={incidentPrompt?.step === 'title'}
-  title={isEN ? 'Start incident' : 'Iniciar incidente'}
-  label={isEN ? 'Incident title (1 line)' : 'Título del incidente (1 línea)'}
-  defaultValue={isEN ? 'Investigating…' : 'Investigando…'}
-  placeholder={isEN ? 'Brief summary' : 'Resumen breve'}
-  confirmLabel={isEN ? 'Next' : 'Siguiente'}
-  cancelLabel={isEN ? 'Cancel' : 'Cancelar'}
+  title={$trad('Iniciar incidente')}
+  label={$trad('Título del incidente (1 línea)')}
+  defaultValue={$trad('Investigando…')}
+  placeholder={$trad('Resumen breve')}
+  confirmLabel={$trad('Siguiente')}
+  cancelLabel={$trad('Cancelar')}
   on:submit={(e) => onIncidentPromptSubmit(e.detail)}
   on:cancel={() => incidentPrompt = null}
 />
 <PromptModal
   open={incidentPrompt?.step === 'description'}
-  title={isEN ? 'Start incident' : 'Iniciar incidente'}
-  label={isEN ? 'Context / symptoms (optional)' : 'Contexto / síntomas (opcional)'}
+  title={$trad('Iniciar incidente')}
+  label={$trad('Contexto / síntomas (opcional)')}
   defaultValue=""
-  placeholder={isEN ? 'What are you seeing? Any errors, timing, scope…' : '¿Qué estás viendo? Errores, timing, alcance…'}
+  placeholder={$trad('¿Qué estás viendo? Errores, timing, alcance…')}
   multiline={true}
   required={false}
-  confirmLabel={isEN ? 'Start' : 'Iniciar'}
-  cancelLabel={isEN ? 'Back' : 'Atrás'}
+  confirmLabel={$trad('Iniciar')}
+  cancelLabel={$trad('Atrás')}
   on:submit={(e) => onIncidentPromptSubmit(e.detail)}
   on:cancel={() => incidentPrompt = null}
 />

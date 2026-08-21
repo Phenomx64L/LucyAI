@@ -1,4 +1,6 @@
 <script lang="ts">
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     import { createEventDispatcher, tick } from 'svelte';
     import OctagonX from '@tabler/icons-svelte/icons/octagon-minus';
     // v1.4.20 — Topbar / tabs / win-controls layout extracted to a single
@@ -285,10 +287,10 @@
                          Replaces the static purple dot so the user can scan
                          the strip and tell which tab is busy at a glance. -->
                     <div class="tdot tdot-{tabState(tab)}"
-                         title={tabState(tab) === 'processing' ? (isEN ? 'Lucy is working' : 'Lucy procesando')
-                              : tabState(tab) === 'fork'       ? (isEN ? 'Sub-agent running' : 'Sub-agente activo')
-                              : tabState(tab) === 'error'      ? (isEN ? 'Last turn had an error' : 'Último turno con error')
-                              : tabState(tab) === 'stale'      ? (isEN ? 'Inactive >30 min' : 'Inactiva >30 min')
+                         title={tabState(tab) === 'processing' ? ($trad('Lucy procesando'))
+                              : tabState(tab) === 'fork'       ? ($trad('Sub-agente activo'))
+                              : tabState(tab) === 'error'      ? ($trad('Último turno con error'))
+                              : tabState(tab) === 'stale'      ? ($trad('Inactiva >30 min'))
                               : ''}></div>
                     {#if renamingTabId === tab.id}
                         <input
@@ -303,14 +305,14 @@
                         <span class="tab-title-txt"
                               role="button" tabindex="0"
                               on:dblclick|stopPropagation={() => dispatch('startRename', { tabId: tab.id })}
-                              title={`${tab.title}\n(${isEN ? 'Double-click to rename' : 'Doble clic para renombrar'})`}>
+                              title={`${tab.title}\n(${$trad('Doble clic para renombrar')})`}>
                             {tab.title}
                         </span>
                         <!-- Quick-win A — Model shorthand pill. 3-char code
                              keeps it from competing with the title for space. -->
                         {#if tab.selectedModel && activeTabId === tab.id}
                             <span class="tab-model-pill"
-                                  title={`${isEN ? 'Active model' : 'Modelo activo'}: ${tab.selectedModel}`}>
+                                  title={`${$trad('Modelo activo')}: ${tab.selectedModel}`}>
                                 {modelShort(tab.selectedModel)}
                             </span>
                         {/if}
@@ -322,25 +324,25 @@
                 <!-- Default slot = the menu contents. Order copies common
                      browser patterns (Chrome / Firefox / VSCode). -->
                 <button on:click={() => dispatch('startRename', { tabId: tab.id })}>
-                    {isEN ? 'Rename' : 'Renombrar'}
+                    {$trad('Renombrar')}
                 </button>
                 <button on:click={() => dispatch('duplicateTab', { tabId: tab.id })}>
-                    {isEN ? 'Duplicate tab' : 'Duplicar pestaña'}
+                    {$trad('Duplicar pestaña')}
                 </button>
                 <hr />
                 {#if tabs.length > 1}
                 <button on:click={() => dispatch('closeOthers', { tabId: tab.id })}>
-                    {isEN ? 'Close other tabs' : 'Cerrar otras pestañas'}
+                    {$trad('Cerrar otras pestañas')}
                 </button>
                 {/if}
                 {#if idx < tabs.length - 1}
                 <button on:click={() => dispatch('closeToRight', { tabId: tab.id })}>
-                    {isEN ? 'Close tabs to the right' : 'Cerrar pestañas a la derecha'}
+                    {$trad('Cerrar pestañas a la derecha')}
                 </button>
                 {/if}
                 <button class="lcm-danger"
                         on:click={(e) => onCloseTab(tab.id, e)}>
-                    {isEN ? 'Close' : 'Cerrar'}
+                    {$trad('Cerrar')}
                 </button>
                 </LucyContextMenu>
             {/each}
@@ -403,7 +405,7 @@
     <div class="drag-sp" data-tauri-drag-region></div>
     <div class="win-controls">
         <button class="win-btn-icon panic-btn" on:click={() => dispatch('panic')}
-                title={isEN ? 'Stop All Processes (Panic)' : 'Detener todo (Pánico)'}>
+                title={$trad('Detener todo (Pánico)')}>
             <OctagonX size={14} stroke={2.2} />
         </button>
         <button class="win-btn-icon" on:click={() => dispatch('toggleFocus')}
@@ -447,32 +449,32 @@
                     {modelShort(hoverTab.selectedModel)}
                 </span>
                 {#if hoverStats.turns > 0}
-                    <span class="tp-pill" title={isEN ? 'Turns in this tab' : 'Turnos en esta pestaña'}>
-                        {hoverStats.turns} {isEN ? 'turns' : 'turnos'}
+                    <span class="tp-pill" title={$trad('Turnos en esta pestaña')}>
+                        {hoverStats.turns} {$trad('turnos')}
                     </span>
                 {/if}
                 {#if hoverStats.tokens > 0}
-                    <span class="tp-pill" title={isEN ? 'Tokens used in this tab' : 'Tokens usados en esta pestaña'}>
+                    <span class="tp-pill" title={$trad('Tokens usados en esta pestaña')}>
                         {fmtTokens(hoverStats.tokens)} tok
                     </span>
                 {/if}
                 {#if hoverStats.cost > 0}
-                    <span class="tp-pill tp-pill-cost" title={isEN ? 'Cost accrued in this tab' : 'Costo acumulado en esta pestaña'}>
+                    <span class="tp-pill tp-pill-cost" title={$trad('Costo acumulado en esta pestaña')}>
                         {fmtCost(hoverStats.cost)}
                     </span>
                 {/if}
                 {#if hoverState !== 'idle'}
                     <span class="tp-pill tp-pill-state tp-pill-{hoverState}">
-                        {hoverState === 'processing' ? (isEN ? 'working' : 'trabajando')
-                       : hoverState === 'fork'       ? (isEN ? 'fork active' : 'fork activo')
-                       : hoverState === 'error'      ? (isEN ? 'error' : 'error')
+                        {hoverState === 'processing' ? ($trad('trabajando'))
+                       : hoverState === 'fork'       ? ($trad('fork activo'))
+                       : hoverState === 'error'      ? ($trad('error'))
                        : hoverState === 'stale'      ? (isEN ? `${hoverStats.ageMin} min idle` : `${hoverStats.ageMin} min`) : ''}
                     </span>
                 {/if}
             </div>
         {/if}
         {#if hoverPreview.lines.length === 0}
-            <div class="tp-empty">{isEN ? '(empty — no messages yet)' : '(vacía — sin mensajes)'}</div>
+            <div class="tp-empty">{$trad('(vacía — sin mensajes)')}</div>
         {:else}
             {#each hoverPreview.lines as line}
                 <div class="tp-line tp-{line.role}">

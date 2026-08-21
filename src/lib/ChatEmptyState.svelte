@@ -12,6 +12,8 @@
      surface), one capability tip (showcase a Lucy-only feature). The
      mix communicates depth without information overload. -->
 <script lang="ts">
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     import { createEventDispatcher } from 'svelte';
     // v1.7.32 — Brand mark uses the real Lucy avatar instead of a unicode
     // ✦ that overlapped visually with Google Gemini's brand glyph.
@@ -85,7 +87,7 @@
     <h1 class="ces-title">Lucy</h1>
     <p class="ces-greet">
         {greeting()}{userName ? ', ' : ''}<strong>{userName}</strong>
-        <span class="ces-sub">{isEN ? '· what can I help with?' : '· ¿en qué te ayudo?'}</span>
+        <span class="ces-sub">{$trad('· ¿en qué te ayudo?')}</span>
     </p>
 
     <div class="ces-hint">
@@ -97,7 +99,7 @@
     </div>
 
     <div class="ces-suggestions" role="list"
-         aria-label={isEN ? 'Suggested starters' : 'Sugerencias para arrancar'}>
+         aria-label={$trad('Sugerencias para arrancar')}>
         {#each rendered as s}
             <!-- v1.7.69 — a11y: a `<button role="listitem">` is invalid
                  (listitem is a non-interactive role and buttons are

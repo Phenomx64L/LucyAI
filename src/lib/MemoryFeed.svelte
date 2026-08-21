@@ -16,13 +16,14 @@
 
      Hidden when sidebar is collapsed (no horizontal space). -->
 <script lang="ts">
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     import { onMount, onDestroy, createEventDispatcher } from 'svelte';
     import { invoke } from '@tauri-apps/api/core';
     // v1.7.32 — Brain glyph from Tabler instead of the 🧠 emoji
     // (renders inconsistently per OS, doesn't match Lucy's icon vocabulary).
     import Brain from '@tabler/icons-svelte/icons/brain';
 
-    export let isEN = false;
     export let sidebarCollapsed = false;
 
     // v1.7.37 — Default-collapsed expand toggle. User reported the
@@ -72,7 +73,7 @@
     function timeAgo(unixSec: number): string {
         const now = Math.floor(Date.now() / 1000);
         const d = now - unixSec;
-        if (d < 60)     return isEN ? 'now'   : 'ahora';
+        if (d < 60)     return $trad('ahora');
         if (d < 3600)   return `${Math.floor(d/60)}m`;
         if (d < 86400)  return `${Math.floor(d/3600)}h`;
         if (d < 604800) return `${Math.floor(d/86400)}d`;
@@ -99,10 +100,10 @@
                 on:click={toggleExpanded}
                 aria-expanded={expanded}
                 title={expanded
-                    ? (isEN ? 'Collapse recent memory' : 'Colapsar memoria reciente')
-                    : (isEN ? 'Expand recent memory' : 'Expandir memoria reciente')}>
+                    ? ($trad('Colapsar memoria reciente'))
+                    : ($trad('Expandir memoria reciente'))}>
             <span class="mf-glyph"><Brain size={12} stroke={2}/></span>
-            <span class="mf-title">{isEN ? 'Recent memory' : 'Memoria reciente'}</span>
+            <span class="mf-title">{$trad('Memoria reciente')}</span>
             {#if memories.length > 0}
                 <span class="mf-count">{memories.length}</span>
             {/if}
@@ -118,7 +119,7 @@
                 </div>
             {:else if memories.length === 0}
                 <div class="mf-empty">
-                    {isEN ? 'No memories yet — Lucy will start remembering as you work.' : 'Sin memorias aún — Lucy empezará a recordar al trabajar.'}
+                    {$trad('Sin memorias aún — Lucy empezará a recordar al trabajar.')}
                 </div>
             {:else}
                 <div class="mf-list">

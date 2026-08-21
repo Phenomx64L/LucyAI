@@ -20,6 +20,8 @@
   Storage shape is documented in shell_recording.rs.
 -->
 <script lang="ts">
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     import { onMount, onDestroy, createEventDispatcher } from 'svelte';
     import { invoke } from '@tauri-apps/api/core';
 
@@ -124,8 +126,8 @@
         if (!await lucyConfirm(
             isEN ? `Delete recording #${rec.id}?` : `¿Borrar grabación #${rec.id}?`,
             { tone: 'danger',
-              description: isEN ? 'Cannot be undone.' : 'No se puede deshacer.',
-              confirmLabel: isEN ? 'Delete' : 'Borrar' })) return;
+              description: $trad('No se puede deshacer.'),
+              confirmLabel: $trad('Borrar') })) return;
         try {
             await invoke('shell_recording_delete', { recordingId: rec.id });
             if (selected?.id === rec.id) closeRecording();
@@ -135,7 +137,7 @@
 
     async function renameRecording(rec: ShellRecording): Promise<void> {
         const { lucyPrompt } = await import('$lib/dialog-service');
-        const next = await lucyPrompt(isEN ? 'New title' : 'Nuevo título',
+        const next = await lucyPrompt($trad('Nuevo título'),
             { defaultValue: rec.title });
         if (next == null) return;
         try {
@@ -232,7 +234,7 @@
     // ── Formatting helpers ─────────────────────────────────────────────
     function fmtDate(ts: number): string { return new Date(ts * 1000).toLocaleString(); }
     function fmtDuration(rec: ShellRecording): string {
-        if (!rec.ended_at) return isEN ? 'live' : 'en vivo';
+        if (!rec.ended_at) return $trad('en vivo');
         const s = rec.ended_at - rec.started_at;
         if (s < 60)   return `${s}s`;
         if (s < 3600) return `${Math.floor(s/60)}m ${s%60}s`;
@@ -286,24 +288,24 @@
     });
 </script>
 
-<div class="srp-overlay" role="dialog" aria-label={isEN ? 'Shell recording player' : 'Reproductor de grabaciones'}>
+<div class="srp-overlay" role="dialog" aria-label={$trad('Reproductor de grabaciones')}>
     <div class="srp-header">
         <div class="srp-title">
             <span class="srp-glyph">●</span>
-            <span>{isEN ? 'Shell recordings' : 'Grabaciones de shell'}</span>
+            <span>{$trad('Grabaciones de shell')}</span>
             <span class="srp-count">{recordings.length}</span>
         </div>
         <div class="srp-actions">
             <span class="srp-scope" role="tablist">
                 <button class:active={scope === 'all'} on:click={() => scope = 'all'}>
-                    {isEN ? 'All' : 'Todos'}
+                    {$trad('Todos')}
                 </button>
                 <button class:active={scope === 'host'} on:click={() => scope = 'host'}
                         disabled={!initialHostId}>
-                    {isEN ? 'This host' : 'Este host'}
+                    {$trad('Este host')}
                 </button>
             </span>
-            <button class="srp-btn" on:click={loadList} disabled={loadingList} title={isEN ? 'Refresh' : 'Recargar'}>↻</button>
+            <button class="srp-btn" on:click={loadList} disabled={loadingList} title={$trad('Recargar')}>↻</button>
             <button class="srp-btn srp-close" on:click={() => dispatch('close')} title="Esc">✕</button>
         </div>
     </div>
@@ -312,14 +314,12 @@
         <!-- LEFT — recordings list -->
         <aside class="srp-list-pane">
             {#if loadingList && recordings.length === 0}
-                <div class="srp-empty">{isEN ? 'Loading…' : 'Cargando…'}</div>
+                <div class="srp-empty">{$trad('Cargando…')}</div>
             {:else if listError}
                 <div class="srp-empty srp-err">{listError}</div>
             {:else if recordings.length === 0}
                 <div class="srp-empty">
-                    {isEN
-                        ? 'No recordings yet. Click ● REC on a shell card to start.'
-                        : 'Sin grabaciones todavía. Pulsa ● REC en una sesión para empezar.'}
+                    {$trad('Sin grabaciones todavía. Pulsa ● REC en una sesión para empezar.')}
                 </div>
             {:else}
                 <ul class="srp-list">
@@ -333,14 +333,14 @@
                                 </div>
                                 {#if r.title}<div class="srp-row-title">{r.title}</div>{/if}
                                 <div class="srp-row-meta">
-                                    <span>{r.event_count} {isEN ? 'events' : 'eventos'}</span>
+                                    <span>{r.event_count} {$trad('eventos')}</span>
                                     <span>{fmtBytes(r.byte_count)}</span>
                                     <span class="srp-row-when">{fmtDate(r.started_at)}</span>
                                 </div>
                             </button>
                             <div class="srp-row-actions">
-                                <button on:click|stopPropagation={() => renameRecording(r)} title={isEN ? 'Rename' : 'Renombrar'}>⚑</button>
-                                <button on:click|stopPropagation={() => deleteRecording(r)} title={isEN ? 'Delete' : 'Borrar'}>✕</button>
+                                <button on:click|stopPropagation={() => renameRecording(r)} title={$trad('Renombrar')}>⚑</button>
+                                <button on:click|stopPropagation={() => deleteRecording(r)} title={$trad('Borrar')}>✕</button>
                             </div>
                         </li>
                     {/each}
@@ -352,19 +352,17 @@
         <section class="srp-player-pane">
             {#if !selected}
                 <div class="srp-empty">
-                    {isEN
-                        ? 'Select a recording on the left to play.'
-                        : 'Selecciona una grabación a la izquierda para reproducir.'}
+                    {$trad('Selecciona una grabación a la izquierda para reproducir.')}
                 </div>
             {:else if loadingEvents}
-                <div class="srp-empty">{isEN ? 'Loading events…' : 'Cargando eventos…'}</div>
+                <div class="srp-empty">{$trad('Cargando eventos…')}</div>
             {:else}
                 <header class="srp-player-hdr">
                     <div class="srp-player-meta">
                         <strong>{selected.host_name || selected.session_id}</strong>
                         <span class="srp-tag-muted">{selected.host_type || ''}</span>
                         <span class="srp-tag-muted">{fmtDate(selected.started_at)}</span>
-                        <span class="srp-tag-muted">{events.length} {isEN ? 'events' : 'eventos'} · {fmtBytes(selected.byte_count)}</span>
+                        <span class="srp-tag-muted">{events.length} {$trad('eventos')} · {fmtBytes(selected.byte_count)}</span>
                     </div>
                     {#if selected.title}<div class="srp-player-title">⚑ {selected.title}</div>{/if}
                 </header>
@@ -393,7 +391,7 @@
                     {/each}
                     {#if renderedLines.length === 0}
                         <div class="srp-terminal-empty">
-                            {isEN ? 'No events at this time. Press Play.' : 'Sin eventos en este momento. Pulsa Play.'}
+                            {$trad('Sin eventos en este momento. Pulsa Play.')}
                         </div>
                     {/if}
                 </div>
@@ -413,9 +411,9 @@
                         <button class="srp-btn srp-btn-primary"
                                 on:click={() => isPlaying ? stopPlayback() : startPlayback()}
                                 disabled={totalDurationMs === 0}>
-                            {isPlaying ? '❚❚ ' + (isEN ? 'Pause' : 'Pausa') : '▶ ' + (isEN ? 'Play' : 'Play')}
+                            {isPlaying ? '❚❚ ' + ($trad('Pausa')) : '▶ ' + ($trad('Play'))}
                         </button>
-                        <button class="srp-btn" on:click={() => scrub(0)} title={isEN ? 'Restart' : 'Reiniciar'}>↺</button>
+                        <button class="srp-btn" on:click={() => scrub(0)} title={$trad('Reiniciar')}>↺</button>
                         <span class="srp-speed">
                             {#each [0.5, 1, 2, 5, 0] as s}
                                 <button class:active={speed === s}

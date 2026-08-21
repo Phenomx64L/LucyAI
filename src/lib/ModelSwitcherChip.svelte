@@ -21,6 +21,8 @@
        compact   — true = icon + 3-char code only; false = icon + label
 ─────────────────────────────────────────────────────────────────────── -->
 <script>
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     import { tick } from 'svelte';
     import { LLM_GROUPS, getModelDescription, getModelIcon } from '$lib/models.js';
 
@@ -62,7 +64,7 @@
 
     $: currentIcon  = getModelIcon(value);
     $: currentLabel = value ? getModelDescription(value, isEN)
-                            : (isEN ? 'Pick a model' : 'Elegir modelo');
+                            : ($trad('Elegir modelo'));
 
     function shortCode(id) {
         if (!id) return '—';
@@ -121,13 +123,13 @@
          on:contextmenu|preventDefault={closePicker}></div>
 
     <div class="msc-popover" role="listbox"
-         aria-label={isEN ? 'Model picker' : 'Selector de modelo'}>
+         aria-label={$trad('Selector de modelo')}>
         <div class="msc-search-row">
             <input bind:this={inputEl}
                    class="msc-search"
                    type="text"
                    bind:value={query}
-                   placeholder={isEN ? 'Search models…' : 'Buscar modelos…'} />
+                   placeholder={$trad('Buscar modelos…')} />
             <span class="msc-count">{filtered.length}</span>
         </div>
         <div class="msc-list">
@@ -145,7 +147,7 @@
                 </button>
             {/each}
             {#if filtered.length === 0}
-                <div class="msc-empty">{isEN ? 'No matches' : 'Sin coincidencias'}</div>
+                <div class="msc-empty">{$trad('Sin coincidencias')}</div>
             {/if}
         </div>
     </div>

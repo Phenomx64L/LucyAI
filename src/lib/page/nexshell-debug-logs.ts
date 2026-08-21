@@ -1,3 +1,6 @@
+// La interfaz en cinco idiomas. `tr` y no `$trad`: esto no es un
+// componente, así que no hay nada a lo que suscribirse. Ver `$lib/i18n`.
+import { tr } from '$lib/i18n';
 // ── NexShell debug logs (extracted from NexShellView.svelte, May 2026) ────
 //
 // Was 80 lines of state + logic at the top of a 3,649-line file. Extracted
@@ -74,7 +77,7 @@ export function downloadDebugLogs(
             .map(l => `${l.timestamp} [${l.category}] ${l.message}${l.data ? ' → ' + JSON.stringify(l.data) : ''}`)
             .join('\n');
         if (!content.trim()) {
-            toast(isEN ? 'No logs available' : 'No hay logs disponibles', 'info');
+            toast(tr('No hay logs disponibles'), 'info');
             return;
         }
         const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
@@ -89,7 +92,7 @@ export function downloadDebugLogs(
         // Delay revoke so the download has time to start. Without this,
         // some browsers cancel the download as the URL is freed mid-flight.
         setTimeout(() => URL.revokeObjectURL(url), 1000);
-        toast(isEN ? 'Logs downloaded' : 'Logs descargados', 'success');
+        toast(tr('Logs descargados'), 'success');
     } catch (e) {
         toast(`Error: ${e}`, 'error');
         // eslint-disable-next-line no-console

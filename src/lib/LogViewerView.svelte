@@ -1,4 +1,6 @@
 <script>
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     // v1.5.7 — log viewer surface extracted to a single global stylesheet
     // following the same pattern as the v1.4.21 → v1.5.4 dedup wave.
     import '$lib/styles/log-viewer.css';
@@ -74,7 +76,7 @@
                 newLines = await invoke('read_log_tail', { path: logPath.trim(), lines: logTailCount });
             } else {
                 const h = hosts.find(x => x.id === logSelectedHost);
-                if (!h) { logError = isEN ? 'Host not found.' : 'Host no encontrado.'; logLoading = false; return; }
+                if (!h) { logError = $trad('Host no encontrado.'); logLoading = false; return; }
                 let pwd = '';
                 try { pwd = await invoke('get_host_credential', { hostId: h.id }); } catch(e){}
                 if (h.type === 'windows') {
@@ -185,58 +187,58 @@
         {#each hosts as h}<option value={h.id}>{h.type==='windows'?'⊡':'◈'} {h.name}</option>{/each}
       </select>
       <input class="minp" placeholder={logSelectedHost==='local'?'C:/inetpub/logs/archivo.log':'/var/log/nginx/error.log'} bind:value={logPath} style="flex:1;height:32px;padding:0 10px;font-family:var(--mono);font-size:12px;" on:keydown={(e)=>{if(e.key==='Enter')startLogViewer();}}>
-      <button class="view-btn" on:click={startLogViewer} disabled={!logPath.trim()||logLoading}>{logLoading?'⏳':(isEN ? '▶ Open' : '▶ Abrir')}</button>
+      <button class="view-btn" on:click={startLogViewer} disabled={!logPath.trim()||logLoading}>{logLoading?'⏳':($trad('▶ Abrir'))}</button>
       <button class="view-btn" on:click={stopLogViewer} disabled={!logRefreshTimer}>⏹</button>
     </div>
   </div>
   <div class="log-toolbar">
-    <input class="minp" placeholder={isEN ? "Filter (regex ok)..." : "Filtrar (regex válido)..."} bind:value={logFilter} style="flex:1;height:28px;padding:0 8px;font-size:12px;">
+    <input class="minp" placeholder={$trad('Filtrar (regex válido)...')} bind:value={logFilter} style="flex:1;height:28px;padding:0 8px;font-size:12px;">
     <!-- Tier A #2 — Smart LLM filter: free-text → regex via cheap model.
          Falls back to substring if the model returns invalid regex. -->
     <input class="minp"
-           placeholder={isEN ? "✨ Describe what to find…" : "✨ Describe qué buscar…"}
+           placeholder={$trad('✨ Describe qué buscar…')}
            bind:value={smartFilterQuery}
            on:keydown={(e) => { if (e.key === 'Enter' && smartFilterQuery.trim() && !smartFilterBusy) applySmartFilter(); }}
            disabled={smartFilterBusy}
            style="flex:1;height:28px;padding:0 8px;font-size:12px;background:rgba(96,165,250,0.06);"
-           title={isEN ? 'LLM-translate description to regex and apply' : 'LLM traduce tu descripción a regex y aplica'}>
+           title={$trad('LLM traduce tu descripción a regex y aplica')}>
     <button class="view-btn" on:click={applySmartFilter}
             disabled={!smartFilterQuery.trim() || smartFilterBusy}
             style="font-size:11px;"
-            title={isEN ? 'Apply smart filter' : 'Aplicar filtro inteligente'}>
+            title={$trad('Aplicar filtro inteligente')}>
         {smartFilterBusy ? '⟳' : '✨'}
     </button>
     <select class="view-select" bind:value={logTailCount} style="width:110px;">
-      <option value={50}>50 {isEN ? 'lines' : 'líneas'}</option>
-      <option value={100}>100 {isEN ? 'lines' : 'líneas'}</option>
-      <option value={250}>250 {isEN ? 'lines' : 'líneas'}</option>
-      <option value={500}>500 {isEN ? 'lines' : 'líneas'}</option>
+      <option value={50}>50 {$trad('líneas')}</option>
+      <option value={100}>100 {$trad('líneas')}</option>
+      <option value={250}>250 {$trad('líneas')}</option>
+      <option value={500}>500 {$trad('líneas')}</option>
     </select>
     <label style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--txt2);cursor:pointer;white-space:nowrap;">
       <input type="checkbox" bind:checked={logAutoScroll}> Auto-scroll
     </label>
     <button class="view-btn" on:click={runAnalysis} disabled={analysisLoading || !logLines.length}
-        style="display:flex;align-items:center;gap:4px;font-size:11px;" title={isEN ? 'Analyze patterns' : 'Analizar patrones'}>
-        <ChartBar size={12} stroke={2}/> {analysisLoading ? '...' : (isEN ? 'Analyze' : 'Analizar')}
+        style="display:flex;align-items:center;gap:4px;font-size:11px;" title={$trad('Analizar patrones')}>
+        <ChartBar size={12} stroke={2}/> {analysisLoading ? '...' : ($trad('Analizar'))}
     </button>
     <!-- Sprint B #4 — Multi-host log timeline. Fetches the same path from
          several hosts in parallel and renders entries interleaved by ts. -->
     <button class="view-btn" on:click={() => showTimeline = true}
-            style="font-size:11px;" title={isEN ? 'Fetch same log from multiple hosts and merge by timestamp' : 'Lee el mismo log de varios hosts y mergea por timestamp'}>
-        ⇄ {isEN ? 'Multi-host' : 'Multi-host'}
+            style="font-size:11px;" title={$trad('Lee el mismo log de varios hosts y mergea por timestamp')}>
+        ⇄ {$trad('Multi-host')}
     </button>
     {#if showAnalysis}
     <button class="view-btn" on:click={() => showAnalysis = false} style="font-size:11px;">
-        {isEN ? 'Hide Analysis' : 'Ocultar'}
+        {$trad('Ocultar')}
     </button>
     {/if}
-    <span style="font-size:10px;color:var(--txt3);margin-left:auto;white-space:nowrap;">{filteredLog.length} {isEN ? 'lines' : 'líneas'}{logFilter?` / ${logLines.length} total`:''}</span>
+    <span style="font-size:10px;color:var(--txt3);margin-left:auto;white-space:nowrap;">{filteredLog.length} {$trad('líneas')}{logFilter?` / ${logLines.length} total`:''}</span>
   </div>
   {#if logError}<div class="view-error" style="display:flex;align-items:center;gap:6px;"><AlertTriangle size={12} stroke={2}/> {logError}</div>{/if}
   <div class="log-lines" bind:this={logLinesEl}>
     {#if !logLines.length && !logLoading}
       <div style="padding:30px;text-align:center;color:var(--txt3);font-style:italic;font-size:12px;">
-        {logPath.trim() ? (isEN ? 'Click ▶ Open to tail log' : 'Haz clic en ▶ Abrir para cargar el log') : (isEN ? 'Enter log file path and click ▶ Open' : 'Introduce la ruta del archivo de log y pulsa ▶ Abrir')}
+        {logPath.trim() ? ($trad('Haz clic en ▶ Abrir para cargar el log')) : ($trad('Introduce la ruta del archivo de log y pulsa ▶ Abrir'))}
       </div>
     {:else}
       {#each filteredLog as line, i}
@@ -245,7 +247,7 @@
         <span class="log-txt">{line}</span>
       </div>
       {/each}
-      {#if logLoading}<div class="log-line" style="color:var(--txt3);font-style:italic;">{isEN ? 'Updating...' : 'Actualizando...'}</div>{/if}
+      {#if logLoading}<div class="log-line" style="color:var(--txt3);font-style:italic;">{$trad('Actualizando...')}</div>{/if}
     {/if}
   </div>
 
@@ -254,8 +256,8 @@
   <div class="la-panel">
     <div class="la-hdr">
         <ChartBar size={13} stroke={2}/>
-        <span>{isEN ? 'Log Analysis' : 'Análisis de Log'}</span>
-        <span class="la-meta">{analysisResult.total_lines} {isEN ? 'lines' : 'líneas'} · {analysisResult.parsed_lines} parsed · format: {analysisResult.format_detected}</span>
+        <span>{$trad('Análisis de Log')}</span>
+        <span class="la-meta">{analysisResult.total_lines} {$trad('líneas')} · {analysisResult.parsed_lines} parsed · format: {analysisResult.format_detected}</span>
         <button class="la-close" on:click={() => showAnalysis = false}>✕</button>
     </div>
 
@@ -271,7 +273,7 @@
     <!-- Top sources -->
     {#if analysisResult.top_sources.length > 0}
     <div class="la-section">
-        <div class="la-section-title">{isEN ? 'TOP SOURCES' : 'FUENTES PRINCIPALES'}</div>
+        <div class="la-section-title">{$trad('FUENTES PRINCIPALES')}</div>
         <div class="la-sources">
             {#each analysisResult.top_sources.slice(0, 5) as [src, cnt]}
             <span class="la-source">{src} <strong>{cnt}</strong></span>
@@ -283,7 +285,7 @@
     <!-- Error clusters -->
     {#if analysisResult.error_clusters.length > 0}
     <div class="la-section">
-        <div class="la-section-title">{isEN ? 'ERROR CLUSTERS' : 'GRUPOS DE ERRORES'} ({analysisResult.error_clusters.length})</div>
+        <div class="la-section-title">{$trad('GRUPOS DE ERRORES')} ({analysisResult.error_clusters.length})</div>
         <div class="la-clusters">
             {#each analysisResult.error_clusters.slice(0, 15) as cluster}
             <details class="la-cluster">
@@ -294,7 +296,7 @@
                 </summary>
                 <pre class="la-cluster-sample">{cluster.sample}</pre>
                 <div class="la-cluster-meta">
-                    {isEN ? 'First' : 'Primera'}: {cluster.first_seen || '?'} · {isEN ? 'Last' : 'Última'}: {cluster.last_seen || '?'}
+                    {$trad('Primera')}: {cluster.first_seen || '?'} · {$trad('Última')}: {cluster.last_seen || '?'}
                 </div>
             </details>
             {/each}
@@ -305,7 +307,7 @@
     <!-- Timeline -->
     {#if analysisResult.timeline.length > 0}
     <div class="la-section">
-        <div class="la-section-title">{isEN ? 'TIMELINE' : 'LINEA TEMPORAL'}</div>
+        <div class="la-section-title">{$trad('LINEA TEMPORAL')}</div>
         <div class="la-timeline">
             {#each analysisResult.timeline as bucket}
             <div class="la-tl-bucket" title="{bucket.timestamp}: {bucket.error_count} errors, {bucket.warning_count} warnings, {bucket.total_count} total">

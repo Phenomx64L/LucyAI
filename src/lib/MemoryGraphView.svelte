@@ -40,6 +40,8 @@
     • ESC — close the overlay (or close detail panel if open)
 -->
 <script lang="ts">
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     import { onMount, onDestroy, createEventDispatcher, tick } from 'svelte';
     import { invoke } from '@tauri-apps/api/core';
     // v1.7.71 — d3-force replaces the hand-rolled Euler integrator.
@@ -62,7 +64,6 @@
         type Simulation, type SimulationNodeDatum, type SimulationLinkDatum,
     } from 'd3-force';
 
-    export let isEN: boolean = false;
     const dispatch = createEventDispatcher<{
         close: void;
         openmemoria: { memoryId: number };
@@ -1032,13 +1033,13 @@
     <div class="mg-header">
         <div class="mg-title">
             <span class="mg-glyph">◊</span>
-            <span>{isEN ? 'Memory Graph' : 'Grafo de Memoria'}</span>
+            <span>{$trad('Grafo de Memoria')}</span>
             {#if graph}
                 <span class="mg-count">
-                    {graph.nodes.length}{graph.truncated_nodes ? '/' + graph.total_memories : ''} {isEN ? 'nodes' : 'nodos'}
-                    · {graph.edges.length} {isEN ? 'edges' : 'aristas'}
-                    · {graph.stats.community_count} {isEN ? 'clusters' : 'clusters'}
-                    · {graph.stats.orphan_count} {isEN ? 'orphans' : 'huérfanas'}
+                    {graph.nodes.length}{graph.truncated_nodes ? '/' + graph.total_memories : ''} {$trad('nodos')}
+                    · {graph.edges.length} {$trad('aristas')}
+                    · {graph.stats.community_count} {$trad('clusters')}
+                    · {graph.stats.orphan_count} {$trad('huérfanas')}
                 </span>
             {/if}
         </div>
@@ -1046,14 +1047,14 @@
             <!-- V5 — Search bar -->
             <input class="mg-search" type="search"
                    bind:value={searchQuery}
-                   placeholder={isEN ? '⌕ Search title / tag / content…' : '⌕ Buscar título / tag / contenido…'}/>
-            <label class="mg-filter" title={isEN ? 'Minimum importance' : 'Importancia mínima'}>
+                   placeholder={$trad('⌕ Buscar título / tag / contenido…')}/>
+            <label class="mg-filter" title={$trad('Importancia mínima')}>
                 <span>min⮬</span>
                 <input type="range" min="0" max="10" step="1" bind:value={minImportance}/>
                 <span class="mg-filter-val">{minImportance}</span>
             </label>
-            <button class="mg-btn" on:click={resetView}>↺ {isEN ? 'view' : 'vista'}</button>
-            <button class="mg-btn" on:click={resetPins}>⤓ {isEN ? 'pins' : 'fijados'}</button>
+            <button class="mg-btn" on:click={resetView}>↺ {$trad('vista')}</button>
+            <button class="mg-btn" on:click={resetPins}>⤓ {$trad('fijados')}</button>
             <button class="mg-btn" on:click={loadGraph} disabled={loading}>↻</button>
             <button class="mg-btn mg-close" on:click={() => dispatch('close')} title="Esc">✕</button>
         </div>
@@ -1064,7 +1065,7 @@
     <div class="mg-filter-row">
         <!-- Tag pills (top 12) -->
         <div class="mg-tag-pills">
-            <span class="mg-tag-label">{isEN ? 'Tags:' : 'Tags:'}</span>
+            <span class="mg-tag-label">{$trad('Tags:')}</span>
             {#each graph.top_tags as [tag, count]}
                 <button class="mg-tag-pill"
                         class:active={activeTagFilter === tag}
@@ -1074,12 +1075,12 @@
             {/each}
             {#if activeTagFilter}
                 <button class="mg-tag-clear" on:click={() => activeTagFilter = null}
-                        title={isEN ? 'Clear tag filter' : 'Limpiar filtro de tag'}>✕</button>
+                        title={$trad('Limpiar filtro de tag')}>✕</button>
             {/if}
         </div>
         <!-- V14 — Threshold sliders -->
         <details class="mg-thresholds">
-            <summary>⚙ {isEN ? 'thresholds' : 'umbrales'}</summary>
+            <summary>⚙ {$trad('umbrales')}</summary>
             <div class="mg-thr-grid">
                 <label>
                     <span class="mg-thr-lbl pink">tag</span>
@@ -1107,7 +1108,7 @@
                     <input type="checkbox"
                            bind:checked={useEmbeddings}
                            on:change={scheduleRefetch}/>
-                    <span>{isEN ? 'Use embeddings' : 'Usar embeddings'}</span>
+                    <span>{$trad('Usar embeddings')}</span>
                 </label>
             </div>
         </details>
@@ -1117,21 +1118,17 @@
     <!-- ── Canvas ──────────────────────────────────────────────────────── -->
     <div class="mg-canvas-wrap" bind:this={canvasWrapEl}>
         {#if loading && !graph}
-            <div class="mg-empty">{isEN ? 'Loading…' : 'Cargando…'}</div>
+            <div class="mg-empty">{$trad('Cargando…')}</div>
         {:else if error}
             <div class="mg-empty mg-err">{error}</div>
         {:else if graph && graph.nodes.length === 0}
             <div class="mg-empty">
-                {isEN
-                    ? 'No memories yet. As Lucy learns, this graph populates.'
-                    : 'Sin memorias todavía. A medida que Lucy aprende, este grafo se llena.'}
+                {$trad('Sin memorias todavía. A medida que Lucy aprende, este grafo se llena.')}
             </div>
         {:else if graph && graph.edges.length === 0}
             <div class="mg-empty mg-hint">
                 <div style="font-size:16px;margin-bottom:8px;">∅</div>
-                {isEN
-                    ? 'Your memories exist but none meet the similarity thresholds for connections. Lower the thresholds in ⚙ above (try tag 0.15 / content 0.15) to see edges form.'
-                    : 'Tus memorias existen pero ninguna alcanza los umbrales de similitud para conectarse. Baja los umbrales en ⚙ arriba (prueba tag 0.15 / content 0.15) para ver aristas.'}
+                {$trad('Tus memorias existen pero ninguna alcanza los umbrales de similitud para conectarse. Baja los umbrales en ⚙ arriba (prueba tag 0.15 / content 0.15) para ver aristas.')}
             </div>
         {:else if graph}
             <!-- v1.7.86 — Canvas2D overlay for edges. The previous SVG
@@ -1158,7 +1155,7 @@
             <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
             <svg id="mg-canvas" width={viewW} height={viewH}
                  role="application" tabindex="0"
-                 aria-label={isEN ? 'Memory graph — drag nodes / wheel zoom / type to search' : 'Grafo de memoria — arrastra nodos / rueda zoom / escribe para buscar'}
+                 aria-label={$trad('Grafo de memoria — arrastra nodos / rueda zoom / escribe para buscar')}
                  on:pointerdown={onSvgPointerDown}
                  on:pointermove={onPointerMove}
                  on:pointerup={onPointerUp}
@@ -1239,13 +1236,13 @@
                     <button class="mg-btn mg-close" on:click={closeDetail}>✕</button>
                 </div>
                 <div class="mg-detail-meta">
-                    <span title={isEN ? 'Importance' : 'Importancia'}>⮬ {selectedNode.importance}</span>
-                    <span title={isEN ? 'Access count' : 'Veces accedida'}>◎ {selectedNode.access_count}</span>
-                    <span title={isEN ? 'Connections' : 'Conexiones'}>⛓ {selectedNode.degree}</span>
+                    <span title={$trad('Importancia')}>⮬ {selectedNode.importance}</span>
+                    <span title={$trad('Veces accedida')}>◎ {selectedNode.access_count}</span>
+                    <span title={$trad('Conexiones')}>⛓ {selectedNode.degree}</span>
                     {#if selectedNode.community >= 0}
                         <span class="mg-comm-chip"
                               style="background:{communityColor(selectedNode.community)}33; color:{communityColor(selectedNode.community)};"
-                              title={isEN ? 'Cluster id' : 'Cluster'}>
+                              title={$trad('Cluster')}>
                             ◯ cluster {selectedNode.community}
                         </span>
                     {/if}
@@ -1258,7 +1255,7 @@
                 <div class="mg-detail-preview">{selectedNode.preview}</div>
                 <!-- V12 — Open in Memorias tab -->
                 <button class="mg-open-btn" on:click={() => selectedNode && openInBrowser(selectedNode)}>
-                    → {isEN ? 'Open in Memorias' : 'Abrir en Memorias'}
+                    → {$trad('Abrir en Memorias')}
                 </button>
             </aside>
         {/if}
@@ -1266,12 +1263,12 @@
         <!-- ── Legend ──────────────────────────────────────────────────── -->
         {#if graph}
         <div class="mg-legend">
-            <span><span class="lg-swatch lg-tag"></span> {isEN ? 'tag' : 'tag'} ({graph.stats.edges_tag})</span>
-            <span><span class="lg-swatch lg-content"></span> {isEN ? 'content' : 'contenido'} ({graph.stats.edges_content})</span>
-            <span><span class="lg-swatch lg-emb"></span> {isEN ? 'embedding' : 'embedding'} ({graph.stats.edges_embedding})</span>
-            <span><span class="lg-dot lg-pinned"></span> {isEN ? 'pinned' : 'fijado'}</span>
+            <span><span class="lg-swatch lg-tag"></span> {$trad('tag')} ({graph.stats.edges_tag})</span>
+            <span><span class="lg-swatch lg-content"></span> {$trad('contenido')} ({graph.stats.edges_content})</span>
+            <span><span class="lg-swatch lg-emb"></span> {$trad('embedding')} ({graph.stats.edges_embedding})</span>
+            <span><span class="lg-dot lg-pinned"></span> {$trad('fijado')}</span>
             <span class="mg-density">
-                {isEN ? 'density' : 'densidad'}: {(graph.stats.density * 100).toFixed(2)}%
+                {$trad('densidad')}: {(graph.stats.density * 100).toFixed(2)}%
             </span>
         </div>
         {/if}

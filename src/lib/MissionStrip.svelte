@@ -1,4 +1,6 @@
 <script lang="ts">
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     // ── MissionStrip — Always-on operational pulse (v1.7.58, Direction A1) ───
     //
     // The horizontal band that lives between the title bar and the tab strip.
@@ -99,7 +101,7 @@
          pulse on this dot is what makes the band read as "alive". -->
     <button class="ms-chip ms-local"
             on:click={() => dispatch('clickLocal')}
-            title={isEN ? 'This machine (click for diagnostics)' : 'Esta máquina (click para diagnóstico)'}>
+            title={$trad('Esta máquina (click para diagnóstico)')}>
         <span class="ms-dot ms-dot-heartbeat ms-ok-dot" aria-hidden="true"></span>
         <span class="ms-host">{localHost}</span>
     </button>
@@ -115,7 +117,7 @@
                     : `${remoteHostsOnline}/${remoteHostsTotal} hosts remotos en línea`}>
             <span class="ms-glyph">⚯</span>
             <span class="ms-val">{remoteHostsOnline}/{remoteHostsTotal}</span>
-            <span class="ms-lbl">{isEN ? 'hosts' : 'hosts'}</span>
+            <span class="ms-lbl">{$trad('hosts')}</span>
         </button>
         <span class="ms-sep" aria-hidden="true">·</span>
     {/if}
@@ -128,7 +130,7 @@
                 : `${activeAlerts} incidente${activeAlerts === 1 ? '' : 's'} activo${activeAlerts === 1 ? '' : 's'}`}>
         <span class="ms-glyph">⚠</span>
         <span class="ms-val">{activeAlerts}</span>
-        <span class="ms-lbl">{isEN ? 'alerts' : 'alertas'}</span>
+        <span class="ms-lbl">{$trad('alertas')}</span>
     </button>
 
     <span class="ms-sep" aria-hidden="true">·</span>
@@ -140,7 +142,7 @@
                 ? (guardLabel ? `Active security skill: ${guardLabel}` : 'No security skill active — guard clean')
                 : (guardLabel ? `Skill de seguridad activo: ${guardLabel}` : 'Sin skill de seguridad activo — guard limpio')}>
         <span class="ms-glyph">⊕</span>
-        <span class="ms-val">{guardLabel || (isEN ? 'clean' : 'limpio')}</span>
+        <span class="ms-val">{guardLabel || ($trad('limpio'))}</span>
     </button>
 
     <span class="ms-sep" aria-hidden="true">·</span>
@@ -148,7 +150,7 @@
     <!-- Local clock — bottom-right of the band conventionally, but we keep it
          inline with the rest so the eye can scan the whole status line in
          one left-to-right sweep. -->
-    <span class="ms-chip ms-clock" aria-label={isEN ? 'Local time' : 'Hora local'}>
+    <span class="ms-chip ms-clock" aria-label={$trad('Hora local')}>
         <span class="ms-clock-glyph">◷</span>
         <span class="ms-val">{_now}</span>
     </span>

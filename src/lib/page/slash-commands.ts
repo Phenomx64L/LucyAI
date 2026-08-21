@@ -31,6 +31,9 @@ import { get } from 'svelte/store';
 import { safeJsonArray } from '$lib/safe-json';
 import { localModels, refreshLocalModels } from '$lib/models.js';
 
+// La interfaz en cinco idiomas. `tr` y no `$trad`: esto no es un
+// componente, así que no hay nada a lo que suscribirse. Ver `$lib/i18n`.
+import { tr } from '$lib/i18n';
 // ── Context interface ────────────────────────────────────────────────────
 export interface SlashCtx {
     isEN: boolean;
@@ -122,54 +125,54 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
         const isEN = ctx.isEN;
         const cats: Array<{ title: string; items: Array<{ cmd: string; desc: string }> }> = [
             {
-                title: isEN ? 'Memory & Graph' : 'Memoria y Grafo',
+                title: tr('Memoria y Grafo'),
                 items: [
-                    { cmd: '/memory',     desc: isEN ? 'Open Memory Browser' : 'Abrir el explorador de memoria' },
-                    { cmd: '/kg',         desc: isEN ? 'Open Knowledge Graph' : 'Abrir el grafo de conocimiento' },
-                    { cmd: '/link',       desc: isEN ? 'Manage typed semantic links between memories' : 'Gestionar relaciones tipadas entre memorias' },
-                    { cmd: '/recall',     desc: isEN ? 'Recall memories by query' : 'Recuperar memorias por consulta' },
-                    { cmd: '/crystals',   desc: isEN ? 'View memory crystals' : 'Ver crystals de memoria' },
-                    { cmd: '/insights',   desc: isEN ? 'View consolidated insights' : 'Ver insights consolidados' },
-                    { cmd: '/consolidate',desc: isEN ? 'Run consolidation now' : 'Ejecutar consolidación ahora' },
+                    { cmd: '/memory',     desc: tr('Abrir el explorador de memoria') },
+                    { cmd: '/kg',         desc: tr('Abrir el grafo de conocimiento') },
+                    { cmd: '/link',       desc: tr('Gestionar relaciones tipadas entre memorias') },
+                    { cmd: '/recall',     desc: tr('Recuperar memorias por consulta') },
+                    { cmd: '/crystals',   desc: tr('Ver crystals de memoria') },
+                    { cmd: '/insights',   desc: tr('Ver insights consolidados') },
+                    { cmd: '/consolidate',desc: tr('Ejecutar consolidación ahora') },
                 ],
             },
             {
-                title: isEN ? 'Skills' : 'Skills',
+                title: tr('Skills'),
                 items: [
-                    { cmd: '/playbooks',    desc: isEN ? 'Curated multi-phase playbooks on THIS machine' : 'Playbooks multi-fase curados en ESTA máquina' },
-                    { cmd: '/skills',       desc: isEN ? 'Executable skill picker (user runbook-style)' : 'Picker de skills ejecutables (runbook-style del usuario)' },
-                    { cmd: '/preset',       desc: isEN ? 'ECC-style behavioural presets (AD, Hyper-V, SQL, IIS…)' : 'Presets de framing (AD, Hyper-V, SQL, IIS…)' },
-                    { cmd: '/sec-skill',    desc: isEN ? 'Anthropic security / forensic catalog (200+)' : 'Catálogo de security / forensics de Anthropic (200+)' },
-                    { cmd: '/skills-manager', desc: isEN ? 'Manage loaded skills: view, activate, delete' : 'Gestionar skills cargadas: ver, activar, eliminar' },
-                    { cmd: '/capabilities', desc: isEN ? 'Self-introspection: every skill, MCP, framework loaded' : 'Auto-introspección: skills, MCPs y frameworks cargados' },
+                    { cmd: '/playbooks',    desc: tr('Playbooks multi-fase curados en ESTA máquina') },
+                    { cmd: '/skills',       desc: tr('Picker de skills ejecutables (runbook-style del usuario)') },
+                    { cmd: '/preset',       desc: tr('Presets de framing (AD, Hyper-V, SQL, IIS…)') },
+                    { cmd: '/sec-skill',    desc: tr('Catálogo de security / forensics de Anthropic (200+)') },
+                    { cmd: '/skills-manager', desc: tr('Gestionar skills cargadas: ver, activar, eliminar') },
+                    { cmd: '/capabilities', desc: tr('Auto-introspección: skills, MCPs y frameworks cargados') },
                 ],
             },
             {
-                title: isEN ? 'Routing' : 'Routing',
+                title: tr('Routing'),
                 items: [
-                    { cmd: '/model',        desc: isEN ? 'Change active model' : 'Cambiar el modelo activo' },
-                    { cmd: '/route',        desc: isEN ? 'Show last routing decision' : 'Ver la última decisión de routing' },
-                    { cmd: '/serial',       desc: isEN ? 'Toggle fork advisor bypass for this tab' : 'Activar/desactivar bypass del fork advisor' },
-                    { cmd: '/smart-router', desc: isEN ? 'Toggle smart-router on/off' : 'Activar/desactivar smart-router' },
+                    { cmd: '/model',        desc: tr('Cambiar el modelo activo') },
+                    { cmd: '/route',        desc: tr('Ver la última decisión de routing') },
+                    { cmd: '/serial',       desc: tr('Activar/desactivar bypass del fork advisor') },
+                    { cmd: '/smart-router', desc: tr('Activar/desactivar smart-router') },
                 ],
             },
             {
-                title: isEN ? 'Operations' : 'Operaciones',
+                title: tr('Operaciones'),
                 items: [
-                    { cmd: '/proactive',  desc: isEN ? 'List proactive insights' : 'Listar insights proactivos' },
-                    { cmd: '/snapshot',   desc: isEN ? 'Capture a state snapshot' : 'Capturar snapshot del sistema' },
-                    { cmd: '/diff',       desc: isEN ? 'Diff two snapshots' : 'Comparar snapshots' },
-                    { cmd: '/detective',  desc: isEN ? 'Incident forensics synthesis' : 'Síntesis forense de incidente' },
-                    { cmd: '/runbooks',   desc: isEN ? 'Open runbook list' : 'Abrir la lista de runbooks' },
+                    { cmd: '/proactive',  desc: tr('Listar insights proactivos') },
+                    { cmd: '/snapshot',   desc: tr('Capturar snapshot del sistema') },
+                    { cmd: '/diff',       desc: tr('Comparar snapshots') },
+                    { cmd: '/detective',  desc: tr('Síntesis forense de incidente') },
+                    { cmd: '/runbooks',   desc: tr('Abrir la lista de runbooks') },
                 ],
             },
             {
-                title: isEN ? 'Workspace' : 'Espacio de trabajo',
+                title: tr('Espacio de trabajo'),
                 items: [
-                    { cmd: '/clear',      desc: isEN ? 'Clear current chat' : 'Limpiar el chat actual' },
-                    { cmd: '/theme',      desc: isEN ? 'Change visual theme' : 'Cambiar tema visual' },
-                    { cmd: '/privacy',    desc: isEN ? 'Toggle privacy mode (local-only LLM)' : 'Modo privacidad (sólo LLM local)' },
-                    { cmd: '/help',       desc: isEN ? 'Full command reference' : 'Referencia completa de comandos' },
+                    { cmd: '/clear',      desc: tr('Limpiar el chat actual') },
+                    { cmd: '/theme',      desc: tr('Cambiar tema visual') },
+                    { cmd: '/privacy',    desc: tr('Modo privacidad (sólo LLM local)') },
+                    { cmd: '/help',       desc: tr('Referencia completa de comandos') },
                 ],
             },
         ];
@@ -197,12 +200,10 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
         }).join('');
 
         sysMsg(`<div class="slash-cmd-menu">
-            <div class="slash-cmd-head">⌨ ${isEN ? 'Available commands' : 'Comandos disponibles'}</div>
+            <div class="slash-cmd-head">⌨ ${tr('Comandos disponibles')}</div>
             ${groups}
             <div class="slash-cmd-hint">
-                ${isEN
-                    ? 'Click a command to insert it · or type it and press Enter · <code>/help</code> for the full reference.'
-                    : 'Haz clic en un comando para insertarlo · o escríbelo y pulsa Enter · <code>/help</code> para la referencia completa.'}
+                ${tr('Haz clic en un comando para insertarlo · o escríbelo y pulsa Enter · <code>/help</code> para la referencia completa.')}
             </div>
         </div>`);
         return true;
@@ -323,7 +324,7 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
         case 'memory': case 'memoria': {
             if (ctx.openMemory) {
                 ctx.openMemory();
-                sysMsg(ctx.isEN ? '✦ Opening Memory Browser…' : '✦ Abriendo el explorador de memoria…', 'var(--acc)');
+                sysMsg(tr('✦ Abriendo el explorador de memoria…'), 'var(--acc)');
             } else {
                 sysMsg('Memory browser opener not wired into context.', 'var(--red)');
             }
@@ -345,9 +346,7 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
             if (!arg || cmd === 'kg' || cmd === 'knowledge') {
                 if (ctx.openKnowledgeGraph) {
                     ctx.openKnowledgeGraph();
-                    sysMsg(ctx.isEN
-                        ? '✦ Opening knowledge graph…'
-                        : '✦ Abriendo grafo de conocimiento…', 'var(--acc)');
+                    sysMsg(tr('✦ Abriendo grafo de conocimiento…'), 'var(--acc)');
                 } else {
                     sysMsg('Knowledge graph opener not wired into context.', 'var(--red)');
                 }
@@ -676,7 +675,7 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
 
         // ── F2 Frontier: State snapshots ──────────────────────────────────
         case 'snapshot': case 'snap': {
-            sysMsg(ctx.isEN ? 'Capturing system snapshot…' : 'Capturando snapshot del sistema…');
+            sysMsg(tr('Capturando snapshot del sistema…'));
             (async () => {
                 try {
                     const id = await invoke<number>('state_snapshot_capture');
@@ -696,14 +695,14 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                     const list = await invoke<Array<{ id: number; captured_at: number; host_name: string }>>(
                         'state_snapshot_list', { sinceTs: null, limit: 20 });
                     if (!list || list.length === 0) {
-                        sysMsg(ctx.isEN ? 'No snapshots yet. Run /snapshot to capture one.' : 'No hay snapshots aún. Usa /snapshot para crear uno.', 'var(--amber)');
+                        sysMsg(tr('No hay snapshots aún. Usa /snapshot para crear uno.'), 'var(--amber)');
                         return;
                     }
                     const rows = list.map(s => {
                         const dt = new Date(s.captured_at * 1000).toLocaleString();
                         return `<code style="font-family:var(--mono);font-size:11px;">id=${s.id} · ${dt} · ${s.host_name}</code>`;
                     }).join('<br>');
-                    sysMsg(`<b>${ctx.isEN ? 'Recent snapshots:' : 'Snapshots recientes:'}</b><br>${rows}`);
+                    sysMsg(`<b>${tr('Snapshots recientes:')}</b><br>${rows}`);
                 } catch (e) {
                     sysMsg(`Error: ${String(e)}`, 'var(--red)');
                 }
@@ -723,7 +722,7 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                     } else {
                         const list = await invoke<Array<{ id: number }>>('state_snapshot_list', { sinceTs: null, limit: 2 });
                         if (!list || list.length < 2) {
-                            sysMsg(ctx.isEN ? 'Need at least 2 snapshots. Run /snapshot twice with some delay.' : 'Se necesitan al menos 2 snapshots. Usa /snapshot dos veces con tiempo entre ellos.', 'var(--amber)');
+                            sysMsg(tr('Se necesitan al menos 2 snapshots. Usa /snapshot dos veces con tiempo entre ellos.'), 'var(--amber)');
                             return;
                         }
                         toId   = list[0].id;
@@ -744,7 +743,7 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                     const ramTone = Math.abs(d.ram_delta_mb) >= 1024 ? 'warn' : 'info';
                     const resourceTone = cpuTone === 'warn' || ramTone === 'warn' ? 'warn' : 'info';
                     blocks.push({
-                        title: ctx.isEN ? 'Resource delta' : 'Δ de recursos',
+                        title: tr('Δ de recursos'),
                         icon: '◧',
                         tone: resourceTone,
                         defaultOpen: true,
@@ -759,9 +758,9 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                         const items = d.processes_appeared.slice(0, 12).map((p: any) =>
                             `<code class="rb-chip rb-chip-new">${escapeHtml(p.name)}</code>`).join('');
                         const more = d.processes_appeared.length > 12
-                            ? `<span class="rb-more">+${d.processes_appeared.length - 12} ${ctx.isEN ? 'more' : 'más'}</span>` : '';
+                            ? `<span class="rb-more">+${d.processes_appeared.length - 12} ${tr('más')}</span>` : '';
                         blocks.push({
-                            title: `${ctx.isEN ? 'Processes appeared' : 'Procesos aparecidos'} (${d.processes_appeared.length})`,
+                            title: `${tr('Procesos aparecidos')} (${d.processes_appeared.length})`,
                             icon: '⊕',
                             tone: 'info',
                             html: `<div class="rb-chips">${items}${more}</div>`,
@@ -771,9 +770,9 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                         const items = d.processes_disappeared.slice(0, 12).map((p: any) =>
                             `<code class="rb-chip rb-chip-gone">${escapeHtml(p.name)}</code>`).join('');
                         const more = d.processes_disappeared.length > 12
-                            ? `<span class="rb-more">+${d.processes_disappeared.length - 12} ${ctx.isEN ? 'more' : 'más'}</span>` : '';
+                            ? `<span class="rb-more">+${d.processes_disappeared.length - 12} ${tr('más')}</span>` : '';
                         blocks.push({
-                            title: `${ctx.isEN ? 'Processes disappeared' : 'Procesos desaparecidos'} (${d.processes_disappeared.length})`,
+                            title: `${tr('Procesos desaparecidos')} (${d.processes_disappeared.length})`,
                             icon: '⊖',
                             tone: 'warn',
                             html: `<div class="rb-chips">${items}${more}</div>`,
@@ -787,7 +786,7 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                                    `<span class="rb-v">${c.from_pct.toFixed(0)}% → ${c.to_pct.toFixed(0)}% ${trend} (${sign}${c.used_delta_gb} GB)</span></div>`;
                         }).join('');
                         blocks.push({
-                            title: `${ctx.isEN ? 'Drive changes' : 'Cambios de discos'} (${d.drive_changes.length})`,
+                            title: `${tr('Cambios de discos')} (${d.drive_changes.length})`,
                             icon: '◳',
                             tone: 'info',
                             html: rows,
@@ -798,13 +797,11 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                     if (blocks.length === 1 &&
                         d.cpu_delta_pct === 0 && d.ram_delta_mb === 0) {
                         blocks.push({
-                            title: ctx.isEN ? 'No significant changes detected' : 'Sin cambios significativos detectados',
+                            title: tr('Sin cambios significativos detectados'),
                             icon: '◎',
                             tone: 'ok',
                             defaultOpen: true,
-                            html: `<div class="rb-row" style="opacity:.7;font-style:italic;">${ctx.isEN
-                                ? 'The system was effectively static during this window.'
-                                : 'El sistema estuvo prácticamente estático durante esta ventana.'}</div>`,
+                            html: `<div class="rb-row" style="opacity:.7;font-style:italic;">${tr('El sistema estuvo prácticamente estático durante esta ventana.')}</div>`,
                         });
                     }
 
@@ -837,7 +834,7 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                         const highConf = c.confidence >= 0.70;
                         const proposeChip = highConf
                             ? `<div style="margin-top:4px;font-size:10px;color:var(--blue);">
-                                  ⌖ ${ctx.isEN ? 'High confidence — consider saving as skill' : 'Alta confianza — considera guardarlo como skill'}
+                                  ⌖ ${tr('Alta confianza — considera guardarlo como skill')}
                               </div>`
                             : '';
                         return `<div style="margin:6px 0;padding:4px 6px;background:rgba(16,185,129,${highConf ? 0.10 : 0.05});border-left:2px solid var(--acc);">
@@ -852,7 +849,7 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                             ? `→ ${topHigh} candidate(s) ready to be promoted to skills.`
                             : `→ ${topHigh} candidato(s) listo(s) para promocionar a skill.`}</div>`
                         : '';
-                    sysMsg(`<b>${ctx.isEN ? 'Detected workflows' : 'Workflows detectados'} (${r.days_analyzed}d, ${r.total_sessions} sessions):</b>${rows}${summary}`);
+                    sysMsg(`<b>${tr('Workflows detectados')} (${r.days_analyzed}d, ${r.total_sessions} sessions):</b>${rows}${summary}`);
                 } catch (e) {
                     sysMsg(`Error: ${String(e)}`, 'var(--red)');
                 }
@@ -876,7 +873,7 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                     for (const p of r.patterns) {
                         (byDay[p.weekday_label] = byDay[p.weekday_label] || []).push(p);
                     }
-                    let html = `<b>${ctx.isEN ? 'Daily routines' : 'Rutinas diarias'} (${r.weeks_covered} weeks):</b><br>`;
+                    let html = `<b>${tr('Rutinas diarias')} (${r.weeks_covered} weeks):</b><br>`;
                     for (const day of ['Lun','Mar','Mié','Jue','Vie','Sáb','Dom']) {
                         if (!byDay[day]) continue;
                         html += `<div style="margin-top:4px;"><b style="color:var(--acc);">${day}</b><br>`;
@@ -897,7 +894,7 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
         // ── F5 Frontier: sandbox preview ──────────────────────────────────
         case 'preview': case 'sandbox': {
             if (!arg) {
-                sysMsg(ctx.isEN ? 'Usage: /preview <command>' : 'Uso: /preview <comando>', 'var(--amber)');
+                sysMsg(tr('Uso: /preview <comando>'), 'var(--amber)');
                 return true;
             }
             (async () => {
@@ -909,7 +906,7 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                     let html = `<b style="color:${bandColor};">⊠ ${r.risk_band.toUpperCase()} · risk ${pct}%</b><br>`;
                     html += `<code style="font-size:10px;opacity:0.85">${arg.slice(0, 200).replace(/[<>&]/g, m => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[m] || m))}</code><br>`;
                     if (r.destructive_reason) html += `<div style="color:var(--red);">⚠ ${r.destructive_reason}</div>`;
-                    if (r.elevation_required) html += `<div style="color:var(--amber);">⚡ ${ctx.isEN ? 'Requires elevation' : 'Requiere elevación'}</div>`;
+                    if (r.elevation_required) html += `<div style="color:var(--amber);">⚡ ${tr('Requiere elevación')}</div>`;
                     if (r.affected_paths?.length) html += `<div>📁 ${r.affected_paths.length} path(s)</div>`;
                     if (r.affected_registry_keys?.length) html += `<div>🗝 ${r.affected_registry_keys.length} registry key(s)</div>`;
                     if (r.affected_services?.length) html += `<div>⚙ ${r.affected_services.length} service(s)</div>`;
@@ -917,7 +914,7 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                     if (r.sandbox_wsb_path) {
                         html += `<div style="margin-top:6px;padding:4px 6px;background:rgba(59,158,255,0.10);border-left:2px solid var(--blue);font-size:10px;">
                             ⊠ Windows Sandbox config saved: <code>${r.sandbox_wsb_path}</code><br>
-                            ${ctx.isEN ? 'Double-click that file to run the command in isolation.' : 'Doble clic ahí para ejecutar en aislamiento.'}
+                            ${tr('Doble clic ahí para ejecutar en aislamiento.')}
                         </div>`;
                     }
                     sysMsg(html);
@@ -930,7 +927,7 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
 
         // ── F9 Frontier: knowledge graph ─────────────────────────────────
         case 'kg-add': {
-            if (!arg) { sysMsg(ctx.isEN ? 'Usage: /kg-add <directory-path>' : 'Uso: /kg-add <ruta-directorio>', 'var(--amber)'); return true; }
+            if (!arg) { sysMsg(tr('Uso: /kg-add <ruta-directorio>'), 'var(--amber)'); return true; }
             (async () => {
                 try {
                     await invoke('kg_add_root', { root: arg });
@@ -954,7 +951,7 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                 try {
                     const roots = await invoke<string[]>('kg_list_roots');
                     if (!roots || roots.length === 0) {
-                        sysMsg(ctx.isEN ? 'No KG roots configured. Use /kg-add <path> to start tracking.' : 'Sin roots configurados. Usa /kg-add <ruta>.', 'var(--amber)');
+                        sysMsg(tr('Sin roots configurados. Usa /kg-add <ruta>.'), 'var(--amber)');
                         return;
                     }
                     sysMsg(`<b>Knowledge Graph roots:</b><br>${roots.map(r => `<code>${r}</code>`).join('<br>')}`);
@@ -968,15 +965,13 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
             // Example: /promote-runbook git-flow :: git status ; git add ; git commit ; git push
             const m = arg.match(/^([^\s:]+)\s*::\s*(.+)$/);
             if (!m) {
-                sysMsg(ctx.isEN
-                    ? 'Usage: /promote-runbook <name> :: <cmd1> ; <cmd2> ; <cmd3>'
-                    : 'Uso: /promote-runbook <nombre> :: <cmd1> ; <cmd2> ; <cmd3>', 'var(--amber)');
+                sysMsg(tr('Uso: /promote-runbook <nombre> :: <cmd1> ; <cmd2> ; <cmd3>'), 'var(--amber)');
                 return true;
             }
             const name = m[1].trim();
             const sequence = m[2].split(';').map(s => s.trim()).filter(Boolean);
             if (sequence.length < 2) {
-                sysMsg(ctx.isEN ? 'Need at least 2 steps.' : 'Se necesitan al menos 2 pasos.', 'var(--amber)');
+                sysMsg(tr('Se necesitan al menos 2 pasos.'), 'var(--amber)');
                 return true;
             }
             (async () => {
@@ -987,7 +982,7 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                     sysMsg(`<b style="color:var(--acc);">✓ Skill saved</b><br>
                         <code>${r.name}</code> (id: <code>${r.skill_id}</code>)<br>
                         <pre style="font-size:10px;margin:4px 0;padding:4px;background:rgba(0,0,0,0.25);">${r.script.replace(/[<>&]/g, (c: string) => (({'<':'&lt;','>':'&gt;','&':'&amp;'} as Record<string, string>)[c] || c))}</pre>
-                        ${ctx.isEN ? 'Invoke later with /skill or by typing the name.' : 'Invócalo después con /skill o tecleando el nombre.'}`);
+                        ${tr('Invócalo después con /skill o tecleando el nombre.')}`);
                 } catch (e) {
                     sysMsg(`Error: ${String(e)}`, 'var(--red)');
                 }
@@ -1015,7 +1010,7 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                     const blocks: ResultBlock[] = [];
 
                     blocks.push({
-                        title: ctx.isEN ? 'Narrative' : 'Narrativa',
+                        title: tr('Narrativa'),
                         icon: '🔎',
                         tone,
                         defaultOpen: true,
@@ -1032,7 +1027,7 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                             `</div>`;
                         }).join('');
                         blocks.push({
-                            title: `${ctx.isEN ? 'Threats' : 'Amenazas'} (${r.threats.length})`,
+                            title: `${tr('Amenazas')} (${r.threats.length})`,
                             icon: '⚠',
                             tone: r.threats.some((t: any) => t.band === 'crit' || t.score >= 0.7) ? 'crit' : 'warn',
                             html: rows,
@@ -1047,7 +1042,7 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                             `</div>`;
                         }).join('');
                         blocks.push({
-                            title: `${ctx.isEN ? 'Causal candidates' : 'Candidatos causales'} (${r.causal.candidates.length})`,
+                            title: `${tr('Candidatos causales')} (${r.causal.candidates.length})`,
                             icon: '⌖',
                             tone: 'info',
                             html: rows,
@@ -1055,7 +1050,7 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                     }
                     if (r.file_changes?.length) {
                         blocks.push({
-                            title: `${ctx.isEN ? 'File activity' : 'Actividad de archivos'} (${r.file_changes.length})`,
+                            title: `${tr('Actividad de archivos')} (${r.file_changes.length})`,
                             icon: '⊞',
                             tone: 'info',
                             html: `<div class="rb-row">${escapeHtml(r.touched_cluster_summary || '')}</div>`,
@@ -1063,7 +1058,7 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                     }
 
                     sysMsg(renderResultBlocks(
-                        `🔎 ${ctx.isEN ? 'Detective' : 'Detective'} · ${pct}% ${ctx.isEN ? 'confidence' : 'confianza'}`,
+                        `🔎 ${tr('Detective')} · ${pct}% ${tr('confianza')}`,
                         blocks));
                 } catch (e) {
                     sysMsg(`Error: ${String(e)}`, 'var(--red)');
@@ -1072,13 +1067,13 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
             return true;
         }
         case 'kg-scan': {
-            sysMsg(ctx.isEN ? 'Scanning KG roots…' : 'Escaneando roots del KG…');
+            sysMsg(tr('Escaneando roots del KG…'));
             (async () => {
                 try {
                     const lookback = parseInt(arg, 10) || (60 * 24); // default 24h lookback
                     const r = await invoke<any>('kg_index_now', { sinceMin: lookback });
                     if (!r.roots || r.roots.length === 0) {
-                        sysMsg(ctx.isEN ? 'No roots to scan. Add one with /kg-add.' : 'Sin roots para escanear. Usa /kg-add.', 'var(--amber)');
+                        sysMsg(tr('Sin roots para escanear. Usa /kg-add.'), 'var(--amber)');
                         return;
                     }
                     const rows = r.roots.map((s: any) =>
@@ -1137,9 +1132,7 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                     const { clearActiveSecuritySkill } = await import('$lib/security-skill-bridge');
                     activeSkillPresetId.set(null);
                     clearActiveSecuritySkill();
-                    sysMsg(ctx.isEN
-                        ? '✓ Cleared active skill preset / security skill.'
-                        : '✓ Limpieza del preset / skill de seguridad activa.',
+                    sysMsg(tr('✓ Limpieza del preset / skill de seguridad activa.'),
                         'var(--acc)');
                 })();
                 return true;
@@ -1154,7 +1147,7 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
         // ── Sprint 8: KG mini-viewer ─────────────────────────────────────
         case 'kg-view': case 'kg-viz': {
             if (!arg) {
-                sysMsg(ctx.isEN ? 'Usage: /kg-view <full-file-path>' : 'Uso: /kg-view <ruta-completa>', 'var(--amber)');
+                sysMsg(tr('Uso: /kg-view <ruta-completa>'), 'var(--amber)');
                 return true;
             }
             if (ctx.openKgViewer) {
@@ -1170,9 +1163,7 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                 try {
                     const rows = await invoke<any[]>('frontier_telemetry_summary');
                     if (!rows || rows.length === 0) {
-                        sysMsg(ctx.isEN
-                            ? 'No Frontier telemetry recorded yet. Use any Frontier tool (state_diff, threat_scan, detective…) and it will start populating.'
-                            : 'Sin telemetría aún. Usa cualquier Frontier tool y comenzará a poblarse.',
+                        sysMsg(tr('Sin telemetría aún. Usa cualquier Frontier tool y comenzará a poblarse.'),
                             'var(--amber)');
                         return;
                     }
@@ -1191,7 +1182,7 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                             <span style="${errStyle}">${errPct}% err</span>
                         </div>`;
                     }).join('');
-                    sysMsg(`<b>${ctx.isEN ? 'Frontier feature usage' : 'Uso de features Frontier'} (${total} total invocations)</b>${html}`);
+                    sysMsg(`<b>${tr('Uso de features Frontier')} (${total} total invocations)</b>${html}`);
                 } catch (e) {
                     sysMsg(`Error: ${String(e)}`, 'var(--red)');
                 }
@@ -1205,14 +1196,12 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                 try {
                     const { buildNotebook, notebookToIpynb } = await import('$lib/notebook');
                     const nb = buildNotebook(t, {
-                        lang:        ctx.isEN ? 'en-US' : 'es-MX',
+                        lang:        tr('es-MX'),
                         lucyVersion: '1.4.4',
                         title:       (t as any).title,
                     });
                     if (!nb.cells || nb.cells.length === 0) {
-                        sysMsg(ctx.isEN
-                            ? 'Nothing to export — this tab is empty.'
-                            : 'Nada que exportar — esta pestaña está vacía.', 'var(--amber)');
+                        sysMsg(tr('Nada que exportar — esta pestaña está vacía.'), 'var(--amber)');
                         return;
                     }
                     const ipynbStr = notebookToIpynb(nb);
@@ -1244,9 +1233,7 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                     // populates `t._writeUndo` after every writefile.
                     const buf = (t as any)._writeUndo as Map<string, string> | undefined;
                     if (!buf || buf.size === 0) {
-                        sysMsg(ctx.isEN
-                            ? 'No write to revert. The undo buffer is only populated AFTER Lucy writes a file in this session.'
-                            : 'No hay nada que revertir. El buffer se llena después de que Lucy escribe un archivo en esta sesión.',
+                        sysMsg(tr('No hay nada que revertir. El buffer se llena después de que Lucy escribe un archivo en esta sesión.'),
                             'var(--amber)');
                         return;
                     }
@@ -1280,9 +1267,7 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                 try {
                     const sum = await invoke<any>('chip_stats_summary', { days: 7 });
                     if (!sum || sum.total_clicks + sum.total_dismisses === 0) {
-                        sysMsg(ctx.isEN
-                            ? 'No chip activity in the last 7 days. Click or dismiss any predictive chip and stats will populate.'
-                            : 'Sin actividad de chips en los últimos 7 días. Haz clic o descarta un chip y comenzará a llenarse.',
+                        sysMsg(tr('Sin actividad de chips en los últimos 7 días. Haz clic o descarta un chip y comenzará a llenarse.'),
                             'var(--amber)');
                         return;
                     }
@@ -1362,14 +1347,14 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                         tone: 'info',
                         defaultOpen: true,
                         html:
-                            `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Total' : 'Total'}</span>` +
-                            `<span class="rb-v">${sum.total_clicks} clicks · ${sum.total_dismisses} dismisses · ${sum.unique_labels} ${ctx.isEN ? 'unique labels' : 'etiquetas únicas'}</span></div>` +
-                            `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Bands' : 'Bandas'}</span>` +
+                            `<div class="rb-row"><span class="rb-k">${tr('Total')}</span>` +
+                            `<span class="rb-v">${sum.total_clicks} clicks · ${sum.total_dismisses} dismisses · ${sum.unique_labels} ${tr('etiquetas únicas')}</span></div>` +
+                            `<div class="rb-row"><span class="rb-k">${tr('Bandas')}</span>` +
                             `<span class="rb-v">${instincts.length} instincts · ${suggestions.length} suggestions · ${noise.length} noise</span></div>`,
                     });
                     if (instincts.length) {
                         blocks.push({
-                            title: `${ctx.isEN ? 'Instincts' : 'Instintos'} (${instincts.length})`,
+                            title: `${tr('Instintos')} (${instincts.length})`,
                             icon: '⚡',
                             tone: 'ok',
                             defaultOpen: true,
@@ -1378,7 +1363,7 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                     }
                     if (suggestions.length) {
                         blocks.push({
-                            title: `${ctx.isEN ? 'Suggestions on watchlist' : 'Sugerencias en watchlist'} (${suggestions.length})`,
+                            title: `${tr('Sugerencias en watchlist')} (${suggestions.length})`,
                             icon: '◇',
                             tone: 'warn',
                             html: suggestions.slice(0, 20).map(renderRow).join(''),
@@ -1386,7 +1371,7 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                     }
                     if (noise.length) {
                         blocks.push({
-                            title: `${ctx.isEN ? 'Noise (candidates to prune)' : 'Ruido (candidatos a podar)'} (${noise.length})`,
+                            title: `${tr('Ruido (candidatos a podar)')} (${noise.length})`,
                             icon: '⊘',
                             tone: 'crit',
                             html: noise.slice(0, 12).map(renderRow).join(''),
@@ -1432,17 +1417,15 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                             `<div class="rb-body">` +
                             `<div class="rb-row"><span class="rb-k">Signal</span>` +
                             `<span class="rb-v">${r.clicks}c / ${r.dismisses}d · ratio ${ratio} · net ${r.net.toFixed(1)}</span></div>` +
-                            `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Proposal' : 'Propuesta'}</span>` +
-                            `<span class="rb-v">${ctx.isEN ? 'Open' : 'Abrir'} <code>/skills</code> ${ctx.isEN ? "and save a script triggered by this label." : 'y guarda un script disparado por esta etiqueta.'}</span></div>` +
+                            `<div class="rb-row"><span class="rb-k">${tr('Propuesta')}</span>` +
+                            `<span class="rb-v">${tr('Abrir')} <code>/skills</code> ${tr('y guarda un script disparado por esta etiqueta.')}</span></div>` +
                             `</div></details>`;
                     };
                     const headline = ctx.isEN
                         ? `✦ Evolution candidates · ${candidates.length} pattern(s) ready to consolidate`
                         : `✦ Candidatos a evolucionar · ${candidates.length} patrón(es) listos para consolidar`;
                     const intro = `<div class="rb-hdr">${headline}</div>` +
-                        `<div class="rb-block rb-tone-info" open><div class="rb-body">${ctx.isEN
-                            ? 'These chips have crossed the engagement threshold. Each is a candidate to become an executable skill via <code>/skills</code> so it stops needing Layer 3 ranking and becomes a deterministic shortcut.'
-                            : 'Estos chips superaron el umbral de engagement. Cada uno es candidato a convertirse en una skill ejecutable vía <code>/skills</code> para que deje de necesitar ranking Layer 3 y pase a ser un atajo determinístico.'}</div></div>`;
+                        `<div class="rb-block rb-tone-info" open><div class="rb-body">${tr('Estos chips superaron el umbral de engagement. Cada uno es candidato a convertirse en una skill ejecutable vía <code>/skills</code> para que deje de necesitar ranking Layer 3 y pase a ser un atajo determinístico.')}</div></div>`;
                     const body = candidates.slice(0, 10).map(renderCandidate).join('');
                     sysMsg(`<div class="rb-wrap">${intro}${body}</div>`);
                 } catch (e) {
@@ -1469,14 +1452,14 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                 try {
                     const rep = await invoke<any>('memory_annealing_demote', { tag });
                     const blocks: ResultBlock[] = [{
-                        title: ctx.isEN ? 'Result' : 'Resultado',
+                        title: tr('Resultado'),
                         icon: '↧', tone: 'ok', defaultOpen: true,
                         html:
-                            `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Tag demoted' : 'Etiqueta democionada'}</span>` +
+                            `<div class="rb-row"><span class="rb-k">${tr('Etiqueta democionada')}</span>` +
                             `<span class="rb-v">${escapeHtml(rep.tag)}</span></div>` +
-                            `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Memories re-tagged' : 'Memorias re-etiquetadas'}</span>` +
+                            `<div class="rb-row"><span class="rb-k">${tr('Memorias re-etiquetadas')}</span>` +
                             `<span class="rb-v">${rep.members_touched}</span></div>` +
-                            `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Sent to primordial' : 'Enviadas a primordial'}</span>` +
+                            `<div class="rb-row"><span class="rb-k">${tr('Enviadas a primordial')}</span>` +
                             `<span class="rb-v">${rep.orphaned}</span></div>`,
                     }];
                     if (rep.reassigned?.length) {
@@ -1524,34 +1507,34 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                         const sub = argTrim.slice(4).trim().toLowerCase();
                         if (sub === 'on' || sub === 'enable' || sub === 'enabled') {
                             setAutoRouteEnabled(true);
-                            sysMsg(ctx.isEN ? '✓ Auto-routing enabled.' : '✓ Auto-routing activado.', 'var(--acc)');
+                            sysMsg(tr('✓ Auto-routing activado.'), 'var(--acc)');
                         } else if (sub === 'off' || sub === 'disable' || sub === 'disabled') {
                             setAutoRouteEnabled(false);
-                            sysMsg(ctx.isEN ? '✓ Auto-routing disabled.' : '✓ Auto-routing desactivado.', 'var(--acc)');
+                            sysMsg(tr('✓ Auto-routing desactivado.'), 'var(--acc)');
                         } else if (sub === 'llm-on' || sub === 'llm on') {
                             setLlmDisambEnabled(true);
-                            sysMsg(ctx.isEN ? '✓ LLM disambiguation enabled.' : '✓ Desambiguación LLM activada.', 'var(--acc)');
+                            sysMsg(tr('✓ Desambiguación LLM activada.'), 'var(--acc)');
                         } else if (sub === 'llm-off' || sub === 'llm off') {
                             setLlmDisambEnabled(false);
-                            sysMsg(ctx.isEN ? '✓ LLM disambiguation disabled.' : '✓ Desambiguación LLM desactivada.', 'var(--acc)');
+                            sysMsg(tr('✓ Desambiguación LLM desactivada.'), 'var(--acc)');
                         } else {
                             // status (default)
                             const status = await invoke<any>('security_skills_embed_status');
                             const last   = peekLastRoute();
                             const lastLine = last
                                 ? `${last.method} · ${last.skill_id || '(none)'} · score ${last.score.toFixed(2)} · ${last.elapsed_ms.toFixed(0)}ms · ${new Date(last.ts).toLocaleTimeString()}`
-                                : (ctx.isEN ? 'no auto-route yet this session' : 'sin auto-route esta sesión');
+                                : (tr('sin auto-route esta sesión'));
                             sysMsg(renderResultBlocks(
-                                ctx.isEN ? '▸ Auto-route status' : '▸ Estado de auto-route',
+                                tr('▸ Estado de auto-route'),
                                 [{
-                                    title: ctx.isEN ? 'Settings' : 'Configuración',
+                                    title: tr('Configuración'),
                                     icon: '◆', tone: 'info', defaultOpen: true,
                                     html:
                                         `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Auto-route' : 'Auto-routing'}</span><span class="rb-v">${isAutoRouteEnabled() ? '✓ on' : '✗ off'}</span></div>` +
-                                        `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'LLM disambiguation (Tier 3)' : 'Desambiguación LLM (Tier 3)'}</span><span class="rb-v">${isLlmDisambEnabled() ? '✓ on' : '✗ off'}</span></div>` +
-                                        `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Embeddings cached' : 'Embeddings cacheados'}</span><span class="rb-v">${status.in_memory} / ${status.skill_total} ${status.on_disk ? '(disk ✓)' : '(disk ✗ - first use will embed)'}</span></div>` +
-                                        `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Last route' : 'Último auto-route'}</span><span class="rb-v">${escapeHtml(lastLine)}</span></div>` +
-                                        `<div class="rb-row" style="opacity:.7;"><span class="rb-k">${ctx.isEN ? 'Toggle' : 'Cambiar'}</span><span class="rb-v"><code>/sec-skill auto on|off|llm-on|llm-off</code></span></div>`,
+                                        `<div class="rb-row"><span class="rb-k">${tr('Desambiguación LLM (Tier 3)')}</span><span class="rb-v">${isLlmDisambEnabled() ? '✓ on' : '✗ off'}</span></div>` +
+                                        `<div class="rb-row"><span class="rb-k">${tr('Embeddings cacheados')}</span><span class="rb-v">${status.in_memory} / ${status.skill_total} ${status.on_disk ? '(disk ✓)' : '(disk ✗ - first use will embed)'}</span></div>` +
+                                        `<div class="rb-row"><span class="rb-k">${tr('Último auto-route')}</span><span class="rb-v">${escapeHtml(lastLine)}</span></div>` +
+                                        `<div class="rb-row" style="opacity:.7;"><span class="rb-k">${tr('Cambiar')}</span><span class="rb-v"><code>/sec-skill auto on|off|llm-on|llm-off</code></span></div>`,
                                 }]));
                         }
                         return;
@@ -1592,7 +1575,7 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                     if (_argLc.startsWith('new ')) {
                         const newId = argTrim.slice(4).trim();
                         if (!newId) {
-                            sysMsg(ctx.isEN ? 'Usage: /sec-skill new <kebab-case-id>' : 'Uso: /sec-skill new <id-kebab-case>', 'var(--amber)');
+                            sysMsg(tr('Uso: /sec-skill new <id-kebab-case>'), 'var(--amber)');
                             return;
                         }
                         try {
@@ -1601,15 +1584,15 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                             sysMsg(renderResultBlocks(
                                 ctx.isEN ? `✦ Skill template ready — ${newId}` : `✦ Plantilla lista — ${newId}`,
                                 [{
-                                    title: ctx.isEN ? 'Save this content as:' : 'Guarda este contenido como:',
+                                    title: tr('Guarda este contenido como:'),
                                     icon: '◆', tone: 'info', defaultOpen: true,
                                     html:
-                                        `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Path' : 'Ruta'}</span>` +
+                                        `<div class="rb-row"><span class="rb-k">${tr('Ruta')}</span>` +
                                         `<span class="rb-v"><code>${escapeHtml(info.path)}\\${escapeHtml(newId)}\\SKILL.md</code></span></div>` +
-                                        `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'After saving' : 'Después de guardar'}</span>` +
+                                        `<div class="rb-row"><span class="rb-k">${tr('Después de guardar')}</span>` +
                                         `<span class="rb-v"><code>/sec-skill reload</code></span></div>` +
-                                        `<div class="rb-row" style="opacity:.7;margin-top:6px;"><span class="rb-k">${ctx.isEN ? 'Shortcut' : 'Atajo'}</span>` +
-                                        `<span class="rb-v">${ctx.isEN ? 'Drag the saved <code>.md</code> into chat → Lucy installs automatically.' : 'Arrastra el <code>.md</code> guardado al chat → Lucy lo instala automáticamente.'}</span></div>` +
+                                        `<div class="rb-row" style="opacity:.7;margin-top:6px;"><span class="rb-k">${tr('Atajo')}</span>` +
+                                        `<span class="rb-v">${tr('Arrastra el <code>.md</code> guardado al chat → Lucy lo instala automáticamente.')}</span></div>` +
                                         `<pre style="margin-top:8px;font-size:11px;max-height:420px;overflow:auto;background:rgba(255,255,255,.04);padding:10px;border-radius:6px;"><code>${escapeHtml(template)}</code></pre>`,
                                 }]));
                         } catch (e) {
@@ -1619,7 +1602,7 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                     }
                     // Sub-verb: `rebuild` rebuilds the embedding cache.
                     if (argTrim.toLowerCase() === 'rebuild' || argTrim.toLowerCase() === 'reindex') {
-                        sysMsg(ctx.isEN ? '⟳ Rebuilding skill embeddings…' : '⟳ Reconstruyendo embeddings de skills…');
+                        sysMsg(tr('⟳ Reconstruyendo embeddings de skills…'));
                         try {
                             const n = await invoke<number>('security_skills_rebuild_embeddings');
                             sysMsg(ctx.isEN ? `✓ Embedded ${n} skills.` : `✓ ${n} skills embebidas.`, 'var(--acc)');
@@ -1632,7 +1615,7 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                     if (argTrim.toLowerCase().startsWith('use ')) {
                         const id = argTrim.slice(4).trim();
                         if (!id) {
-                            sysMsg(ctx.isEN ? 'Usage: /sec-skill use <skill-id>' : 'Uso: /sec-skill use <id>', 'var(--amber)');
+                            sysMsg(tr('Uso: /sec-skill use <id>'), 'var(--amber)');
                             return;
                         }
                         const full = await invoke<any>('security_skills_get', { id });
@@ -1650,16 +1633,16 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                         sysMsg(renderResultBlocks(
                             ctx.isEN ? `✦ Security skill activated · ${full.meta.name}` : `✦ Skill de seguridad activada · ${full.meta.name}`,
                             [{
-                                title: ctx.isEN ? 'Active for the next turn' : 'Activa para el siguiente turno',
+                                title: tr('Activa para el siguiente turno'),
                                 icon: '✦', tone: 'ok', defaultOpen: true,
                                 html:
-                                    `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Description' : 'Descripción'}</span>` +
+                                    `<div class="rb-row"><span class="rb-k">${tr('Descripción')}</span>` +
                                     `<span class="rb-v">${escapeHtml(full.meta.description.slice(0, 200))}</span></div>` +
-                                    `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Tags' : 'Etiquetas'}</span>` +
+                                    `<div class="rb-row"><span class="rb-k">${tr('Etiquetas')}</span>` +
                                     `<span class="rb-v">${full.meta.tags.slice(0, 8).map((t: string) => escapeHtml(t)).join(' · ')}</span></div>` +
                                     (full.meta.mitre_attck?.length ? `<div class="rb-row"><span class="rb-k">MITRE ATT&CK</span><span class="rb-v">${full.meta.mitre_attck.join(' · ')}</span></div>` : '') +
                                     (full.meta.nist_csf?.length    ? `<div class="rb-row"><span class="rb-k">NIST CSF</span><span class="rb-v">${full.meta.nist_csf.join(' · ')}</span></div>` : '') +
-                                    `<div class="rb-row" style="opacity:.7;"><span class="rb-k">${ctx.isEN ? 'Tip' : 'Tip'}</span><span class="rb-v">${ctx.isEN ? 'Clear with <code>/preset clear</code>.' : 'Limpia con <code>/preset clear</code>.'}</span></div>`,
+                                    `<div class="rb-row" style="opacity:.7;"><span class="rb-k">${tr('Tip')}</span><span class="rb-v">${tr('Limpia con <code>/preset clear</code>.')}</span></div>`,
                             }]));
                         return;
                     }
@@ -1667,24 +1650,22 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                     if (!argTrim) {
                         const cats = await invoke<[string, number][]>('security_skills_categories');
                         if (!cats.length) {
-                            sysMsg(ctx.isEN
-                                ? 'No security skills loaded. Check `docs/security-skills/` is bundled.'
-                                : 'No hay skills de seguridad cargadas. Verifica que `docs/security-skills/` esté incluida.',
+                            sysMsg(tr('No hay skills de seguridad cargadas. Verifica que `docs/security-skills/` esté incluida.'),
                                 'var(--amber)');
                             return;
                         }
                         const rows = cats.slice(0, 24).map(([name, n]) =>
                             `<div class="rb-row"><span class="rb-k">${escapeHtml(name)}</span>` +
-                            `<span class="rb-v">${n} ${ctx.isEN ? 'skills' : 'skills'}</span></div>`
+                            `<span class="rb-v">${n} ${tr('skills')}</span></div>`
                         ).join('');
                         const total = cats.reduce((s, [, n]) => s + n, 0);
                         sysMsg(renderResultBlocks(
                             ctx.isEN ? `⚒ Security skills · ${total} loaded · ${cats.length} categories` : `⚒ Skills de seguridad · ${total} cargadas · ${cats.length} categorías`,
                             [{
-                                title: ctx.isEN ? 'Categories (by subdomain)' : 'Categorías (por subdominio)',
+                                title: tr('Categorías (por subdominio)'),
                                 icon: '◆', tone: 'info', defaultOpen: true,
                                 html: rows +
-                                    `<div class="rb-row" style="opacity:.7;margin-top:8px;"><span class="rb-k">${ctx.isEN ? 'Tip' : 'Tip'}</span><span class="rb-v">${ctx.isEN ? '<code>/sec-skill phishing</code> to search · <code>/sec-skill use &lt;id&gt;</code> to activate' : '<code>/sec-skill phishing</code> para buscar · <code>/sec-skill use &lt;id&gt;</code> para activar'}</span></div>`,
+                                    `<div class="rb-row" style="opacity:.7;margin-top:8px;"><span class="rb-k">${tr('Tip')}</span><span class="rb-v">${tr('<code>/sec-skill phishing</code> para buscar · <code>/sec-skill use &lt;id&gt;</code> para activar')}</span></div>`,
                             }]));
                         return;
                     }
@@ -1713,7 +1694,7 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                             `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Preview' : 'Resumen'}</span><span class="rb-v">${escapeHtml(h.preview)}</span></div>` +
                             (tags  ? `<div class="rb-row"><span class="rb-k">Tags</span><span class="rb-v">${tags}</span></div>` : '') +
                             (codes ? `<div class="rb-row"><span class="rb-k">Frameworks</span><span class="rb-v">${codes}</span></div>` : '') +
-                            `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Activate' : 'Activar'}</span><span class="rb-v"><code>/sec-skill use ${escapeHtml(h.meta.id)}</code></span></div>` +
+                            `<div class="rb-row"><span class="rb-k">${tr('Activar')}</span><span class="rb-v"><code>/sec-skill use ${escapeHtml(h.meta.id)}</code></span></div>` +
                             `</div></details>`;
                     };
                     const body = hits.map(renderHit).join('');
@@ -1748,7 +1729,7 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                         minimumFractionDigits: d, maximumFractionDigits: d });
                     const row = (e: Entry) => {
                         if (!e.available) {
-                            return `<div class="rb-row"><span class="rb-k">${e.backend}</span><span class="rb-v" style="opacity:.5;">${ctx.isEN ? 'not on this CPU' : 'no disponible'}</span></div>`;
+                            return `<div class="rb-row"><span class="rb-k">${e.backend}</span><span class="rb-v" style="opacity:.5;">${tr('no disponible')}</span></div>`;
                         }
                         const pill = e.speedup_vs_scalar >= 2.5
                             ? `<span style="color:var(--acc);font-weight:600;">${fmt(e.speedup_vs_scalar)}×</span>`
@@ -1760,16 +1741,16 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                     const winner = rep.entries.filter(e => e.available)
                         .reduce((b, e) => e.ops_per_s > b.ops_per_s ? e : b);
                     sysMsg(renderResultBlocks(
-                        ctx.isEN ? '◆ SIMD cosine benchmark' : '◆ Benchmark SIMD de cosine',
+                        tr('◆ Benchmark SIMD de cosine'),
                         [{
                             title: ctx.isEN
                                 ? `Throughput per backend · ${rep.iters.toLocaleString()} × ${rep.dim}-dim`
                                 : `Rendimiento por backend · ${rep.iters.toLocaleString()} × ${rep.dim}-dim`,
                             icon: '◆', tone: 'info', defaultOpen: true,
                             html: rep.entries.map(row).join('') +
-                                `<div class="rb-row" style="margin-top:8px;opacity:.85;"><span class="rb-k">${ctx.isEN ? 'Winner' : 'Ganador'}</span><span class="rb-v"><b style="color:var(--acc);">${winner.backend}</b> — ${fmt(winner.speedup_vs_scalar)}× ${ctx.isEN ? 'vs scalar baseline' : 'sobre scalar'}</span></div>` +
-                                `<div class="rb-row" style="opacity:.6;"><span class="rb-k">${ctx.isEN ? 'Active at runtime' : 'Activo en runtime'}</span><span class="rb-v">${rep.host_backend}</span></div>` +
-                                `<div class="rb-row" style="opacity:.6;font-size:11px;"><span class="rb-k"></span><span class="rb-v">${ctx.isEN ? 'Use /bench-simd 100000 for a longer run' : 'Usa /bench-simd 100000 para una corrida más larga'}</span></div>`,
+                                `<div class="rb-row" style="margin-top:8px;opacity:.85;"><span class="rb-k">${tr('Ganador')}</span><span class="rb-v"><b style="color:var(--acc);">${winner.backend}</b> — ${fmt(winner.speedup_vs_scalar)}× ${tr('sobre scalar')}</span></div>` +
+                                `<div class="rb-row" style="opacity:.6;"><span class="rb-k">${tr('Activo en runtime')}</span><span class="rb-v">${rep.host_backend}</span></div>` +
+                                `<div class="rb-row" style="opacity:.6;font-size:11px;"><span class="rb-k"></span><span class="rb-v">${tr('Usa /bench-simd 100000 para una corrida más larga')}</span></div>`,
                         }]));
                 } catch (e) {
                     sysMsg(`Error: ${String(e)}`, 'var(--red)');
@@ -1816,22 +1797,22 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
 
                     const totalSec = sec.cybersec_skills_bundled + sec.cybersec_skills_user;
                     sysMsg(renderResultBlocks(
-                        ctx.isEN ? '◆ Lucy capabilities' : '◆ Capacidades de Lucy',
+                        tr('◆ Capacidades de Lucy'),
                         [{
-                            title: ctx.isEN ? 'Loaded inventory' : 'Inventario cargado',
+                            title: tr('Inventario cargado'),
                             icon: '◆', tone: 'info', defaultOpen: true,
                             html:
-                                `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Cybersec skills (total)' : 'Skills cybersec (total)'}</span><span class="rb-v"><b>${totalSec}</b></span></div>` +
-                                `<div class="rb-row" style="opacity:.8;"><span class="rb-k">&nbsp;&nbsp;${ctx.isEN ? 'bundled' : 'bundled'}</span><span class="rb-v">${sec.cybersec_skills_bundled}</span></div>` +
-                                `<div class="rb-row" style="opacity:.8;"><span class="rb-k">&nbsp;&nbsp;${ctx.isEN ? 'user-installed' : 'instaladas por usuario'}</span><span class="rb-v">${sec.cybersec_skills_user}</span></div>` +
-                                `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Domains covered' : 'Dominios cubiertos'}</span><span class="rb-v">${sec.cybersec_domains}</span></div>` +
-                                `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Frameworks mapped' : 'Frameworks mapeados'}</span><span class="rb-v">${sec.cybersec_frameworks}</span></div>` +
-                                `<div class="rb-row" style="margin-top:6px;"><span class="rb-k">${ctx.isEN ? 'ECC presets available' : 'Presets ECC disponibles'}</span><span class="rb-v"><b>${presetTotal}</b></span></div>` +
-                                `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'MCP servers registered' : 'MCP servers registrados'}</span><span class="rb-v">${mcpCount}</span></div>` +
-                                `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Runbooks saved' : 'Runbooks guardados'}</span><span class="rb-v">${runbookCount}</span></div>` +
+                                `<div class="rb-row"><span class="rb-k">${tr('Skills cybersec (total)')}</span><span class="rb-v"><b>${totalSec}</b></span></div>` +
+                                `<div class="rb-row" style="opacity:.8;"><span class="rb-k">&nbsp;&nbsp;${tr('bundled')}</span><span class="rb-v">${sec.cybersec_skills_bundled}</span></div>` +
+                                `<div class="rb-row" style="opacity:.8;"><span class="rb-k">&nbsp;&nbsp;${tr('instaladas por usuario')}</span><span class="rb-v">${sec.cybersec_skills_user}</span></div>` +
+                                `<div class="rb-row"><span class="rb-k">${tr('Dominios cubiertos')}</span><span class="rb-v">${sec.cybersec_domains}</span></div>` +
+                                `<div class="rb-row"><span class="rb-k">${tr('Frameworks mapeados')}</span><span class="rb-v">${sec.cybersec_frameworks}</span></div>` +
+                                `<div class="rb-row" style="margin-top:6px;"><span class="rb-k">${tr('Presets ECC disponibles')}</span><span class="rb-v"><b>${presetTotal}</b></span></div>` +
+                                `<div class="rb-row"><span class="rb-k">${tr('MCP servers registrados')}</span><span class="rb-v">${mcpCount}</span></div>` +
+                                `<div class="rb-row"><span class="rb-k">${tr('Runbooks guardados')}</span><span class="rb-v">${runbookCount}</span></div>` +
                                 `<div class="rb-row" style="margin-top:6px;opacity:.7;"><span class="rb-k">${ctx.isEN ? 'Auto-routing' : 'Auto-routing'}</span><span class="rb-v">${sec.auto_route_enabled ? '✓ on' : '✗ off'}</span></div>` +
-                                `<div class="rb-row" style="opacity:.7;"><span class="rb-k">${ctx.isEN ? 'Embedding cache' : 'Cache de embeddings'}</span><span class="rb-v">${sec.embed_cache_ready ? '✓ ready' : '⚠ rebuild needed'}</span></div>` +
-                                `<div class="rb-row" style="margin-top:8px;font-size:11px;opacity:.6;"><span class="rb-k"></span><span class="rb-v">${ctx.isEN ? 'Use <code>/sec-skill</code> to browse cybersec skills, <code>/preset</code> for ECC presets' : 'Usa <code>/sec-skill</code> para ver skills cybersec, <code>/preset</code> para los ECC'}</span></div>`,
+                                `<div class="rb-row" style="opacity:.7;"><span class="rb-k">${tr('Cache de embeddings')}</span><span class="rb-v">${sec.embed_cache_ready ? '✓ ready' : '⚠ rebuild needed'}</span></div>` +
+                                `<div class="rb-row" style="margin-top:8px;font-size:11px;opacity:.6;"><span class="rb-k"></span><span class="rb-v">${tr('Usa <code>/sec-skill</code> para ver skills cybersec, <code>/preset</code> para los ECC')}</span></div>`,
                         }]));
                 } catch (e) {
                     sysMsg(`Error: ${String(e)}`, 'var(--red)');
@@ -1854,19 +1835,19 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                               : info.backend === 'avx2+fma' ? 'info'
                               : 'warn';
                     sysMsg(renderResultBlocks(
-                        ctx.isEN ? '◆ CPU SIMD backend' : '◆ Backend SIMD del CPU',
+                        tr('◆ Backend SIMD del CPU'),
                         [{
-                            title: ctx.isEN ? 'Active backend' : 'Backend activo',
+                            title: tr('Backend activo'),
                             icon: '◆', tone, defaultOpen: true,
                             html:
-                                `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Architecture' : 'Arquitectura'}</span><span class="rb-v">${info.arch}</span></div>` +
-                                `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Cosine path' : 'Ruta de cosine'}</span><span class="rb-v" style="font-weight:600;color:var(--acc);">${info.backend}</span></div>` +
+                                `<div class="rb-row"><span class="rb-k">${tr('Arquitectura')}</span><span class="rb-v">${info.arch}</span></div>` +
+                                `<div class="rb-row"><span class="rb-k">${tr('Ruta de cosine')}</span><span class="rb-v" style="font-weight:600;color:var(--acc);">${info.backend}</span></div>` +
                                 `<div class="rb-row"><span class="rb-k">AVX-512F</span>${badge(info.has_avx512f, info.has_avx512f ? 'detected' : 'not present')}</div>` +
                                 `<div class="rb-row"><span class="rb-k">AVX-512DQ</span>${badge(info.has_avx512dq, info.has_avx512dq ? 'detected' : 'not present')}</div>` +
                                 `<div class="rb-row"><span class="rb-k">AVX-512VL</span>${badge(info.has_avx512vl, info.has_avx512vl ? 'detected' : 'not present')}</div>` +
                                 `<div class="rb-row"><span class="rb-k">AVX2</span>${badge(info.has_avx2, info.has_avx2 ? 'detected' : 'not present')}</div>` +
                                 `<div class="rb-row"><span class="rb-k">FMA</span>${badge(info.has_fma, info.has_fma ? 'detected' : 'not present')}</div>` +
-                                `<div class="rb-row" style="opacity:.7;margin-top:6px;"><span class="rb-k">${ctx.isEN ? 'Hot path' : 'Hot path'}</span><span class="rb-v">${ctx.isEN ? 'skills routing Tier 2, memory grounding' : 'routing de skills Tier 2, grounding de memoria'}</span></div>`,
+                                `<div class="rb-row" style="opacity:.7;margin-top:6px;"><span class="rb-k">${tr('Hot path')}</span><span class="rb-v">${tr('routing de skills Tier 2, grounding de memoria')}</span></div>`,
                         }]));
                 } catch (e) {
                     sysMsg(`Error: ${String(e)}`, 'var(--red)');
@@ -1887,17 +1868,17 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                     const sub = arg.trim().toLowerCase();
                     if (sub === 'on' || sub === 'enable' || sub === 'enabled') {
                         setVerifyEnabled(true);
-                        sysMsg(ctx.isEN ? '✓ Script verification enabled.' : '✓ Verificación de scripts activada.', 'var(--acc)');
+                        sysMsg(tr('✓ Verificación de scripts activada.'), 'var(--acc)');
                         return;
                     }
                     if (sub === 'off' || sub === 'disable' || sub === 'disabled') {
                         setVerifyEnabled(false);
-                        sysMsg(ctx.isEN ? '✓ Script verification disabled.' : '✓ Verificación de scripts desactivada.', 'var(--acc)');
+                        sysMsg(tr('✓ Verificación de scripts desactivada.'), 'var(--acc)');
                         return;
                     }
                     if (sub === 'reset' || sub === 'clear') {
                         resetVerifyStats();
-                        sysMsg(ctx.isEN ? '✓ Verifier stats reset.' : '✓ Estadísticas del verificador reiniciadas.', 'var(--acc)');
+                        sysMsg(tr('✓ Estadísticas del verificador reiniciadas.'), 'var(--acc)');
                         return;
                     }
                     const stats = peekVerifyStats();
@@ -1905,21 +1886,21 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                     const byLang = Object.entries(stats.by_language)
                         .sort((a, b) => b[1] - a[1])
                         .slice(0, 6)
-                        .map(([k, v]) => `${k} ${v}`).join(' · ') || (ctx.isEN ? 'none yet' : 'aún ninguno');
+                        .map(([k, v]) => `${k} ${v}`).join(' · ') || (tr('aún ninguno'));
                     sysMsg(renderResultBlocks(
-                        ctx.isEN ? '✓ Script verifier' : '✓ Verificador de scripts',
+                        tr('✓ Verificador de scripts'),
                         [{
-                            title: ctx.isEN ? 'Status' : 'Estado',
+                            title: tr('Estado'),
                             icon: '◆', tone: 'info', defaultOpen: true,
                             html:
-                                `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Enabled' : 'Activado'}</span><span class="rb-v">${enabled ? '✓ on' : '✗ off'}</span></div>` +
-                                `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Code blocks scanned' : 'Bloques escaneados'}</span><span class="rb-v">${stats.total_scanned}</span></div>` +
-                                `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Clean on first check' : 'Limpios al primer check'}</span><span class="rb-v">${stats.clean_first}</span></div>` +
-                                `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Auto-fixed by CHEAP tier' : 'Auto-fixed por CHEAP'}</span><span class="rb-v">${stats.auto_fixed}</span></div>` +
-                                `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Unverified (manual review)' : 'No verificados (revisar)'}</span><span class="rb-v">${stats.unverified}</span></div>` +
-                                `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Skipped (no checker)' : 'Saltados (sin checker)'}</span><span class="rb-v">${stats.skipped}</span></div>` +
-                                `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'By language' : 'Por lenguaje'}</span><span class="rb-v">${escapeHtml(byLang)}</span></div>` +
-                                `<div class="rb-row" style="opacity:.7;margin-top:6px;"><span class="rb-k">${ctx.isEN ? 'Toggle' : 'Cambiar'}</span><span class="rb-v"><code>/verify on|off|reset</code></span></div>`,
+                                `<div class="rb-row"><span class="rb-k">${tr('Activado')}</span><span class="rb-v">${enabled ? '✓ on' : '✗ off'}</span></div>` +
+                                `<div class="rb-row"><span class="rb-k">${tr('Bloques escaneados')}</span><span class="rb-v">${stats.total_scanned}</span></div>` +
+                                `<div class="rb-row"><span class="rb-k">${tr('Limpios al primer check')}</span><span class="rb-v">${stats.clean_first}</span></div>` +
+                                `<div class="rb-row"><span class="rb-k">${tr('Auto-fixed por CHEAP')}</span><span class="rb-v">${stats.auto_fixed}</span></div>` +
+                                `<div class="rb-row"><span class="rb-k">${tr('No verificados (revisar)')}</span><span class="rb-v">${stats.unverified}</span></div>` +
+                                `<div class="rb-row"><span class="rb-k">${tr('Saltados (sin checker)')}</span><span class="rb-v">${stats.skipped}</span></div>` +
+                                `<div class="rb-row"><span class="rb-k">${tr('Por lenguaje')}</span><span class="rb-v">${escapeHtml(byLang)}</span></div>` +
+                                `<div class="rb-row" style="opacity:.7;margin-top:6px;"><span class="rb-k">${tr('Cambiar')}</span><span class="rb-v"><code>/verify on|off|reset</code></span></div>`,
                         }]));
                 } catch (e) {
                     sysMsg(`Error: ${String(e)}`, 'var(--red)');
@@ -1956,16 +1937,16 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                         const g   = statusGlyph(e.status);
                         const probeLine =
                             e.status === 'unknown'
-                                ? (ctx.isEN ? 'not probed yet' : 'aún sin probar')
+                                ? (tr('aún sin probar'))
                                 : `${e.status} · ${e.latency_ms} ms · ${escapeHtml(e.model_id)}`;
                         const histLine = lat.samples === 0
-                            ? (ctx.isEN ? 'no history yet' : 'sin historial')
+                            ? (tr('sin historial'))
                             : `n=${lat.samples} · p50 ${lat.p50}ms · p95 ${lat.p95}ms · mean ${lat.mean}ms`;
                         const breakerLine = b.is_open
                             ? (ctx.isEN
                                 ? `breaker OPEN (since ${new Date(b.opened_at).toLocaleTimeString()}, ${b.consecutive_fails} fails)`
                                 : `breaker ABIERTO (desde ${new Date(b.opened_at).toLocaleTimeString()}, ${b.consecutive_fails} fallos)`)
-                            : (ctx.isEN ? 'breaker closed' : 'breaker cerrado');
+                            : (tr('breaker cerrado'));
                         return `<div class="rb-row">` +
                                `<span class="rb-k">${g.glyph} ${k}</span>` +
                                `<span class="rb-v">${probeLine}</span></div>` +
@@ -1977,12 +1958,12 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                                `<span class="rb-v">${breakerLine}${e.error ? ` · ${escapeHtml(e.error)}` : ''}</span></div>`;
                     };
                     const blocks: ResultBlock[] = [{
-                        title: ctx.isEN ? 'Tier health' : 'Salud por capa',
+                        title: tr('Salud por capa'),
                         icon: '◉', tone: 'info', defaultOpen: true,
                         html: order.map(renderTier).join(''),
                     }];
                     sysMsg(renderResultBlocks(
-                        ctx.isEN ? '◉ LLM health' : '◉ Salud LLM',
+                        tr('◉ Salud LLM'),
                         blocks));
                 } catch (e) {
                     sysMsg(`Error: ${String(e)}`, 'var(--red)');
@@ -2009,18 +1990,18 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                         // No arg → rebuild the axis and dump the diagnostic.
                         const axis = await invoke<any>('memory_polarity_rebuild');
                         sysMsg(renderResultBlocks(
-                            ctx.isEN ? '⌬ Polarity axis rebuilt' : '⌬ Eje de polaridad reconstruido',
+                            tr('⌬ Eje de polaridad reconstruido'),
                             [{
-                                title: ctx.isEN ? 'Axis diagnostics' : 'Diagnóstico del eje',
+                                title: tr('Diagnóstico del eje'),
                                 icon: '◆', tone: 'info', defaultOpen: true,
                                 html:
-                                    `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Anchor pairs' : 'Pares de anclaje'}</span>` +
+                                    `<div class="rb-row"><span class="rb-k">${tr('Pares de anclaje')}</span>` +
                                     `<span class="rb-v">${axis.n_pairs}</span></div>` +
-                                    `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Embedder' : 'Modelo de embeddings'}</span>` +
+                                    `<div class="rb-row"><span class="rb-k">${tr('Modelo de embeddings')}</span>` +
                                     `<span class="rb-v">${escapeHtml(axis.model)}</span></div>` +
-                                    `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Raw magnitude' : 'Magnitud cruda'}</span>` +
+                                    `<div class="rb-row"><span class="rb-k">${tr('Magnitud cruda')}</span>` +
                                     `<span class="rb-v">${axis.raw_norm.toFixed(3)} ${axis.raw_norm < 1.0 ? '(low — anchors may disagree)' : ''}</span></div>` +
-                                    `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Dimensions' : 'Dimensiones'}</span>` +
+                                    `<div class="rb-row"><span class="rb-k">${tr('Dimensiones')}</span>` +
                                     `<span class="rb-v">${axis.axis?.length || '?'}</span></div>`,
                             }]));
                         return;
@@ -2028,31 +2009,29 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                     const proj = await invoke<any>('memory_polarity', { text });
                     const s = proj.score;
                     const tone = s > 0.10 ? 'ok' : s < -0.10 ? 'crit' : 'warn';
-                    const label = s > 0.10 ? (ctx.isEN ? 'positive (supports)' : 'positiva (apoya)')
-                                : s < -0.10 ? (ctx.isEN ? 'negative (contradicts)' : 'negativa (contradice)')
-                                            : (ctx.isEN ? 'neutral' : 'neutral');
+                    const label = s > 0.10 ? (tr('positiva (apoya)'))
+                                : s < -0.10 ? (tr('negativa (contradice)'))
+                                            : (tr('neutral'));
                     sysMsg(renderResultBlocks(
                         ctx.isEN ? `⌬ Polarity · ${s.toFixed(3)}` : `⌬ Polaridad · ${s.toFixed(3)}`,
                         [{
-                            title: ctx.isEN ? 'Projection' : 'Proyección',
+                            title: tr('Proyección'),
                             icon: s > 0 ? '↥' : s < 0 ? '↧' : '◇',
                             tone,
                             defaultOpen: true,
                             html:
-                                `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Input' : 'Entrada'}</span>` +
+                                `<div class="rb-row"><span class="rb-k">${tr('Entrada')}</span>` +
                                 `<span class="rb-v">${escapeHtml(text.slice(0, 80))}</span></div>` +
-                                `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Score' : 'Puntaje'}</span>` +
+                                `<div class="rb-row"><span class="rb-k">${tr('Puntaje')}</span>` +
                                 `<span class="rb-v">${s.toFixed(3)} — ${label}</span></div>` +
-                                `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Axis built' : 'Eje construido'}</span>` +
+                                `<div class="rb-row"><span class="rb-k">${tr('Eje construido')}</span>` +
                                 `<span class="rb-v">${new Date(proj.axis_built_at * 1000).toLocaleString()}</span></div>` +
-                                `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Model' : 'Modelo'}</span>` +
+                                `<div class="rb-row"><span class="rb-k">${tr('Modelo')}</span>` +
                                 `<span class="rb-v">${escapeHtml(proj.axis_model)}</span></div>`,
                         }]));
                 } catch (e) {
                     const hint = String(e).toLowerCase().includes('ollama')
-                        ? (ctx.isEN
-                            ? ' (Ollama with nomic-embed-text required — run `ollama pull nomic-embed-text`)'
-                            : ' (Requiere Ollama con nomic-embed-text — corre `ollama pull nomic-embed-text`)')
+                        ? (tr(' (Requiere Ollama con nomic-embed-text — corre `ollama pull nomic-embed-text`)'))
                         : '';
                     sysMsg(`Error: ${String(e)}${hint}`, 'var(--red)');
                 }
@@ -2093,30 +2072,30 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                             // ever"), NOT the count of live memories. The
                             // active count is shown separately so the user
                             // doesn't see "596 memorias" when only 6 are live.
-                            `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Active memories' : 'Memorias activas'}</span>` +
+                            `<div class="rb-row"><span class="rb-k">${tr('Memorias activas')}</span>` +
                             `<span class="rb-v">${rep.active_memories ?? '?'}</span></div>` +
-                            `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Lifetime ingests' : 'Ingestas históricas'}</span>` +
-                            `<span class="rb-v">${rep.global_epoch} <em style="opacity:.6;">(${ctx.isEN ? 'ID counter, incl. deleted/superseded' : 'contador de ID, incluye borradas/superseded'})</em></span></div>` +
-                            `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Clusters' : 'Cúmulos'}</span>` +
-                            `<span class="rb-v">${rep.n_clusters} ${ctx.isEN ? 'scored' : 'evaluados'} · ${promote.length} promote · ${demote.length} demote · ${watch.length} watch · ${stable.length} stable</span></div>`,
+                            `<div class="rb-row"><span class="rb-k">${tr('Ingestas históricas')}</span>` +
+                            `<span class="rb-v">${rep.global_epoch} <em style="opacity:.6;">(${tr('contador de ID, incluye borradas/superseded')})</em></span></div>` +
+                            `<div class="rb-row"><span class="rb-k">${tr('Cúmulos')}</span>` +
+                            `<span class="rb-v">${rep.n_clusters} ${tr('evaluados')} · ${promote.length} promote · ${demote.length} demote · ${watch.length} watch · ${stable.length} stable</span></div>`,
                     });
                     if (promote.length) blocks.push({
-                        title: `${ctx.isEN ? 'Promotion candidates' : 'Candidatos a promoción'} (${promote.length})`,
+                        title: `${tr('Candidatos a promoción')} (${promote.length})`,
                         icon: '↥', tone: 'ok', defaultOpen: true,
                         html: promote.slice(0, 10).map(renderRow).join(''),
                     });
                     if (demote.length) blocks.push({
-                        title: `${ctx.isEN ? 'Demotion candidates' : 'Candidatos a democión'} (${demote.length})`,
+                        title: `${tr('Candidatos a democión')} (${demote.length})`,
                         icon: '↧', tone: 'crit',
                         html: demote.slice(0, 10).map(renderRow).join(''),
                     });
                     if (watch.length) blocks.push({
-                        title: `${ctx.isEN ? 'Watch (borderline)' : 'Vigilar (frontera)'} (${watch.length})`,
+                        title: `${tr('Vigilar (frontera)')} (${watch.length})`,
                         icon: '◇', tone: 'warn',
                         html: watch.slice(0, 10).map(renderRow).join(''),
                     });
                     if (stable.length) blocks.push({
-                        title: `${ctx.isEN ? 'Stable / no action' : 'Estables / sin acción'} (${stable.length})`,
+                        title: `${tr('Estables / sin acción')} (${stable.length})`,
                         icon: '◯', tone: 'info',
                         html: stable.slice(0, 10).map(renderRow).join(''),
                     });

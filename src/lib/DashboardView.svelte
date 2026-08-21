@@ -1,4 +1,6 @@
 <script>
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     // v1.4.25 — alert family extracted to a single global stylesheet.
     // Closes the v1.4.20 CSS-dedup migration backlog (5/5).
     import '$lib/styles/dashboard-alerts.css';
@@ -100,7 +102,7 @@
 
     function fmtRelHours(unixSec) {
         const d = Math.floor(Date.now()/1000) - unixSec;
-        if (d < 60)    return isEN ? 'just now' : 'ahora';
+        if (d < 60)    return $trad('ahora');
         if (d < 3600)  return `${Math.floor(d/60)}m`;
         if (d < 86400) return `${Math.floor(d/3600)}h`;
         return `${Math.floor(d/86400)}d`;
@@ -266,9 +268,9 @@
     }
     function sectionTitle(key) {
         switch (key) {
-            case 'cores':     return isEN ? 'CPU Cores'              : 'Núcleos CPU';
-            case 'storage':   return isEN ? 'Storage'                : 'Almacenamiento';
-            case 'processes': return isEN ? 'Top Processes (by RAM)' : 'Top procesos (por RAM)';
+            case 'cores':     return $trad('Núcleos CPU');
+            case 'storage':   return $trad('Almacenamiento');
+            case 'processes': return $trad('Top procesos (por RAM)');
             default:          return key;
         }
     }
@@ -340,7 +342,7 @@
                 fetched = await invoke('get_system_health_json');
             } else {
                 const h = hosts.find(x => x.id === fetchedFor);
-                if (!h) { dashError = isEN ? 'Host not found.' : 'Host no encontrado.'; dashLoading = false; return; }
+                if (!h) { dashError = $trad('Host no encontrado.'); dashLoading = false; return; }
                 let pwd = '';
                 try { pwd = await invoke('get_host_credential', { hostId: h.id }); } catch(e){}
                 if (h.type === 'windows') {
@@ -535,8 +537,8 @@
             {
                 description: isEN ? `PID ${p.pid} · this may cause data loss in that app.` : `PID ${p.pid} · puede causar pérdida de datos en esa app.`,
                 tone: 'danger',
-                confirmLabel: isEN ? 'End task' : 'Finalizar',
-                cancelLabel:  isEN ? 'Cancel' : 'Cancelar',
+                confirmLabel: $trad('Finalizar'),
+                cancelLabel:  $trad('Cancelar'),
             });
         if (!_ok) return;
         try { await invoke('kill_process', { pid: Number(p.pid) }); toast(isEN ? `Ended ${p.name}` : `Finalizado ${p.name}`, 'info'); refreshDash(); }
@@ -544,7 +546,7 @@
     }
     async function revealProc(p) {
         closeProcMenu();
-        if (!p?.path) { toast(isEN ? 'No file path for this process' : 'Sin ruta de archivo para este proceso', 'warn'); return; }
+        if (!p?.path) { toast($trad('Sin ruta de archivo para este proceso'), 'warn'); return; }
         try { await invoke('reveal_in_explorer', { path: p.path }); }
         catch (e) { toast('✗ ' + String(e).slice(0, 140), 'warn'); }
     }
@@ -556,7 +558,7 @@
     }
     async function copyProcPid(p) {
         closeProcMenu();
-        try { await invoke('copy_to_clipboard', { text: String(p.pid) }); toast(isEN ? 'PID copied' : 'PID copiado', 'info'); } catch {}
+        try { await invoke('copy_to_clipboard', { text: String(p.pid) }); toast($trad('PID copiado'), 'info'); } catch {}
     }
 
     // ── Failed-logins drill-down (D-Login) ───────────────────────────────────
@@ -663,22 +665,22 @@
 
 <div class="view-wrap">
   <div class="view-hdr">
-    <div class="view-title" style="display:flex;align-items:center;gap:6px;{dashSelectedHost!=='local'?(()=>{const hc=hosts.find(h=>h.id===dashSelectedHost);return hc?.color?`border-left:3px solid ${hc.color};padding-left:10px;`:'';})():''}"><BarChart3 size={13} stroke={2}/> {isEN ? 'System Dashboard' : 'Dashboard de Sistema'}</div>
+    <div class="view-title" style="display:flex;align-items:center;gap:6px;{dashSelectedHost!=='local'?(()=>{const hc=hosts.find(h=>h.id===dashSelectedHost);return hc?.color?`border-left:3px solid ${hc.color};padding-left:10px;`:'';})():''}"><BarChart3 size={13} stroke={2}/> {$trad('Dashboard de Sistema')}</div>
     <div style="display:flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:wrap;">
       <select class="view-select" bind:value={dashSelectedHost} on:change={onDashHostChange}>
         <option value="local">⊡ Local ({hostName})</option>
         {#each hosts as h}<option value={h.id}>{h.type==='windows'?'⊡':'◈'} {h.name}</option>{/each}
       </select>
       {#if dashRefreshTimer}
-        <span class="dash-auto-badge" title={isEN ? 'Auto-refresh every 10s' : 'Auto-actualización cada 10s'}>
+        <span class="dash-auto-badge" title={$trad('Auto-actualización cada 10s')}>
           <span class="dash-pulse"></span>auto
         </span>
       {/if}
-      <button class="view-btn" on:click={refreshDash} disabled={dashLoading} title={isEN ? 'Refresh now' : 'Actualizar ahora'}>{dashLoading?'⏳':'↻'}</button>
-      <button class="view-btn" on:click={() => showAlertsModal=true} title={isEN ? 'Configure proactive alerts' : 'Configurar alertas proactivas'}
+      <button class="view-btn" on:click={refreshDash} disabled={dashLoading} title={$trad('Actualizar ahora')}>{dashLoading?'⏳':'↻'}</button>
+      <button class="view-btn" on:click={() => showAlertsModal=true} title={$trad('Configurar alertas proactivas')}
         style="position:relative;display:flex;align-items:center;gap:4px;"><Bell size={13} stroke={1.8}/>{#if $activeAlerts.length}<span class="alert-badge-btn">{$activeAlerts.length}</span>{/if}</button>
       {#if dashLastUpdate}
-        <span class="dash-last-update">{isEN ? 'Upd.' : 'Act.'} {dashLastUpdate}</span>
+        <span class="dash-last-update">{$trad('Act.')} {dashLastUpdate}</span>
       {/if}
     </div>
   </div>
@@ -706,11 +708,11 @@
         ? `open incident${openIncidents.open_count === 1 ? '' : 's'} on this host`
         : `incidente${openIncidents.open_count === 1 ? '' : 's'} abierto${openIncidents.open_count === 1 ? '' : 's'} en este host`}
       {#if openIncidents.latest_title}
-        · {isEN ? 'most recent' : 'más reciente'}: <em>{openIncidents.latest_title.slice(0, 80)}</em>
+        · {$trad('más reciente')}: <em>{openIncidents.latest_title.slice(0, 80)}</em>
       {/if}
     </span>
     <button class="dc-banner-cta" on:click={() => dispatch('setview', { view: 'incidents' })}>
-      {isEN ? 'Open incidents view →' : 'Abrir vista de incidentes →'}
+      {$trad('Abrir vista de incidentes →')}
     </button>
   </div>
   {/if}
@@ -719,8 +721,8 @@
     {#each $activeAlerts as al}
     <div class="alert-item">
       <span class="alert-item-ico"><AlertTriangle size={13} stroke={2} style="color:var(--red)"/></span>
-      <span><b>{al.metric}</b> {isEN ? 'on' : 'en'} <b>{al.hostLabel}</b>: <span style="color:var(--red);font-weight:700;">{al.value}%</span> ({isEN ? 'threshold' : 'umbral'} {al.threshold}%) · {al.ts}</span>
-      <button class="alert-dismiss" on:click={() => $activeAlerts = $activeAlerts.filter(x=>x.id!==al.id)} title={isEN ? 'Dismiss' : 'Descartar'}>✕</button>
+      <span><b>{al.metric}</b> {$trad('en')} <b>{al.hostLabel}</b>: <span style="color:var(--red);font-weight:700;">{al.value}%</span> ({$trad('umbral')} {al.threshold}%) · {al.ts}</span>
+      <button class="alert-dismiss" on:click={() => $activeAlerts = $activeAlerts.filter(x=>x.id!==al.id)} title={$trad('Descartar')}>✕</button>
     </div>
     {/each}
   </div>
@@ -732,7 +734,7 @@
           CPU
           <!-- D14 — Thresholds editor trigger -->
           <button class="dc-thr-btn" on:click={() => openThresholdEditor('cpu')}
-                  title={isEN ? 'Edit warn/crit thresholds' : 'Editar umbrales warn/crit'}>⚙</button>
+                  title={$trad('Editar umbrales warn/crit')}>⚙</button>
           {#if anomalyCpu}
             <span class="anomaly-badge"
                   class:extreme={anomalyCpu.severity === 'extreme'}
@@ -748,7 +750,7 @@
               <span use:countUp={{ target: dashMetrics.cpu.global, suffix: '%', duration: 900 }}></span>
             </div>
             <div class="dc-bar"><div class="dc-bar-fill" style="width:{dashMetrics.cpu.global}%;background:{sevVarFor('cpu', dashMetrics.cpu.global, 'var(--acc)')}"></div></div>
-            <div class="dc-sub">{dashMetrics.cpu.cores} {isEN ? 'cores' : 'núcleos'}</div>
+            <div class="dc-sub">{dashMetrics.cpu.cores} {$trad('núcleos')}</div>
             <!-- Tier A #3 — OLS projection pill. Only shows when we have a
                  regression with ≥5 samples (≥14 days of data). -->
             {#if capacityProjections[dashSelectedHost]?.cpu}
@@ -768,7 +770,7 @@
         <div class="dc-label">
           RAM
           <button class="dc-thr-btn" on:click={() => openThresholdEditor('ram')}
-                  title={isEN ? 'Edit warn/crit thresholds' : 'Editar umbrales warn/crit'}>⚙</button>
+                  title={$trad('Editar umbrales warn/crit')}>⚙</button>
           {#if anomalyRam}
             <span class="anomaly-badge"
                   class:extreme={anomalyRam.severity === 'extreme'}
@@ -799,12 +801,12 @@
         </div>
       </div>
       <div class="dash-card lucy-card-hover">
-        <div class="dc-label">{isEN ? 'System' : 'Sistema'}</div>
+        <div class="dc-label">{$trad('Sistema')}</div>
         <div class="dc-value" style="font-size:13px;color:var(--txt);">{dashMetrics.hostname}</div>
         <div class="dc-sub">{dashMetrics.os}</div>
         <div class="dc-sub">Uptime: {dashMetrics.uptime_h}h</div>
         {#if metricsHistory[dashSelectedHost]?.length > 1}
-        <div class="dc-sub" style="margin-top:4px;color:#4ade80;display:flex;align-items:center;gap:4px;"><TrendingUp size={11} stroke={2}/> {metricsHistory[dashSelectedHost].length} {isEN ? 'samples' : 'muestras'}</div>
+        <div class="dc-sub" style="margin-top:4px;color:#4ade80;display:flex;align-items:center;gap:4px;"><TrendingUp size={11} stroke={2}/> {metricsHistory[dashSelectedHost].length} {$trad('muestras')}</div>
         {/if}
       </div>
 
@@ -813,12 +815,10 @@
       {#if dashMetrics.swap?.enabled}
         <div class="dash-card lucy-card-hover">
           <div class="dc-label">
-            {isEN ? 'Page file' : 'Archivo paginación'}
+            {$trad('Archivo paginación')}
             <button class="dc-thr-btn" on:click={() => openThresholdEditor('swap')}
-                    title={isEN ? 'Edit warn/crit thresholds' : 'Editar umbrales warn/crit'}>⚙</button>
-            <span class="dc-hint" title={isEN
-              ? 'Swap / page file. High usage = real memory pressure, often more telling than RAM% alone.'
-              : 'Swap / archivo de paginación. Uso alto = presión de memoria real, suele ser más revelador que solo RAM%.'}>ⓘ</span>
+                    title={$trad('Editar umbrales warn/crit')}>⚙</button>
+            <span class="dc-hint" title={$trad('Swap / archivo de paginación. Uso alto = presión de memoria real, suele ser más revelador que solo RAM%.')}>ⓘ</span>
           </div>
           <div class="dc-value" style="color:{sevVarFor('swap', dashMetrics.swap.percent, 'var(--blue)')}">
             <span use:countUp={{ target: dashMetrics.swap.percent, suffix: '%', duration: 900 }}></span>
@@ -838,10 +838,8 @@
         {@const _tempColor = _maxTemp >= 85 ? 'var(--red)' : _maxTemp >= 70 ? 'var(--amber)' : 'var(--acc)'}
         <div class="dash-card lucy-card-hover">
           <div class="dc-label">
-            {isEN ? 'Temperatures' : 'Temperaturas'}
-            <span class="dc-hint" title={isEN
-              ? 'CPU/GPU/SSD sensors. Thermal throttling above 85°C — silent perf killer.'
-              : 'Sensores CPU/GPU/SSD. Thermal throttling sobre 85°C — degrada perf en silencio.'}>ⓘ</span>
+            {$trad('Temperaturas')}
+            <span class="dc-hint" title={$trad('Sensores CPU/GPU/SSD. Thermal throttling sobre 85°C — degrada perf en silencio.')}>ⓘ</span>
           </div>
           <div class="dc-value" style="color:{_tempColor};">
             <span use:countUp={{ target: _maxTemp, suffix: '°C', duration: 900 }}></span>
@@ -870,10 +868,8 @@
              on:click={() => { if (_flClickable) openFlDetail(); }}
              on:keydown={(e) => { if (_flClickable && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openFlDetail(); } }}>
           <div class="dc-label">
-            {isEN ? 'Failed logins (24h)' : 'Logins fallidos (24h)'}
-            <span class="dc-hint" title={isEN
-              ? 'Windows Security log event 4625. Reading this requires admin privileges.'
-              : 'Evento 4625 del Security log de Windows. Leerlo requiere permisos admin.'}>ⓘ</span>
+            {$trad('Logins fallidos (24h)')}
+            <span class="dc-hint" title={$trad('Evento 4625 del Security log de Windows. Leerlo requiere permisos admin.')}>ⓘ</span>
           </div>
           {#if _fl.available}
             <div class="dc-value" style="color:{_color};">
@@ -881,9 +877,9 @@
             </div>
             <div class="dc-sub">
               {#if _fl.count_24h === 0}
-                {isEN ? 'No failed attempts' : 'Sin intentos fallidos'}
+                {$trad('Sin intentos fallidos')}
               {:else}
-                <span class="fl-drill">{isEN ? 'Event ID 4625 · click to inspect →' : 'Event ID 4625 · clic para ver detalle →'}</span>
+                <span class="fl-drill">{$trad('Event ID 4625 · clic para ver detalle →')}</span>
               {/if}
             </div>
           {:else}
@@ -898,10 +894,8 @@
       {#if dashMetrics.network}
         <div class="dash-card lucy-card-hover">
           <div class="dc-label">
-            {isEN ? 'Network' : 'Red'}
-            <span class="dc-hint" title={isEN
-              ? 'Throughput in Mbps. Spikes correlate with backups, deploys, or unexpected traffic.'
-              : 'Throughput en Mbps. Picos correlacionan con backups, deploys o tráfico inesperado.'}>ⓘ</span>
+            {$trad('Red')}
+            <span class="dc-hint" title={$trad('Throughput en Mbps. Picos correlacionan con backups, deploys o tráfico inesperado.')}>ⓘ</span>
           </div>
           <div class="net-rates">
             <div class="net-rate">
@@ -933,24 +927,24 @@
       <div class="dc-thr-modal" role="dialog" aria-label="Edit thresholds">
         <div class="dc-thr-modal-inner">
           <div class="dc-thr-modal-hdr">
-            <strong>{editingThresholdsFor.toUpperCase()} {isEN ? 'thresholds' : 'umbrales'}</strong>
+            <strong>{editingThresholdsFor.toUpperCase()} {$trad('umbrales')}</strong>
             <span class="dc-thr-host">@ {dashSelectedHost === 'local' ? 'local' : dashSelectedHost}</span>
             <button class="dc-thr-x" on:click={() => editingThresholdsFor = null}>✕</button>
           </div>
           <div class="dc-thr-row">
             <label for="dc-thr-warn">warn ≥</label>
             <input id="dc-thr-warn" type="number" min="1" max="98" bind:value={_thrDraft.warn}/>
-            <span class="dc-thr-default">{isEN ? 'default' : 'default'}: {DEFAULT_THRESHOLDS[editingThresholdsFor]?.warn}</span>
+            <span class="dc-thr-default">{$trad('default')}: {DEFAULT_THRESHOLDS[editingThresholdsFor]?.warn}</span>
           </div>
           <div class="dc-thr-row">
             <label for="dc-thr-crit">crit ≥</label>
             <input id="dc-thr-crit" type="number" min="2" max="99" bind:value={_thrDraft.crit}/>
-            <span class="dc-thr-default">{isEN ? 'default' : 'default'}: {DEFAULT_THRESHOLDS[editingThresholdsFor]?.crit}</span>
+            <span class="dc-thr-default">{$trad('default')}: {DEFAULT_THRESHOLDS[editingThresholdsFor]?.crit}</span>
           </div>
           <div class="dc-thr-actions">
-            <button class="dc-thr-save" on:click={saveThresholdDraft}>{isEN ? 'Save' : 'Guardar'}</button>
+            <button class="dc-thr-save" on:click={saveThresholdDraft}>{$trad('Guardar')}</button>
             <button class="dc-thr-reset" on:click={() => { resetThresholds(editingThresholdsFor); editingThresholdsFor = null; }}>
-              {isEN ? 'Reset to default' : 'Restaurar default'}
+              {$trad('Restaurar default')}
             </button>
           </div>
         </div>
@@ -959,35 +953,35 @@
 
     <!-- D-Proc — process right-click menu -->
     {#if procMenu}
-      <button class="proc-menu-backdrop" aria-label={isEN ? 'Close menu' : 'Cerrar menú'} on:click={closeProcMenu} on:contextmenu|preventDefault={closeProcMenu}></button>
+      <button class="proc-menu-backdrop" aria-label={$trad('Cerrar menú')} on:click={closeProcMenu} on:contextmenu|preventDefault={closeProcMenu}></button>
       <div class="proc-menu" role="menu"
            style="left:{Math.min(procMenu.x, (typeof window!=='undefined'?window.innerWidth:9999) - 230)}px;top:{Math.min(procMenu.y, (typeof window!=='undefined'?window.innerHeight:9999) - 180)}px;">
         <div class="proc-menu-hdr">{procMenu.proc.name} · PID {procMenu.proc.pid}</div>
-        <button class="proc-menu-item" on:click={() => askLucyAboutProc(procMenu.proc)}>🔎 {isEN ? 'Ask Lucy about this' : 'Preguntar a Lucy'}</button>
+        <button class="proc-menu-item" on:click={() => askLucyAboutProc(procMenu.proc)}>🔎 {$trad('Preguntar a Lucy')}</button>
         {#if procMenu.proc.path}
-          <button class="proc-menu-item" on:click={() => revealProc(procMenu.proc)}>📁 {isEN ? 'Open file location' : 'Abrir ubicación'}</button>
+          <button class="proc-menu-item" on:click={() => revealProc(procMenu.proc)}>📁 {$trad('Abrir ubicación')}</button>
         {/if}
-        <button class="proc-menu-item" on:click={() => copyProcPid(procMenu.proc)}>⧉ {isEN ? 'Copy PID' : 'Copiar PID'}</button>
-        <button class="proc-menu-item proc-menu-danger" on:click={() => killProc(procMenu.proc)}>⛔ {isEN ? 'End task' : 'Finalizar tarea'}</button>
+        <button class="proc-menu-item" on:click={() => copyProcPid(procMenu.proc)}>⧉ {$trad('Copiar PID')}</button>
+        <button class="proc-menu-item proc-menu-danger" on:click={() => killProc(procMenu.proc)}>⛔ {$trad('Finalizar tarea')}</button>
       </div>
     {/if}
 
     <!-- D-Login — failed-logins drill-down -->
     {#if flDetailOpen}
-      <button class="fl-modal-backdrop" aria-label={isEN ? 'Close' : 'Cerrar'} on:click={() => flDetailOpen = false}></button>
+      <button class="fl-modal-backdrop" aria-label={$trad('Cerrar')} on:click={() => flDetailOpen = false}></button>
       <div class="fl-modal" role="dialog" aria-label="Failed logins detail">
         <div class="fl-modal-hdr">
-          <strong>{isEN ? 'Failed logins — last 24h' : 'Logins fallidos — últimas 24h'}</strong>
+          <strong>{$trad('Logins fallidos — últimas 24h')}</strong>
           <button class="fl-modal-x" on:click={() => flDetailOpen = false}>✕</button>
         </div>
         {#if flDetailLoading}
-          <div class="fl-modal-empty">{isEN ? 'Loading…' : 'Cargando…'}</div>
+          <div class="fl-modal-empty">{$trad('Cargando…')}</div>
         {:else if flDetail.length === 0}
-          <div class="fl-modal-empty">{isEN ? 'No detailed events (needs admin to read the Security log).' : 'Sin eventos detallados (requiere admin para leer el Security log).'}</div>
+          <div class="fl-modal-empty">{$trad('Sin eventos detallados (requiere admin para leer el Security log).')}</div>
         {:else}
           <div class="fl-modal-body">
             <table class="fl-table">
-              <thead><tr><th>{isEN ? 'Time' : 'Hora'}</th><th>{isEN ? 'User' : 'Usuario'}</th><th>{isEN ? 'Source IP' : 'IP origen'}</th><th>{isEN ? 'Workstation' : 'Equipo'}</th><th>{isEN ? 'Type' : 'Tipo'}</th></tr></thead>
+              <thead><tr><th>{$trad('Hora')}</th><th>{$trad('Usuario')}</th><th>{$trad('IP origen')}</th><th>{$trad('Equipo')}</th><th>{$trad('Tipo')}</th></tr></thead>
               <tbody>
                 {#each flDetail as ev}
                   <tr>
@@ -1011,13 +1005,13 @@
     {#if sectionOrder.join(',') !== DEFAULT_SECTION_ORDER.join(',') || hiddenSections.size > 0}
       <div class="dash-section-toolbar">
         <span class="dst-hint">
-          {isEN ? '✎ Layout customized' : '✎ Layout personalizado'}
+          {$trad('✎ Layout personalizado')}
           {#if hiddenSections.size > 0}
-            · {hiddenSections.size} {isEN ? 'hidden' : 'oculta' + (hiddenSections.size === 1 ? '' : 's')}
+            · {hiddenSections.size} {$trad('oculta') + (hiddenSections.size === 1 ? '' : 's')}
           {/if}
         </span>
         <button class="dst-reset" on:click={resetSectionLayout}>
-          ↺ {isEN ? 'Reset to default' : 'Restaurar default'}
+          ↺ {$trad('Restaurar default')}
         </button>
       </div>
     {/if}
@@ -1038,7 +1032,7 @@
              on:drop={(e) => onSectionDrop(e, sIdx)}
              role="region" aria-label={sectionTitle(sectionKey)}>
           <div class="ds-title">
-            <span class="ds-drag-handle" title={isEN ? 'Drag to reorder' : 'Arrastra para reordenar'}>⋮⋮</span>
+            <span class="ds-drag-handle" title={$trad('Arrastra para reordenar')}>⋮⋮</span>
             <span class="ds-title-text">{sectionTitle(sectionKey)}</span>
             {#if sectionKey === 'storage' && anomalyDisk}
               <span class="anomaly-badge" class:extreme={anomalyDisk.severity === 'extreme'}
@@ -1047,7 +1041,7 @@
               </span>
             {/if}
             <button class="ds-hide-btn" on:click={() => toggleSectionHidden(sectionKey)}
-                    title={isEN ? 'Hide this section' : 'Ocultar esta sección'}>👁</button>
+                    title={$trad('Ocultar esta sección')}>👁</button>
           </div>
 
           {#if sectionKey === 'cores'}
@@ -1063,17 +1057,17 @@
               <div class="disk-row" class:disk-low={_low}>
                 <div class="disk-name">
                   {disk.name||disk.mount}
-                  {#if _low}<span class="disk-low-tag" title={isEN ? 'Less than 10% free' : 'Menos del 10% libre'}>⚠ {isEN ? 'low' : 'poco'}</span>{/if}
+                  {#if _low}<span class="disk-low-tag" title={$trad('Menos del 10% libre')}>⚠ {$trad('poco')}</span>{/if}
                 </div>
                 <div class="disk-bar-wrap"><div class="disk-bar-fill" style="width:{disk.percent}%;background:{diskSevVar(disk.percent)}"></div></div>
                 <div class="disk-pct" style="color:{disk.percent >= 75 ? diskSevVar(disk.percent) : 'var(--txt2)'}">{disk.percent}%</div>
-                <div class="disk-size">{disk.used_gb}G / {disk.total_gb}G{#if disk.free_gb != null} · {disk.free_gb}G {isEN ? 'free' : 'libre'}{/if}</div>
+                <div class="disk-size">{disk.used_gb}G / {disk.total_gb}G{#if disk.free_gb != null} · {disk.free_gb}G {$trad('libre')}{/if}</div>
               </div>
             {/each}
           {:else if sectionKey === 'processes'}
             <table class="proc-table">
               <thead><tr>
-                <th class="proc-th" on:click={() => setProcSort('name')}>{isEN ? 'Process' : 'Proceso'}{procSortKey==='name'?(procSortDir<0?' ▾':' ▴'):''}</th>
+                <th class="proc-th" on:click={() => setProcSort('name')}>{$trad('Proceso')}{procSortKey==='name'?(procSortDir<0?' ▾':' ▴'):''}</th>
                 <th class="proc-th proc-th-num" on:click={() => setProcSort('cpu')}>CPU %{procSortKey==='cpu'?(procSortDir<0?' ▾':' ▴'):''}</th>
                 <th class="proc-th proc-th-num" on:click={() => setProcSort('mem_mb')}>RAM MB{procSortKey==='mem_mb'?(procSortDir<0?' ▾':' ▴'):''}</th>
                 <th class="proc-th proc-th-num" on:click={() => setProcSort('pid')}>PID{procSortKey==='pid'?(procSortDir<0?' ▾':' ▴'):''}</th>
@@ -1083,7 +1077,7 @@
                   {@const _lineage = processLineage.get(Number(p.pid))}
                 <tr class="proc-row" class:proc-self={p.name === SELF_PROC}
                     on:contextmenu={(e) => openProcMenu(e, p)}
-                    title={isEN ? 'Right-click for actions (end task, open location, ask Lucy)' : 'Clic derecho para acciones (finalizar, abrir ubicación, preguntar a Lucy)'}>
+                    title={$trad('Clic derecho para acciones (finalizar, abrir ubicación, preguntar a Lucy)')}>
                   <td style="font-family:var(--mono);font-size:11px;color:var(--txt);">
                     {p.name}
                     {#if p.name === SELF_PROC}<span class="proc-self-tag">Lucy</span>{/if}
@@ -1092,7 +1086,7 @@
                             title={isEN
                               ? `First seen ${fmtRelHours(_lineage.first_seen)} ago by Lucy's process lineage tracker`
                               : `Visto por primera vez hace ${fmtRelHours(_lineage.first_seen)} por el lineage tracker de Lucy`}>
-                        ● {isEN ? 'new' : 'nuevo'}
+                        ● {$trad('nuevo')}
                       </span>
                     {/if}
                   </td>
@@ -1111,14 +1105,14 @@
         <div class="dash-section-ghost">
           <span>{sectionTitle(sectionKey)}</span>
           <button class="ds-unhide-btn" on:click={() => toggleSectionHidden(sectionKey)}>
-            🙈 → 👁 {isEN ? 'Show' : 'Mostrar'}
+            🙈 → 👁 {$trad('Mostrar')}
           </button>
         </div>
       {/if}
     {/each}
   </div>
   {:else}
-    <div class="view-loading"><span style="color:var(--txt3)">{isEN ? 'Select a host to view metrics' : 'Selecciona un host para ver métricas'}</span></div>
+    <div class="view-loading"><span style="color:var(--txt3)">{$trad('Selecciona un host para ver métricas')}</span></div>
   {/if}
 </div>
 

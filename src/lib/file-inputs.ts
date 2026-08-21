@@ -3,6 +3,9 @@
 
 import { invoke } from '@tauri-apps/api/core';
 
+// La interfaz en cinco idiomas. `tr` y no `$trad`: esto no es un
+// componente, así que no hay nada a lo que suscribirse. Ver `$lib/i18n`.
+import { tr } from '$lib/i18n';
 export interface FileInputOpts {
     isEN: boolean;
     getActiveTabId: () => string | null;
@@ -65,7 +68,7 @@ export async function attach(tabId: string, opts: FileInputOpts): Promise<void> 
             // The backend reports unreadable files in-band rather than dropping
             // them, so the user learns WHICH file failed and why.
             if (mime === '__error__') {
-                toast(content || `${isEN ? 'Could not read' : 'No se pudo leer'} ${name}`, 'error');
+                toast(content || `${tr('No se pudo leer')} ${name}`, 'error');
                 continue;
             }
             if (t.attachedFiles.some((f: any) => f.name === name)) continue;
@@ -84,7 +87,7 @@ export async function attach(tabId: string, opts: FileInputOpts): Promise<void> 
         }
         if (agregados > 0) refresh();
     } catch (e) {
-        toast(`${isEN ? 'Error attaching files' : 'Error adjuntando archivos'}: ${e}`, 'error');
+        toast(`${tr('Error adjuntando archivos')}: ${e}`, 'error');
     }
 }
 

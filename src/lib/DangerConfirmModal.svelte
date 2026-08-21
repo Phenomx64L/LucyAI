@@ -1,4 +1,6 @@
 <script>
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     import { createEventDispatcher, onMount } from 'svelte';
     import { riskColor, riskIcon } from '$lib/hooks/command-guard';
     import Monitor from '@tabler/icons-svelte/icons/device-desktop';
@@ -9,7 +11,6 @@
     /** @type {import('$lib/hooks/command-guard').RiskAssessment} */
     export let assessment = null;
     export let hostName   = '';
-    export let isEN       = false;
     export let source     = 'manual'; // manual | ai | broadcast | playbook
 
     let countdown   = 0;
@@ -71,22 +72,22 @@
       <span class="dg-hdr-icon">{riskIcon(assessment.level)}</span>
       <span class="dg-hdr-title">
         {#if assessment.level === 'critical'}
-          {isEN ? 'CRITICAL RISK DETECTED' : 'RIESGO CRITICO DETECTADO'}
+          {$trad('RIESGO CRITICO DETECTADO')}
         {:else if assessment.level === 'high'}
-          {isEN ? 'HIGH RISK DETECTED' : 'RIESGO ALTO DETECTADO'}
+          {$trad('RIESGO ALTO DETECTADO')}
         {:else}
-          {isEN ? 'MODERATE RISK DETECTED' : 'RIESGO MODERADO DETECTADO'}
+          {$trad('RIESGO MODERADO DETECTADO')}
         {/if}
       </span>
       <div class="dg-score">
         <span class="dg-score-val">{assessment.score}</span>
-        <span class="dg-score-lbl">{isEN ? 'Risk Score' : 'Puntaje'}</span>
+        <span class="dg-score-lbl">{$trad('Puntaje')}</span>
       </div>
     </div>
 
     <!-- Command preview -->
     <div class="dg-section">
-      <div class="dg-label">{isEN ? 'Command' : 'Comando'}</div>
+      <div class="dg-label">{$trad('Comando')}</div>
       <pre class="dg-cmd">{assessment.command}</pre>
     </div>
 
@@ -100,7 +101,7 @@
 
     <!-- Summary -->
     <div class="dg-section">
-      <div class="dg-label">{isEN ? 'Analysis' : 'Analisis'}</div>
+      <div class="dg-label">{$trad('Analisis')}</div>
       <div class="dg-summary">{assessment.summary}</div>
       {#if assessment.suggestion}
         <div class="dg-suggestion" style="display:flex;align-items:flex-start;gap:5px;"><Lightbulb size={11} stroke={2}/> {assessment.suggestion}</div>
@@ -110,7 +111,7 @@
     <!-- Risk matches -->
     {#if assessment.matches.length > 0}
     <div class="dg-section">
-      <div class="dg-label">{isEN ? 'Detections' : 'Detecciones'} ({assessment.matches.length})</div>
+      <div class="dg-label">{$trad('Detecciones')} ({assessment.matches.length})</div>
       <div class="dg-matches">
         {#each assessment.matches as m}
         <div class="dg-match">
@@ -130,24 +131,24 @@
         <div class="dg-bar-fill" style="width:{assessment.score}%"></div>
       </div>
       <div class="dg-bar-labels">
-        <span style="color:#88aacc">{isEN ? 'Low' : 'Bajo'}</span>
-        <span style="color:#ffaa33">{isEN ? 'Medium' : 'Medio'}</span>
-        <span style="color:#ff6644">{isEN ? 'High' : 'Alto'}</span>
-        <span style="color:#ff2020">{isEN ? 'Critical' : 'Critico'}</span>
+        <span style="color:#88aacc">{$trad('Bajo')}</span>
+        <span style="color:#ffaa33">{$trad('Medio')}</span>
+        <span style="color:#ff6644">{$trad('Alto')}</span>
+        <span style="color:#ff2020">{$trad('Critico')}</span>
       </div>
     </div>
 
     <!-- Actions -->
     <div class="dg-actions">
       <button class="dg-btn cancel" on:click={cancel}>
-        {isEN ? 'Cancel' : 'Cancelar'}
+        {$trad('Cancelar')}
       </button>
       <button class="dg-btn confirm" on:click={confirm} disabled={!canConfirm}
         style="--btn-color:{riskColor(assessment.level)}">
         {#if !canConfirm}
-          {isEN ? 'Wait' : 'Espera'} {countdown}s...
+          {$trad('Espera')} {countdown}s...
         {:else}
-          {isEN ? 'Execute Anyway' : 'Ejecutar de todas formas'}
+          {$trad('Ejecutar de todas formas')}
         {/if}
       </button>
     </div>

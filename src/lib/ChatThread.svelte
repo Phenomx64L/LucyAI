@@ -1,4 +1,6 @@
 <script lang="ts">
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     // v1.4.24 — page.css's chat-thread block (.chat-wrap, .chat-area, .msg-*,
     // .skel-*, .mn, .thinking-*, .msg-reasoning + .reasoning-*, .streaming-*)
     // extracted to a single global stylesheet to close the v1.4.20 audit
@@ -168,17 +170,17 @@
      × → unpins by re-dispatching pinmessage (parent toggles). -->
 {#if pinnedSummaries.length > 0}
     <!-- v1.4.11 — auto-animate makes pin/unpin and reorders feel native. -->
-    <div class="pin-strip" role="region" aria-label={isEN ? 'Pinned messages' : 'Mensajes fijados'} use:autoAnimate>
+    <div class="pin-strip" role="region" aria-label={$trad('Mensajes fijados')} use:autoAnimate>
         {#each pinnedSummaries as p (p.id)}
             <button class="pin-chip pin-chip-{p.role}"
                     on:click={() => scrollToMsg(p.id)}
-                    title={isEN ? 'Jump to this message' : 'Saltar a este mensaje'}>
+                    title={$trad('Saltar a este mensaje')}>
                 <span class="pin-glyph">●</span>
                 <span class="pin-role">{p.role === 'user' ? '›' : '◆'}</span>
                 <span class="pin-text">{p.preview}</span>
                 <span class="pin-x" role="button" tabindex="0"
                       aria-label="Unpin"
-                      title={isEN ? 'Unpin' : 'Quitar pin'}
+                      title={$trad('Quitar pin')}
                       on:click|stopPropagation={() => dispatch('pinmessage', { msg: p.msg })}
                       on:keydown={(e) => { if (e.key==='Enter') { e.stopPropagation(); dispatch('pinmessage',{msg:p.msg}); } }}>×</span>
             </button>
@@ -279,7 +281,7 @@
                 {#if msg.role !== 'system'}
                     {#if msg.rawRole && (msg.role === 'user' || msg.role === 'lucy')}
                         <button class="msg-pin" class:on={msg.pinned}
-                            title={msg.pinned ? (isEN ? 'Unpin' : 'Quitar pin') : (isEN ? 'Pin to context' : 'Fijar al contexto')}
+                            title={msg.pinned ? ($trad('Quitar pin')) : ($trad('Fijar al contexto'))}
                             on:click={() => dispatch('pinmessage', { msg })}>·</button>
                         <!-- Quick-win I — Branch-from-here. Spawns a new tab cloning
                              the conversation up to and including THIS message, so
@@ -288,16 +290,16 @@
                              (branching after the question, not after the prompt). -->
                         {#if msg.role === 'lucy'}
                             <button class="msg-branch"
-                                title={isEN ? 'Branch a new tab from here' : 'Bifurcar en una nueva pestaña desde aquí'}
-                                aria-label={isEN ? 'Branch from this message' : 'Bifurcar desde este mensaje'}
+                                title={$trad('Bifurcar en una nueva pestaña desde aquí')}
+                                aria-label={$trad('Bifurcar desde este mensaje')}
                                 on:click={() => dispatch('branchmessage', { msg })}>⌥</button>
                             <!-- Quick-win J — Replay: open the ReplayBrowser scoped to
                                  this turn's snapshot. Lets the operator re-run the SAME
                                  turn against the same OR a different model and see the
                                  drift score. Only relevant on Lucy turns. -->
                             <button class="msg-replay"
-                                title={isEN ? 'Replay this turn (open replay browser)' : 'Reproducir este turno (abrir replay browser)'}
-                                aria-label={isEN ? 'Replay this turn' : 'Reproducir este turno'}
+                                title={$trad('Reproducir este turno (abrir replay browser)')}
+                                aria-label={$trad('Reproducir este turno')}
                                 on:click={() => dispatch('replaymessage', { msg })}>⏪</button>
                             <!-- v1.4.15 — 👍/👎 reactions feed Layer 3 memory training.
                                  Each click is logged via log_chip_event; positive
@@ -306,13 +308,13 @@
                                  confirmation but can change their mind. -->
                             <button class="msg-react msg-react-up"
                                 class:on={msg.reaction === 'up'}
-                                title={isEN ? 'Good answer' : 'Buena respuesta'}
-                                aria-label={isEN ? 'Thumbs up' : 'Me gusta'}
+                                title={$trad('Buena respuesta')}
+                                aria-label={$trad('Me gusta')}
                                 on:click={() => dispatch('reactmessage', { msg, kind: 'up' })}>👍</button>
                             <button class="msg-react msg-react-down"
                                 class:on={msg.reaction === 'down'}
-                                title={isEN ? 'Needs work' : 'Necesita mejorar'}
-                                aria-label={isEN ? 'Thumbs down' : 'No me gusta'}
+                                title={$trad('Necesita mejorar')}
+                                aria-label={$trad('No me gusta')}
                                 on:click={() => dispatch('reactmessage', { msg, kind: 'down' })}>👎</button>
                         {/if}
                     {/if}
@@ -325,13 +327,12 @@
                             elapsedMs={msg.chapterData.elapsedMs}
                             steps={msg.chapterData.steps}
                             finalHtml={msg.chapterData.finalHtml}
-                            {isEN}
                             on:flip={() => { msg.viewMode = 'linear'; tab.messages = [...tab.messages]; }} />
                     {:else if msg.chapterData && msg.viewMode === 'linear'}
                         <button class="chap-flip-back"
                                 on:click={() => { msg.viewMode = 'chapter'; tab.messages = [...tab.messages]; }}
-                                title={isEN ? 'Switch to chapter view' : 'Cambiar a vista de capítulos'}>
-                            ◆ {isEN ? 'Chapter view' : 'Vista de capítulos'}
+                                title={$trad('Cambiar a vista de capítulos')}>
+                            ◆ {$trad('Vista de capítulos')}
                         </button>
                         <!-- v1.7.56 — morphdom-driven content. `display:contents`
                              makes the wrapper transparent to layout so the

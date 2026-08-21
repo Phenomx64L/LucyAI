@@ -9,6 +9,8 @@
      `/sec-skill new <id>`), so the header exposes "Open folder" + "Reload".
 ─────────────────────────────────────────────────────────────────────────── -->
 <script>
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     import { createEventDispatcher, onMount } from 'svelte';
     import { invoke } from '@tauri-apps/api/core';
     import { toast } from 'svelte-sonner';
@@ -80,14 +82,14 @@
             // (slash-commands.ts) always passed one.
             setSecuritySkillAsPreset(full);
             activeId = s.id;
-            toast.success((isEN ? 'Activated: ' : 'Activada: ') + s.name);
+            toast.success(($trad('Activada: ')) + s.name);
         } catch (e) { toast.error(String(e)); }
         busy = '';
     }
     function deactivate() {
         clearActiveSecuritySkill();
         activeId = null;
-        toast(isEN ? 'No active skill' : 'Sin skill activa');
+        toast($trad('Sin skill activa'));
     }
     async function view(s) {
         busy = s.id;
@@ -99,14 +101,14 @@
         if (s.source !== 'user') return;
         const ok = await lucyConfirm(
             isEN ? `Delete skill "${s.name}"?` : `¿Eliminar la skill "${s.name}"?`,
-            { tone: 'danger', description: s.id, confirmLabel: isEN ? 'Delete' : 'Eliminar' });
+            { tone: 'danger', description: s.id, confirmLabel: $trad('Eliminar') });
         if (!ok) return;
         busy = s.id;
         try {
             await invoke('security_skills_delete', { id: s.id });
             if (activeId === s.id) { clearActiveSecuritySkill(); activeId = null; }
             await load();
-            toast.success((isEN ? 'Deleted: ' : 'Eliminada: ') + s.name);
+            toast.success(($trad('Eliminada: ')) + s.name);
         } catch (e) { toast.error(String(e)); }
         busy = '';
     }
@@ -121,7 +123,7 @@
         try {
             const n = await invoke('security_skills_reload');
             await load();
-            toast.success((isEN ? 'Reloaded — ' : 'Recargado — ') + n + ' skills');
+            toast.success(($trad('Recargado — ')) + n + ' skills');
         } catch (e) { toast.error(String(e)); }
     }
     function close() { dispatch('close'); }
@@ -134,14 +136,14 @@
     <div class="scm-hdr">
       <span class="scm-hdr-ico"><ShieldCheck size={20} stroke={1.9} color="var(--acc, #10b981)"/></span>
       <div class="scm-hdr-text">
-        <h2>{isEN ? 'Skills Manager' : 'Gestor de Skills'}</h2>
+        <h2>{$trad('Gestor de Skills')}</h2>
         <p class="scm-sub">{isEN
           ? `${skills.length} loaded · ${userCount} user · the rest are bundled (read-only)`
           : `${skills.length} cargadas · ${userCount} de usuario · el resto vienen con Lucy (solo lectura)`}</p>
       </div>
       <div class="scm-hdr-acts">
-        <button class="scm-tbtn" on:click={openFolder} title={isEN ? 'Open user skills folder' : 'Abrir carpeta de skills de usuario'}><FolderOpen size={14}/></button>
-        <button class="scm-tbtn" on:click={reload} title={isEN ? 'Reload index' : 'Recargar índice'}><RefreshCw size={14}/></button>
+        <button class="scm-tbtn" on:click={openFolder} title={$trad('Abrir carpeta de skills de usuario')}><FolderOpen size={14}/></button>
+        <button class="scm-tbtn" on:click={reload} title={$trad('Recargar índice')}><RefreshCw size={14}/></button>
         <button class="scm-close" on:click={close} aria-label="Close">✕</button>
       </div>
     </div>
@@ -149,7 +151,7 @@
     {#if viewing}
       <!-- ── Detail / preview ── -->
       <div class="scm-detail">
-        <button class="scm-back" on:click={() => viewing = null}>← {isEN ? 'Back to list' : 'Volver a la lista'}</button>
+        <button class="scm-back" on:click={() => viewing = null}>← {$trad('Volver a la lista')}</button>
         <div class="scm-detail-hd">
           <h3>{viewing.meta.name}</h3>
           <span class="scm-src scm-src-{viewing.meta.source}">{viewing.meta.source}</span>
@@ -162,12 +164,12 @@
         <div class="scm-detail-body">{@html renderMd(viewing.body, { chips: false })}</div>
         <div class="scm-detail-acts">
           {#if activeId === viewing.meta.id}
-            <button class="scm-btn scm-btn-ghost" on:click={deactivate}>{isEN ? 'Deactivate' : 'Desactivar'}</button>
+            <button class="scm-btn scm-btn-ghost" on:click={deactivate}>{$trad('Desactivar')}</button>
           {:else}
-            <button class="scm-btn scm-btn-pri" on:click={() => activate(viewing.meta)}><Bolt size={13}/> {isEN ? 'Activate' : 'Activar'}</button>
+            <button class="scm-btn scm-btn-pri" on:click={() => activate(viewing.meta)}><Bolt size={13}/> {$trad('Activar')}</button>
           {/if}
           {#if viewing.meta.source === 'user'}
-            <button class="scm-btn scm-btn-danger" on:click={() => del(viewing.meta)}><Trash2 size={13}/> {isEN ? 'Delete' : 'Eliminar'}</button>
+            <button class="scm-btn scm-btn-danger" on:click={() => del(viewing.meta)}><Trash2 size={13}/> {$trad('Eliminar')}</button>
           {/if}
         </div>
       </div>
@@ -177,27 +179,27 @@
         <div class="scm-search">
           <Search size={14} color="var(--txt3,#64748b)"/>
           <input type="text" bind:value={query}
-            placeholder={isEN ? 'Search by name, tag, domain, MITRE code…' : 'Buscar por nombre, tag, dominio, código MITRE…'} />
+            placeholder={$trad('Buscar por nombre, tag, dominio, código MITRE…')} />
         </div>
-        <select class="scm-domain" bind:value={domainFilter} aria-label={isEN ? 'Domain' : 'Dominio'}>
-          {#each domains as d}<option value={d}>{d === 'all' ? (isEN ? 'All domains' : 'Todos los dominios') : d}</option>{/each}
+        <select class="scm-domain" bind:value={domainFilter} aria-label={$trad('Dominio')}>
+          {#each domains as d}<option value={d}>{d === 'all' ? ($trad('Todos los dominios')) : d}</option>{/each}
         </select>
       </div>
 
       <div class="scm-list">
         {#if loading && skills.length === 0}
-          <div class="scm-empty">{isEN ? 'Loading…' : 'Cargando…'}</div>
+          <div class="scm-empty">{$trad('Cargando…')}</div>
         {:else if error}
           <div class="scm-empty scm-err">{error}</div>
         {:else if filtered.length === 0}
-          <div class="scm-empty">{isEN ? 'No skills match.' : 'Ninguna skill coincide.'}</div>
+          <div class="scm-empty">{$trad('Ninguna skill coincide.')}</div>
         {:else}
           {#each filtered as s (s.id)}
             <div class="scm-row" class:scm-row-active={s.id === activeId}>
               <div class="scm-row-main">
                 <div class="scm-row-top">
                   <span class="scm-name">{s.name}</span>
-                  {#if s.id === activeId}<span class="scm-badge scm-badge-active">{isEN ? 'ACTIVE' : 'ACTIVA'}</span>{/if}
+                  {#if s.id === activeId}<span class="scm-badge scm-badge-active">{$trad('ACTIVA')}</span>{/if}
                   <span class="scm-src scm-src-{s.source}">{s.source}</span>
                 </div>
                 <div class="scm-desc">{s.description}</div>
@@ -207,14 +209,14 @@
                 </div>
               </div>
               <div class="scm-row-acts">
-                <button class="scm-act" title={isEN ? 'View' : 'Ver'} on:click={() => view(s)} disabled={busy === s.id}><Eye size={14}/></button>
+                <button class="scm-act" title={$trad('Ver')} on:click={() => view(s)} disabled={busy === s.id}><Eye size={14}/></button>
                 {#if s.id === activeId}
-                  <button class="scm-act scm-act-on" title={isEN ? 'Deactivate' : 'Desactivar'} on:click={deactivate}><Bolt size={14}/></button>
+                  <button class="scm-act scm-act-on" title={$trad('Desactivar')} on:click={deactivate}><Bolt size={14}/></button>
                 {:else}
-                  <button class="scm-act" title={isEN ? 'Activate' : 'Activar'} on:click={() => activate(s)} disabled={busy === s.id}><Bolt size={14}/></button>
+                  <button class="scm-act" title={$trad('Activar')} on:click={() => activate(s)} disabled={busy === s.id}><Bolt size={14}/></button>
                 {/if}
                 {#if s.source === 'user'}
-                  <button class="scm-act scm-act-danger" title={isEN ? 'Delete' : 'Eliminar'} on:click={() => del(s)} disabled={busy === s.id}><Trash2 size={14}/></button>
+                  <button class="scm-act scm-act-danger" title={$trad('Eliminar')} on:click={() => del(s)} disabled={busy === s.id}><Trash2 size={14}/></button>
                 {/if}
               </div>
             </div>
@@ -223,9 +225,7 @@
       </div>
 
       <div class="scm-foot">
-        {isEN
-          ? 'Add: drop a SKILL.md into the folder (or chat), or run /sec-skill new <id>, then Reload. Only user skills can be deleted.'
-          : 'Agregar: arrastra un SKILL.md a la carpeta (o al chat), o usa /sec-skill new <id>, luego Recargar. Solo las skills de usuario se pueden eliminar.'}
+        {$trad('Agregar: arrastra un SKILL.md a la carpeta (o al chat), o usa /sec-skill new <id>, luego Recargar. Solo las skills de usuario se pueden eliminar.')}
       </div>
     {/if}
   </div>

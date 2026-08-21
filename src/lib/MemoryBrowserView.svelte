@@ -13,6 +13,8 @@
   is purely a richer client over the same APIs.
 -->
 <script lang="ts">
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     import { onMount } from 'svelte';
     import { invoke } from '@tauri-apps/api/core';
     // v1.7.17 — In-app dialogs (no native browser confirm/prompt).
@@ -133,8 +135,8 @@
             isEN ? `Delete document "${d.filename}" (${d.chunk_count} sections)?`
                  : `¿Borrar el documento "${d.filename}" (${d.chunk_count} secciones)?`,
             { tone: 'danger',
-              description: isEN ? 'Removes its chunks, embeddings and summary memory.' : 'Elimina sus chunks, embeddings y memoria-resumen.',
-              confirmLabel: isEN ? 'Delete' : 'Borrar' })) return;
+              description: $trad('Elimina sus chunks, embeddings y memoria-resumen.'),
+              confirmLabel: $trad('Borrar') })) return;
         try {
             await invoke('pdf_delete_doc', { docId: d.id });
             await loadDocs();
@@ -228,7 +230,7 @@
 
     async function deleteMemoria(id: number) {
         if (!await lucyConfirm(isEN ? `Delete memory #${id}?` : `¿Borrar memoria #${id}?`,
-            { tone: 'danger', confirmLabel: isEN ? 'Delete' : 'Borrar' })) return;
+            { tone: 'danger', confirmLabel: $trad('Borrar') })) return;
         try {
             await invoke('delete_agent_memory', { id });
             await loadMemorias();
@@ -281,8 +283,8 @@
         if (!await lucyConfirm(
             isEN ? `Delete ${bulkSelected.size} selected memories?` : `¿Borrar ${bulkSelected.size} memorias seleccionadas?`,
             { tone: 'danger',
-              description: isEN ? 'Cannot be undone.' : 'No se puede deshacer.',
-              confirmLabel: isEN ? 'Delete' : 'Borrar' })) return;
+              description: $trad('No se puede deshacer.'),
+              confirmLabel: $trad('Borrar') })) return;
         bulkBusy = true;
         try {
             // Run sequentially — DB pool is single-conn aware and the UI
@@ -326,7 +328,7 @@
         if (bulkSelected.size === 0) return;
         const t = await lucyPrompt(
             isEN ? `Add tag to ${bulkSelected.size} memories` : `Añadir tag a ${bulkSelected.size} memorias`,
-            { placeholder: 'kebab-case', confirmLabel: isEN ? 'Add' : 'Añadir' });
+            { placeholder: 'kebab-case', confirmLabel: $trad('Añadir') });
         const tagClean = (t || '').trim().toLowerCase();
         if (!tagClean) return;
         bulkBusy = true;
@@ -458,7 +460,7 @@
 
     async function deleteCrystal(id: number) {
         if (!await lucyConfirm(isEN ? `Delete crystal #${id}?` : `¿Borrar crystal #${id}?`,
-            { tone: 'danger', confirmLabel: isEN ? 'Delete' : 'Borrar' })) return;
+            { tone: 'danger', confirmLabel: $trad('Borrar') })) return;
         try {
             await invoke('delete_crystal', { id });
             await loadCrystals();
@@ -493,7 +495,7 @@
 
     async function deleteInsight(id: number) {
         if (!await lucyConfirm(isEN ? `Delete insight #${id}?` : `¿Borrar insight #${id}?`,
-            { tone: 'danger', confirmLabel: isEN ? 'Delete' : 'Borrar' })) return;
+            { tone: 'danger', confirmLabel: $trad('Borrar') })) return;
         try {
             await invoke('delete_insight', { id });
             await loadInsights();
@@ -519,7 +521,7 @@
     async function runGraphQuery() {
         const id = parseInt(graphSeedId, 10);
         if (!Number.isFinite(id) || id <= 0) {
-            graphError = isEN ? 'Enter a valid memory id.' : 'Ingresa un id de memoria válido.';
+            graphError = $trad('Ingresa un id de memoria válido.');
             return;
         }
         graphLoading = true;
@@ -529,9 +531,7 @@
                 seedId: id, maxHops: graphHops, limit: 30,
             });
             if (graphResults.length === 0) {
-                graphError = isEN
-                    ? 'No neighbors found. Rebuild the graph first if you just saved this memory.'
-                    : 'Sin vecinos. Reconstruye el grafo si la memoria es reciente.';
+                graphError = $trad('Sin vecinos. Reconstruye el grafo si la memoria es reciente.');
             }
         } catch (e) {
             graphError = String(e);
@@ -572,9 +572,9 @@
     }
     async function runAutoForget() {
         if (!await lucyConfirm(
-            isEN ? 'Run auto-forget for real?' : '¿Ejecutar auto-forget en serio?',
+            $trad('¿Ejecutar auto-forget en serio?'),
             { tone: 'warning',
-              description: isEN ? 'Memories below the threshold will be evicted.' : 'Las memorias bajo el umbral serán removidas.' })) return;
+              description: $trad('Las memorias bajo el umbral serán removidas.') })) return;
         adminBusy = true; adminMsg = '';
         try {
             const r = await invoke<any>('auto_forget_run', { dryRun: false });
@@ -642,8 +642,8 @@
 
     function refreshSentinels() { sentinelRules = loadSentinels(); }
     async function doDeleteSentinel(id: string) {
-        if (!await lucyConfirm(isEN ? 'Delete this sentinel?' : '¿Borrar este sentinel?',
-            { tone: 'danger', confirmLabel: isEN ? 'Delete' : 'Borrar' })) return;
+        if (!await lucyConfirm($trad('¿Borrar este sentinel?'),
+            { tone: 'danger', confirmLabel: $trad('Borrar') })) return;
         deleteSentinel(id); refreshSentinels();
     }
     function doToggleSentinel(id: string) { toggleSentinel(id); refreshSentinels(); }
@@ -769,11 +769,11 @@
     <header class="mv-header">
         <div class="mv-title">
             <Brain size={22} stroke={2}/>
-            <h2>{isEN ? 'Memory Browser' : 'Explorador de Memoria'}</h2>
+            <h2>{$trad('Explorador de Memoria')}</h2>
         </div>
         <nav class="mv-tabs">
             <button class:active={activeTab === 'memorias'} on:click={() => switchTab('memorias')}>
-                <Brain size={14}/> {isEN ? 'Memories' : 'Memorias'}
+                <Brain size={14}/> {$trad('Memorias')}
             </button>
             <button class:active={activeTab === 'crystals'} on:click={() => switchTab('crystals')}>
                 <Diamond size={14}/> Crystals
@@ -782,7 +782,7 @@
                 <Sparkles size={14}/> Insights
             </button>
             <button class:active={activeTab === 'grafo'} on:click={() => switchTab('grafo')}>
-                <Share3 size={14}/> {isEN ? 'Graph' : 'Grafo'}
+                <Share3 size={14}/> {$trad('Grafo')}
             </button>
             <span class="mv-tab-sep">│</span>
             <button class:active={activeTab === 'lessons'} on:click={() => switchTab('lessons')}>
@@ -792,10 +792,10 @@
                 <Shield size={14}/> Sentinels
             </button>
             <button class:active={activeTab === 'patterns'} on:click={() => switchTab('patterns')}>
-                <Radar size={14}/> {isEN ? 'Patterns' : 'Patrones'}
+                <Radar size={14}/> {$trad('Patrones')}
             </button>
             <button class:active={activeTab === 'verify'} on:click={() => switchTab('verify')}>
-                <GitCompare size={14}/> {isEN ? 'Verify' : 'Verificar'}
+                <GitCompare size={14}/> {$trad('Verificar')}
             </button>
         </nav>
     </header>
@@ -811,27 +811,27 @@
         <div class="mv-stats">
             <div class="mv-stat">
                 <span class="mv-stat-num">{realStats?.total ?? memStats.total}</span>
-                <span class="mv-stat-lbl">{isEN ? 'memories' : 'memorias'}</span>
+                <span class="mv-stat-lbl">{$trad('memorias')}</span>
             </div>
             <div class="mv-stat" class:hot={(realStats?.high ?? memStats.pinned) > 0}>
                 <span class="mv-stat-num">{realStats?.high ?? memStats.pinned}</span>
-                <span class="mv-stat-lbl">◆ {isEN ? 'high import.' : 'alta import.'}</span>
+                <span class="mv-stat-lbl">◆ {$trad('alta import.')}</span>
             </div>
             <div class="mv-stat" class:hot={memStats.untagged > 0}>
                 <span class="mv-stat-num">{memStats.untagged}</span>
-                <span class="mv-stat-lbl">∅ {isEN ? 'untagged' : 'sin tags'}</span>
+                <span class="mv-stat-lbl">∅ {$trad('sin tags')}</span>
             </div>
             <div class="mv-stat" class:warn={memStats.expiringSoon > 0}>
                 <span class="mv-stat-num">{memStats.expiringSoon}</span>
-                <span class="mv-stat-lbl">⏱ {isEN ? 'expire <7d' : 'expiran <7d'}</span>
+                <span class="mv-stat-lbl">⏱ {$trad('expiran <7d')}</span>
             </div>
             <div class="mv-stat">
                 <span class="mv-stat-num">{realStats?.week ?? memStats.recent7d}</span>
-                <span class="mv-stat-lbl">⊕ {isEN ? 'new this week' : 'nuevas 7d'}</span>
+                <span class="mv-stat-lbl">⊕ {$trad('nuevas 7d')}</span>
             </div>
             <div class="mv-stat">
                 <span class="mv-stat-num">{memStats.highestImp}</span>
-                <span class="mv-stat-lbl">⮬ {isEN ? 'top importance' : 'top importancia'}</span>
+                <span class="mv-stat-lbl">⮬ {$trad('top importancia')}</span>
             </div>
             {#if realStats && realStats.pdf_docs > 0}
                 <button class="mv-stat mv-stat-btn" class:active={memView === 'docs'}
@@ -840,15 +840,15 @@
                             ? `${realStats.pdf_chunks} chunks across ${realStats.pdf_docs} ingested documents — click to manage`
                             : `${realStats.pdf_chunks} chunks en ${realStats.pdf_docs} documentos ingeridos — clic para gestionar`}>
                     <span class="mv-stat-num">{realStats.pdf_docs}</span>
-                    <span class="mv-stat-lbl">📄 {isEN ? 'documents' : 'documentos'}</span>
+                    <span class="mv-stat-lbl">📄 {$trad('documentos')}</span>
                 </button>
             {/if}
         </div>
 
         <!-- Sprint D — Memory health timeline (30-day creation histogram) -->
         {#if memTimeline.length}
-        <div class="mv-timeline" title={isEN ? '30-day memory creation cadence' : 'Cadencia de creación de memorias (30 días)'}>
-            <div class="mv-timeline-lbl">⏱ {isEN ? '30 days' : '30 días'}</div>
+        <div class="mv-timeline" title={$trad('Cadencia de creación de memorias (30 días)')}>
+            <div class="mv-timeline-lbl">⏱ {$trad('30 días')}</div>
             <div class="mv-timeline-bars">
                 {#each memTimeline as b}
                     <div class="mv-tl-bar"
@@ -860,12 +860,12 @@
                                         : b.created >= memTimelineMax * 0.33
                                             ? '#56b4e9'
                                             : 'rgba(86,180,233,.55)'};"
-                         title={`${b.day_iso}: ${b.created} ${isEN ? 'memories created' : 'memorias creadas'}`}></div>
+                         title={`${b.day_iso}: ${b.created} ${$trad('memorias creadas')}`}></div>
                 {/each}
             </div>
             <div class="mv-timeline-end">
                 <span>{memTimeline[0]?.day_iso?.slice(5) || ''}</span>
-                <span>{isEN ? 'today' : 'hoy'}</span>
+                <span>{$trad('hoy')}</span>
             </div>
         </div>
         {/if}
@@ -874,16 +874,16 @@
         <div class="mv-toolbar">
             <div class="mv-search">
                 <Search size={14}/>
-                <input type="text" placeholder={isEN ? 'Search memories…' : 'Buscar memorias…'}
+                <input type="text" placeholder={$trad('Buscar memorias…')}
                     bind:value={memQuery} on:input={onMemQueryInput}/>
             </div>
             <select bind:value={memImportance} on:change={loadMemorias} class="mv-select">
-                <option value={0}>{isEN ? 'All importance' : 'Toda importancia'}</option>
-                <option value={1}>{isEN ? '◇ Normal (1)' : '◇ Normal (1)'}</option>
-                <option value={2}>{isEN ? '◈ High (2)' : '◈ Alta (2)'}</option>
-                <option value={3}>{isEN ? '◆ Critical (3)' : '◆ Crítica (3)'}</option>
+                <option value={0}>{$trad('Toda importancia')}</option>
+                <option value={1}>{$trad('◇ Normal (1)')}</option>
+                <option value={2}>{$trad('◈ Alta (2)')}</option>
+                <option value={3}>{$trad('◆ Crítica (3)')}</option>
             </select>
-            <button class="mv-icon-btn" on:click={loadMemorias} title={isEN ? 'Refresh' : 'Recargar'}>
+            <button class="mv-icon-btn" on:click={loadMemorias} title={$trad('Recargar')}>
                 <RefreshCw size={14}/>
             </button>
         </div>
@@ -892,36 +892,36 @@
         {#if bulkSelected.size > 0}
         <div class="mv-bulk-bar">
             <span class="mv-bulk-count">
-                {bulkSelected.size} {isEN ? 'selected' : 'seleccionadas'}
+                {bulkSelected.size} {$trad('seleccionadas')}
             </span>
             <button class="mv-bulk-btn" on:click={bulkClearSelection}>
-                {isEN ? 'Clear' : 'Limpiar'}
+                {$trad('Limpiar')}
             </button>
             <button class="mv-bulk-btn" on:click={bulkSelectAll}>
                 {isEN ? `Select all (${memorias.length})` : `Seleccionar todas (${memorias.length})`}
             </button>
             <button class="mv-bulk-btn" disabled={bulkBusy} on:click={bulkAddTag}>
-                ⌖ {isEN ? 'Add tag' : 'Añadir tag'}
+                ⌖ {$trad('Añadir tag')}
             </button>
             <button class="mv-bulk-btn" disabled={bulkBusy} on:click={bulkPromote}>
-                ⮬ {isEN ? 'Promote +1' : 'Subir +1'}
+                ⮬ {$trad('Subir +1')}
             </button>
             <button class="mv-bulk-btn" disabled={autoTagBusy || bulkBusy} on:click={autoTagSelected}
-                    title={isEN ? 'Use LLM to suggest tags for each selected memory' : 'Usa LLM para sugerir tags por memoria'}>
-                {autoTagBusy ? '⟳ ' : '✦ '}{isEN ? 'AI suggest tags' : 'Sugerir tags (IA)'}
+                    title={$trad('Usa LLM para sugerir tags por memoria')}>
+                {autoTagBusy ? '⟳ ' : '✦ '}{$trad('Sugerir tags (IA)')}
             </button>
             <button class="mv-bulk-btn warn" disabled={bulkBusy} on:click={bulkDelete}>
-                ✕ {isEN ? 'Delete' : 'Borrar'}
+                ✕ {$trad('Borrar')}
             </button>
         </div>
         {/if}
 
         <!-- Admin actions strip -->
         <div class="mv-admin">
-            <button class="mv-admin-btn" disabled={adminBusy} on:click={runAutoForgetPreview}>{isEN ? 'Forget preview' : 'Olvido (preview)'}</button>
-            <button class="mv-admin-btn warn" disabled={adminBusy} on:click={runAutoForget}>{isEN ? 'Forget now' : 'Olvidar ya'}</button>
-            <button class="mv-admin-btn" disabled={adminBusy} on:click={runConsolidatePreview}>{isEN ? 'Consolidate preview' : 'Consolidar (preview)'}</button>
-            <button class="mv-admin-btn" disabled={adminBusy} on:click={runReflectPreview}>{isEN ? 'Reflect preview' : 'Reflexión (preview)'}</button>
+            <button class="mv-admin-btn" disabled={adminBusy} on:click={runAutoForgetPreview}>{$trad('Olvido (preview)')}</button>
+            <button class="mv-admin-btn warn" disabled={adminBusy} on:click={runAutoForget}>{$trad('Olvidar ya')}</button>
+            <button class="mv-admin-btn" disabled={adminBusy} on:click={runConsolidatePreview}>{$trad('Consolidar (preview)')}</button>
+            <button class="mv-admin-btn" disabled={adminBusy} on:click={runReflectPreview}>{$trad('Reflexión (preview)')}</button>
             {#if adminMsg}<span class="mv-admin-msg">{adminMsg}</span>{/if}
         </div>
 
@@ -933,16 +933,16 @@
                  1000+ chunk rows). Delete removes chunks + embeddings + the
                  summary memory via pdf_delete_doc. -->
             <div class="mv-docs-head">
-                <span>{isEN ? 'Ingested documents — their chunks stay OUT of the memory list; Lucy queries them with pdf_search.' : 'Documentos ingeridos — sus chunks quedan FUERA de la lista de memorias; Lucy los consulta con pdf_search.'}</span>
-                <button class="mv-bulk-btn" on:click={() => { memView = 'memorias'; }}>← {isEN ? 'Back to memories' : 'Volver a memorias'}</button>
+                <span>{$trad('Documentos ingeridos — sus chunks quedan FUERA de la lista de memorias; Lucy los consulta con pdf_search.')}</span>
+                <button class="mv-bulk-btn" on:click={() => { memView = 'memorias'; }}>← {$trad('Volver a memorias')}</button>
             </div>
             {#if docsLoading}
                 <div class="mv-loading"><Skeleton variant="card" height="58px" /><Skeleton variant="card" height="58px" /></div>
             {:else if pdfDocs.length === 0}
                 <EmptyState
                     icon="📄"
-                    title={isEN ? 'No documents ingested' : 'Sin documentos ingeridos'}
-                    description={isEN ? 'Ingest a PDF from the PDF panel and it will appear here.' : 'Ingiere un PDF desde el panel PDF y aparecerá aquí.'} />
+                    title={$trad('Sin documentos ingeridos')}
+                    description={$trad('Ingiere un PDF desde el panel PDF y aparecerá aquí.')} />
             {:else}
                 <ul class="mv-list">
                     {#each pdfDocs as d (d.id)}
@@ -951,12 +951,12 @@
                                 <span class="mv-id">📄</span>
                                 <span class="mv-card-title">{d.filename}</span>
                                 <span class="mv-doc-status" class:warn={d.status !== 'done'}>{d.status}</span>
-                                <button class="mv-del" title={isEN ? 'Delete document (chunks + embeddings)' : 'Borrar documento (chunks + embeddings)'}
+                                <button class="mv-del" title={$trad('Borrar documento (chunks + embeddings)')}
                                     on:click={() => deleteDoc(d)}><Trash size={13}/></button>
                             </div>
                             <div class="mv-card-foot">
                                 <span class="mv-date">{fmtDate(d.ingested_at)}</span>
-                                <span class="mv-tag">{d.chunk_count} {isEN ? 'sections' : 'secciones'}</span>
+                                <span class="mv-tag">{d.chunk_count} {$trad('secciones')}</span>
                                 <span class="mv-tag" title={d.path}>{d.path.split(/[\\/]/).slice(-2).join('/')}</span>
                             </div>
                         </li>
@@ -976,10 +976,8 @@
             <!-- v1.4.15 — proper empty state with hint instead of one-line text. -->
             <EmptyState
                 icon="🧠"
-                title={isEN ? 'No memories yet' : 'Sin memorias aún'}
-                description={isEN
-                    ? 'Lucy populates this as she works. Pin a chat message (·) or run /crystallize after a useful session to seed it manually.'
-                    : 'Lucy las irá creando conforme trabajes. Fija un mensaje (·) o usa /crystallize después de una sesión útil para sembrarlas manualmente.'} />
+                title={$trad('Sin memorias aún')}
+                description={$trad('Lucy las irá creando conforme trabajes. Fija un mensaje (·) o usa /crystallize después de una sesión útil para sembrarlas manualmente.')} />
         {:else}
             <ul class="mv-list">
                 {#each memorias as m (m.id)}
@@ -993,7 +991,7 @@
                                    checked={bulkSelected.has(m.id)}
                                    on:change={(e) => toggleBulkSelect(m.id, e)}
                                    on:click|stopPropagation
-                                   title={isEN ? 'Select for bulk action' : 'Seleccionar para acción en lote'}/>
+                                   title={$trad('Seleccionar para acción en lote')}/>
                             <span class="mv-id">#{m.id}</span>
                             <span class="mv-card-title">{m.title}</span>
                             <!-- Clamp to the 1-3 diamond scale: bulk Promote can push
@@ -1026,11 +1024,11 @@
                                               ? `Annealing verdict: ${_v.verdict} (tag '${_v.tag}')`
                                               : `Veredicto de annealing: ${_v.verdict} (etiqueta '${_v.tag}')`}>
                                         {_v.verdict === 'demote' ? '↧' : _v.verdict === 'promote' ? '↥' : '◇'}
-                                        {_v.verdict === 'demote' ? (isEN ? 'demote' : 'democ') : _v.verdict === 'promote' ? (isEN ? 'promote' : 'promov') : (isEN ? 'watch' : 'vigilar')}
+                                        {_v.verdict === 'demote' ? ($trad('democ')) : _v.verdict === 'promote' ? ($trad('promov')) : ($trad('vigilar'))}
                                     </span>
                                 {/if}
                             {/each}
-                            <button class="mv-del" title={isEN ? 'Delete' : 'Borrar'}
+                            <button class="mv-del" title={$trad('Borrar')}
                                 on:click={() => deleteMemoria(m.id)}><Trash size={13}/></button>
                         </div>
                         <p class="mv-card-content">{previewText(m.content, 300)}</p>
@@ -1045,19 +1043,19 @@
                             <div class="mv-autotag-panel">
                                 {#if autoTagSuggestions[m.id].length === 0}
                                     <span class="mv-autotag-empty">
-                                        ⟳ {isEN ? 'LLM returned no usable tags' : 'LLM no devolvió tags utilizables'}
+                                        ⟳ {$trad('LLM no devolvió tags utilizables')}
                                     </span>
-                                    <button class="mv-bulk-btn" on:click={() => rejectAutoTags(m.id)}>{isEN ? 'Dismiss' : 'Descartar'}</button>
+                                    <button class="mv-bulk-btn" on:click={() => rejectAutoTags(m.id)}>{$trad('Descartar')}</button>
                                 {:else}
-                                    <span class="mv-autotag-label">✦ {isEN ? 'AI suggests:' : 'IA sugiere:'}</span>
+                                    <span class="mv-autotag-label">✦ {$trad('IA sugiere:')}</span>
                                     {#each autoTagSuggestions[m.id] as st}
                                         <span class="mv-tag mv-tag-sugg">{st}</span>
                                     {/each}
                                     <button class="mv-bulk-btn accept" on:click={() => acceptAutoTags(m.id)}>
-                                        ✓ {isEN ? 'Apply' : 'Aplicar'}
+                                        ✓ {$trad('Aplicar')}
                                     </button>
                                     <button class="mv-bulk-btn" on:click={() => rejectAutoTags(m.id)}>
-                                        ✕ {isEN ? 'Reject' : 'Rechazar'}
+                                        ✕ {$trad('Rechazar')}
                                     </button>
                                 {/if}
                             </div>
@@ -1078,21 +1076,19 @@
          the operator can scan a session distillation at a glance. -->
     <section class="mv-section">
         <div class="mv-toolbar">
-            <span class="mv-hint">{isEN ? 'Run /crystallize from a chat tab to distill a session.' : 'Usa /crystallize en una pestaña para destilar una sesión.'}</span>
-            <button class="mv-icon-btn" on:click={loadCrystals} title={isEN ? 'Refresh' : 'Recargar'}>
+            <span class="mv-hint">{$trad('Usa /crystallize en una pestaña para destilar una sesión.')}</span>
+            <button class="mv-icon-btn" on:click={loadCrystals} title={$trad('Recargar')}>
                 <RefreshCw size={14}/>
             </button>
         </div>
         {#if crystalsError}<div class="mv-error"><AlertTriangle size={14}/> {crystalsError}</div>{/if}
         {#if crystalsLoading}
-            <div class="mv-loading">{isEN ? 'Loading…' : 'Cargando…'}</div>
+            <div class="mv-loading">{$trad('Cargando…')}</div>
         {:else if crystals.length === 0}
             <div class="mv-empty crystal-empty">
                 <Diamond size={32} color="#a78bfa" />
-                <p>{isEN ? 'No crystals yet.' : 'Sin crystals todavía.'}</p>
-                <small>{isEN
-                    ? 'Crystals are LLM-distilled summaries of completed agent sessions: narrative + outcomes + files affected + lessons learned. Run /crystallize in a chat tab to create one.'
-                    : 'Los crystals son resúmenes destilados por LLM de sesiones completadas: narrativa + outcomes + archivos afectados + lecciones. Usa /crystallize en una pestaña para crear uno.'}</small>
+                <p>{$trad('Sin crystals todavía.')}</p>
+                <small>{$trad('Los crystals son resúmenes destilados por LLM de sesiones completadas: narrativa + outcomes + archivos afectados + lecciones. Usa /crystallize en una pestaña para crear uno.')}</small>
             </div>
         {:else}
             <ul class="crystal-grid">
@@ -1114,12 +1110,12 @@
                                     <span class="crystal-date">{fmtDate(c.created_at)}</span>
                                 </div>
                                 <div class="crystal-stats">
-                                    {#if outcomes.length}<span class="crystal-stat-pill outcomes-pill">⊕ {outcomes.length} {isEN ? 'outcomes' : 'outcomes'}</span>{/if}
-                                    {#if files.length}<span class="crystal-stat-pill files-pill">⌗ {files.length} {isEN ? 'files' : 'archivos'}</span>{/if}
-                                    {#if lessons.length}<span class="crystal-stat-pill lessons-pill">✦ {lessons.length} {isEN ? 'lessons' : 'lecciones'}</span>{/if}
+                                    {#if outcomes.length}<span class="crystal-stat-pill outcomes-pill">⊕ {outcomes.length} {$trad('outcomes')}</span>{/if}
+                                    {#if files.length}<span class="crystal-stat-pill files-pill">⌗ {files.length} {$trad('archivos')}</span>{/if}
+                                    {#if lessons.length}<span class="crystal-stat-pill lessons-pill">✦ {lessons.length} {$trad('lecciones')}</span>{/if}
                                 </div>
                             </div>
-                            <button class="crystal-del" title={isEN ? 'Delete' : 'Borrar'}
+                            <button class="crystal-del" title={$trad('Borrar')}
                                     on:click={() => deleteCrystal(c.id)}>
                                 <Trash size={13}/>
                             </button>
@@ -1139,7 +1135,7 @@
                                 <div class="crystal-section outcomes">
                                     <div class="crystal-section-hdr">
                                         <span class="crystal-section-glyph">⊕</span>
-                                        <span>{isEN ? 'Outcomes' : 'Outcomes'}</span>
+                                        <span>{$trad('Outcomes')}</span>
                                     </div>
                                     <ul class="crystal-bullet-list">
                                         {#each outcomes as o}<li>{o}</li>{/each}
@@ -1150,7 +1146,7 @@
                                 <div class="crystal-section files">
                                     <div class="crystal-section-hdr">
                                         <span class="crystal-section-glyph">⌗</span>
-                                        <span>{isEN ? 'Files affected' : 'Archivos afectados'}</span>
+                                        <span>{$trad('Archivos afectados')}</span>
                                     </div>
                                     <ul class="crystal-file-list">
                                         {#each files as f}<li class="mono">{f}</li>{/each}
@@ -1179,8 +1175,8 @@
                         <button class="crystal-expand-btn"
                                 on:click={() => expandedCrystal = isExpanded ? null : c.id}>
                             {isExpanded
-                                ? (isEN ? '▴ Collapse' : '▴ Colapsar')
-                                : (isEN ? '▾ Show details' : '▾ Ver detalles')}
+                                ? ($trad('▴ Colapsar'))
+                                : ($trad('▾ Ver detalles'))}
                         </button>
                     </li>
                 {/each}
@@ -1193,16 +1189,16 @@
     {#if activeTab === 'insights'}
     <section class="mv-section">
         <div class="mv-toolbar">
-            <span class="mv-hint">{isEN ? 'Auto-generated by reflect every 48h. Confidence grows with each reinforcement.' : 'Auto-generadas por reflect cada 48h. La confianza crece con cada refuerzo.'}</span>
-            <button class="mv-icon-btn" on:click={loadInsights} title={isEN ? 'Refresh' : 'Recargar'}>
+            <span class="mv-hint">{$trad('Auto-generadas por reflect cada 48h. La confianza crece con cada refuerzo.')}</span>
+            <button class="mv-icon-btn" on:click={loadInsights} title={$trad('Recargar')}>
                 <RefreshCw size={14}/>
             </button>
         </div>
         {#if insightsError}<div class="mv-error"><AlertTriangle size={14}/> {insightsError}</div>{/if}
         {#if insightsLoading}
-            <div class="mv-loading">{isEN ? 'Loading…' : 'Cargando…'}</div>
+            <div class="mv-loading">{$trad('Cargando…')}</div>
         {:else if insights.length === 0}
-            <div class="mv-empty">{isEN ? 'No insights yet. Run /reflect-now to derive some, or wait for the 48h auto-pass.' : 'Sin insights aún. Usa /reflect-now o espera al pase de 48h.'}</div>
+            <div class="mv-empty">{$trad('Sin insights aún. Usa /reflect-now o espera al pase de 48h.')}</div>
         {:else}
             <ul class="mv-list">
                 {#each insights as i (i.id)}
@@ -1211,7 +1207,7 @@
                             <Sparkles size={14} color="#fbbf24"/>
                             <span class="mv-id">#{i.id}</span>
                             <span class="mv-card-content insight-content">{i.content}</span>
-                            <button class="mv-del" title={isEN ? 'Delete' : 'Borrar'}
+                            <button class="mv-del" title={$trad('Borrar')}
                                 on:click={() => deleteInsight(i.id)}><Trash size={13}/></button>
                         </div>
                         <div class="mv-confidence">
@@ -1222,7 +1218,7 @@
                             <span class="mv-reinforce">×{i.reinforcements}</span>
                         </div>
                         <div class="mv-card-foot">
-                            <span class="mv-date">{isEN ? 'last reinforced' : 'último refuerzo'}: {fmtDate(i.last_reinforced_at)}</span>
+                            <span class="mv-date">{$trad('último refuerzo')}: {fmtDate(i.last_reinforced_at)}</span>
                             {#each tagList(i.concepts) as c}<span class="mv-tag concept">{c}</span>{/each}
                         </div>
                     </li>
@@ -1236,17 +1232,17 @@
     {#if activeTab === 'grafo'}
     <section class="mv-section">
         <div class="mv-toolbar">
-            <span class="mv-hint">{isEN ? 'BFS from a memory id over shared concepts / files / sessions.' : 'BFS desde un id de memoria por concepts / files / sessions.'}</span>
+            <span class="mv-hint">{$trad('BFS desde un id de memoria por concepts / files / sessions.')}</span>
             <!-- Tier S #2 — open full visual force-directed graph in overlay -->
             <button class="mv-graph-btn" on:click={() => showVisualGraph = true}
-                    title={isEN ? 'Open interactive visual graph (force-directed)' : 'Abrir grafo visual interactivo (force-directed)'}
+                    title={$trad('Abrir grafo visual interactivo (force-directed)')}
                     style="margin-left:auto;">
-                ◊ {isEN ? 'Visual graph' : 'Grafo visual'}
+                ◊ {$trad('Grafo visual')}
             </button>
         </div>
         <div class="mv-graph-form">
             <label>
-                {isEN ? 'Memory id' : 'Id memoria'}:
+                {$trad('Id memoria')}:
                 <input type="number" bind:value={graphSeedId} placeholder="42" min="1"/>
             </label>
             <label>
@@ -1259,15 +1255,15 @@
                 </select>
             </label>
             <button class="mv-graph-btn" on:click={runGraphQuery} disabled={graphLoading}>
-                {isEN ? 'Explore' : 'Explorar'}
+                {$trad('Explorar')}
             </button>
-            <button class="mv-graph-btn alt" on:click={rebuildGraph} disabled={graphLoading} title={isEN ? 'Rebuild memory edges' : 'Reconstruir aristas del grafo'}>
-                <RefreshCw size={13}/> {isEN ? 'Rebuild' : 'Reconstruir'}
+            <button class="mv-graph-btn alt" on:click={rebuildGraph} disabled={graphLoading} title={$trad('Reconstruir aristas del grafo')}>
+                <RefreshCw size={13}/> {$trad('Reconstruir')}
             </button>
         </div>
         {#if graphError}<div class="mv-error"><AlertTriangle size={14}/> {graphError}</div>{/if}
         {#if graphLoading}
-            <div class="mv-loading">{isEN ? 'Traversing…' : 'Recorriendo…'}</div>
+            <div class="mv-loading">{$trad('Recorriendo…')}</div>
         {:else if graphResults.length > 0}
             <ul class="mv-list">
                 {#each graphResults as n (n.memory_id)}
@@ -1298,24 +1294,24 @@
         <div class="mv-toolbar">
             <div class="mv-search">
                 <Search size={14}/>
-                <input type="text" placeholder={isEN ? 'Search lessons…' : 'Buscar lecciones…'}
+                <input type="text" placeholder={$trad('Buscar lecciones…')}
                     bind:value={lessonQuery} on:input={() => { clearTimeout(memSearchTimer); memSearchTimer = setTimeout(loadLessons, 300); }}/>
             </div>
             {#if lessonProjects.length > 0}
                 <select bind:value={lessonProjectFilter} on:change={loadLessons} class="mv-select">
-                    <option value="">{isEN ? 'All projects' : 'Todos los proyectos'}</option>
+                    <option value="">{$trad('Todos los proyectos')}</option>
                     {#each lessonProjects as p}<option value={p}>{p}</option>{/each}
                 </select>
             {/if}
-            <button class="mv-icon-btn" on:click={loadLessons} title={isEN ? 'Refresh' : 'Recargar'}>
+            <button class="mv-icon-btn" on:click={loadLessons} title={$trad('Recargar')}>
                 <RefreshCw size={14}/>
             </button>
         </div>
         {#if lessonsError}<div class="mv-error"><AlertTriangle size={14}/> {lessonsError}</div>{/if}
         {#if lessonsLoading}
-            <div class="mv-loading">{isEN ? 'Loading…' : 'Cargando…'}</div>
+            <div class="mv-loading">{$trad('Cargando…')}</div>
         {:else if lessons.length === 0}
-            <div class="mv-empty">{isEN ? 'No lessons yet. Run /crystallize to extract lessons from sessions.' : 'Sin lecciones. Usa /crystallize para extraerlas de sesiones.'}</div>
+            <div class="mv-empty">{$trad('Sin lecciones. Usa /crystallize para extraerlas de sesiones.')}</div>
         {:else}
             <ul class="mv-list">
                 {#each lessons as l (l.id)}
@@ -1330,10 +1326,10 @@
                             {#if l.project}<span class="mv-tag concept">{l.project}</span>{/if}
                             {#each l.tags.slice(0, 5) as t}<span class="mv-tag">{t}</span>{/each}
                             <span style="flex:1;"></span>
-                            <button class="mv-admin-btn" title={isEN ? 'Promote to critical memory' : 'Promover a memoria crítica'}
-                                on:click={() => doPromoteLesson(l)}>↑ {isEN ? 'Promote' : 'Promover'}</button>
+                            <button class="mv-admin-btn" title={$trad('Promover a memoria crítica')}
+                                on:click={() => doPromoteLesson(l)}>↑ {$trad('Promover')}</button>
                             {#if l.source === 'memory'}
-                                <button class="mv-admin-btn warn" title={isEN ? 'Dismiss' : 'Descartar'}
+                                <button class="mv-admin-btn warn" title={$trad('Descartar')}
                                     on:click={() => doDismissLesson(l)}>✕</button>
                             {/if}
                         </div>
@@ -1348,32 +1344,32 @@
     {#if activeTab === 'sentinels'}
     <section class="mv-section">
         <div class="mv-toolbar">
-            <span class="mv-hint">{isEN ? 'Watchdog rules that trigger OS notifications when conditions are met.' : 'Reglas watchdog que disparan notificaciones cuando se cumple la condición.'}</span>
+            <span class="mv-hint">{$trad('Reglas watchdog que disparan notificaciones cuando se cumple la condición.')}</span>
             <button class="mv-admin-btn" on:click={() => showSentinelAdd = !showSentinelAdd}>
-                + {isEN ? 'New rule' : 'Nueva regla'}
+                + {$trad('Nueva regla')}
             </button>
         </div>
 
         {#if showSentinelAdd}
             <div class="mv-sentinel-form">
-                <input type="text" placeholder={isEN ? 'Rule name…' : 'Nombre de regla…'} bind:value={newSentinelName} class="mv-input"/>
+                <input type="text" placeholder={$trad('Nombre de regla…')} bind:value={newSentinelName} class="mv-input"/>
                 <select bind:value={newSentinelMetric} class="mv-select">
                     <option value="cpu_percent">CPU %</option>
                     <option value="ram_percent">RAM %</option>
                     <option value="disk_percent">Disk %</option>
-                    <option value="disk_days_until_full">{isEN ? 'Disk days left' : 'Días disco'}</option>
-                    <option value="anomaly_sigma">{isEN ? 'Anomaly σ' : 'Anomalía σ'}</option>
-                    <option value="diag_status">{isEN ? 'Diag status' : 'Estado diag'}</option>
+                    <option value="disk_days_until_full">{$trad('Días disco')}</option>
+                    <option value="anomaly_sigma">{$trad('Anomalía σ')}</option>
+                    <option value="diag_status">{$trad('Estado diag')}</option>
                 </select>
                 <select bind:value={newSentinelOp} class="mv-select">
                     {#each opOptions() as o}<option value={o.value}>{o.label}</option>{/each}
                 </select>
                 <input type="number" bind:value={newSentinelThreshold} class="mv-input" style="width:70px;"/>
-                <input type="number" bind:value={newSentinelCooldown} class="mv-input" style="width:60px;" title={isEN ? 'Cooldown (min)' : 'Cooldown (min)'}/>
-                <button class="mv-admin-btn" on:click={doAddSentinel}>{isEN ? 'Add' : 'Agregar'}</button>
+                <input type="number" bind:value={newSentinelCooldown} class="mv-input" style="width:60px;" title={$trad('Cooldown (min)')}/>
+                <button class="mv-admin-btn" on:click={doAddSentinel}>{$trad('Agregar')}</button>
             </div>
             <div class="mv-sentinel-templates">
-                <span style="font-size:10px;color:var(--txt2);">{isEN ? 'Quick add:' : 'Agregar rápido:'}</span>
+                <span style="font-size:10px;color:var(--txt2);">{$trad('Agregar rápido:')}</span>
                 {#each BUILTIN_TEMPLATES as tpl}
                     <button class="mv-sentinel-tpl" on:click={() => addFromTemplate(tpl)}>
                         {isEN ? tpl.nameEN : tpl.name}
@@ -1383,7 +1379,7 @@
         {/if}
 
         {#if sentinelRules.length === 0}
-            <div class="mv-empty">{isEN ? 'No sentinel rules. Add one above or use a template.' : 'Sin reglas sentinel. Agrega una arriba o usa una plantilla.'}</div>
+            <div class="mv-empty">{$trad('Sin reglas sentinel. Agrega una arriba o usa una plantilla.')}</div>
         {:else}
             <ul class="mv-list">
                 {#each sentinelRules as rule (rule.id)}
@@ -1392,14 +1388,14 @@
                             <Shield size={14} color={rule.enabled ? '#34d399' : '#64748b'}/>
                             <span class="mv-card-title" style="flex:1;">{rule.name}</span>
                             <span class="mv-sentinel-cond">{rule.metric} {opOptions().find(o => o.value === rule.op)?.label || rule.op} {rule.threshold}</span>
-                            <span class="mv-sentinel-fires" title={isEN ? 'Times fired' : 'Veces disparado'}>×{rule.fireCount}</span>
+                            <span class="mv-sentinel-fires" title={$trad('Veces disparado')}>×{rule.fireCount}</span>
                         </div>
                         <div class="mv-card-foot">
                             <span class="mv-date">cooldown: {rule.cooldownMin}min</span>
-                            {#if rule.lastFired > 0}<span class="mv-date">{isEN ? 'last' : 'último'}: {new Date(rule.lastFired).toLocaleString()}</span>{/if}
+                            {#if rule.lastFired > 0}<span class="mv-date">{$trad('último')}: {new Date(rule.lastFired).toLocaleString()}</span>{/if}
                             <span style="flex:1;"></span>
                             <button class="mv-admin-btn" on:click={() => doToggleSentinel(rule.id)}>
-                                {rule.enabled ? (isEN ? 'Disable' : 'Desactivar') : (isEN ? 'Enable' : 'Activar')}
+                                {rule.enabled ? ($trad('Desactivar')) : ($trad('Activar'))}
                             </button>
                             <button class="mv-admin-btn warn" on:click={() => doDeleteSentinel(rule.id)}>
                                 <Trash size={12}/>
@@ -1416,20 +1412,20 @@
     {#if activeTab === 'patterns'}
     <section class="mv-section">
         <div class="mv-toolbar">
-            <span class="mv-hint">{isEN ? 'Deterministic pattern detection over memory corpus. No LLM needed.' : 'Detección determinista de patrones sobre el corpus de memorias. Sin LLM.'}</span>
-            <button class="mv-icon-btn" on:click={loadPatterns} title={isEN ? 'Scan' : 'Escanear'}>
+            <span class="mv-hint">{$trad('Detección determinista de patrones sobre el corpus de memorias. Sin LLM.')}</span>
+            <button class="mv-icon-btn" on:click={loadPatterns} title={$trad('Escanear')}>
                 <RefreshCw size={14}/>
             </button>
         </div>
         {#if patternsError}<div class="mv-error"><AlertTriangle size={14}/> {patternsError}</div>{/if}
         {#if patternsLoading}
-            <div class="mv-loading">{isEN ? 'Scanning patterns…' : 'Escaneando patrones…'}</div>
+            <div class="mv-loading">{$trad('Escaneando patrones…')}</div>
         {:else if patternReport}
             <div class="mv-pattern-stats">
-                {isEN ? 'Scanned' : 'Escaneado'}: {patternReport.scannedMemories} {isEN ? 'memories' : 'memorias'} + {patternReport.scannedCrystals} crystals · {patternReport.scanDurationMs}ms · {patternReport.patterns.length} {isEN ? 'patterns found' : 'patrones encontrados'}
+                {$trad('Escaneado')}: {patternReport.scannedMemories} {$trad('memorias')} + {patternReport.scannedCrystals} crystals · {patternReport.scanDurationMs}ms · {patternReport.patterns.length} {$trad('patrones encontrados')}
             </div>
             {#if patternReport.patterns.length === 0}
-                <div class="mv-empty">{isEN ? 'No patterns detected. More data needed.' : 'Sin patrones detectados. Se necesitan más datos.'}</div>
+                <div class="mv-empty">{$trad('Sin patrones detectados. Se necesitan más datos.')}</div>
             {:else}
                 <ul class="mv-list">
                     {#each patternReport.patterns as p, idx (idx)}
@@ -1449,7 +1445,7 @@
                 </ul>
             {/if}
         {:else}
-            <div class="mv-empty">{isEN ? 'Click Scan to detect patterns.' : 'Haz clic en Escanear para detectar patrones.'}</div>
+            <div class="mv-empty">{$trad('Haz clic en Escanear para detectar patrones.')}</div>
         {/if}
     </section>
     {/if}
@@ -1458,20 +1454,20 @@
     {#if activeTab === 'verify'}
     <section class="mv-section">
         <div class="mv-toolbar">
-            <span class="mv-hint">{isEN ? 'Cross-check memories for contradictions. Heuristic detection.' : 'Verificar memorias en busca de contradicciones. Detección heurística.'}</span>
-            <button class="mv-icon-btn" on:click={loadVerify} title={isEN ? 'Scan' : 'Escanear'}>
+            <span class="mv-hint">{$trad('Verificar memorias en busca de contradicciones. Detección heurística.')}</span>
+            <button class="mv-icon-btn" on:click={loadVerify} title={$trad('Escanear')}>
                 <RefreshCw size={14}/>
             </button>
         </div>
         {#if verifyError}<div class="mv-error"><AlertTriangle size={14}/> {verifyError}</div>{/if}
         {#if verifyLoading}
-            <div class="mv-loading">{isEN ? 'Verifying…' : 'Verificando…'}</div>
+            <div class="mv-loading">{$trad('Verificando…')}</div>
         {:else if verifyReport}
             <div class="mv-pattern-stats">
-                {isEN ? 'Checked' : 'Verificado'}: {verifyReport.memoriesScanned} {isEN ? 'memories' : 'memorias'}, {verifyReport.pairsChecked} {isEN ? 'pairs' : 'pares'} · {verifyReport.scanDurationMs}ms · {verifyReport.contradictions.length} {isEN ? 'conflicts' : 'conflictos'}
+                {$trad('Verificado')}: {verifyReport.memoriesScanned} {$trad('memorias')}, {verifyReport.pairsChecked} {$trad('pares')} · {verifyReport.scanDurationMs}ms · {verifyReport.contradictions.length} {$trad('conflictos')}
             </div>
             {#if verifyReport.contradictions.length === 0}
-                <div class="mv-empty">{isEN ? 'No contradictions detected!' : '¡Sin contradicciones detectadas!'}</div>
+                <div class="mv-empty">{$trad('¡Sin contradicciones detectadas!')}</div>
             {:else}
                 <ul class="mv-list">
                     {#each verifyReport.contradictions as c (c.id)}
@@ -1483,12 +1479,12 @@
                             </div>
                             <div class="mv-verify-pair">
                                 <div class="mv-verify-mem older">
-                                    <span class="mv-verify-label">{isEN ? 'Older' : 'Anterior'} #{c.pair.older.id}</span>
+                                    <span class="mv-verify-label">{$trad('Anterior')} #{c.pair.older.id}</span>
                                     <p>{previewText(c.pair.older.content, 150)}</p>
                                     {#if c.snippetOlder}<code class="mv-verify-snippet">{c.snippetOlder}</code>{/if}
                                 </div>
                                 <div class="mv-verify-mem newer">
-                                    <span class="mv-verify-label">{isEN ? 'Newer' : 'Reciente'} #{c.pair.newer.id}</span>
+                                    <span class="mv-verify-label">{$trad('Reciente')} #{c.pair.newer.id}</span>
                                     <p>{previewText(c.pair.newer.content, 150)}</p>
                                     {#if c.snippetNewer}<code class="mv-verify-snippet">{c.snippetNewer}</code>{/if}
                                 </div>
@@ -1505,7 +1501,7 @@
                 </ul>
             {/if}
         {:else}
-            <div class="mv-empty">{isEN ? 'Click Scan to check for contradictions.' : 'Haz clic en Escanear para buscar contradicciones.'}</div>
+            <div class="mv-empty">{$trad('Haz clic en Escanear para buscar contradicciones.')}</div>
         {/if}
     </section>
     {/if}
@@ -1513,7 +1509,7 @@
 
 <!-- Tier S #2 — Full-screen force-directed memory graph overlay -->
 {#if showVisualGraph}
-    <MemoryGraphView {isEN}
+    <MemoryGraphView
         on:close={() => showVisualGraph = false}
         on:openmemoria={(e) => {
             // V12 — Memory Graph 2.0: jump from the visual graph to the

@@ -1,4 +1,6 @@
 <script>
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     // ── ScheduledTasksModal — manage natural-language cron tasks
     //
     // Backend: src-tauri/src/commands/scheduled.rs
@@ -109,11 +111,11 @@
 
     async function save() {
         if (!draft.name?.trim() || !draft.prompt?.trim() || !draft.nextRun?.trim()) {
-            toast(isEN ? 'Name, prompt and next run are required' : 'Nombre, prompt y próxima ejecución son obligatorios', 'warn'); return;
+            toast($trad('Nombre, prompt y próxima ejecución son obligatorios'), 'warn'); return;
         }
         const epoch = Math.floor(Date.parse(draft.nextRun) / 1000);
         if (!Number.isFinite(epoch) || epoch <= 0) {
-            toast(isEN ? 'Invalid next run datetime' : 'Datetime de próxima ejecución inválido', 'error'); return;
+            toast($trad('Datetime de próxima ejecución inválido'), 'error'); return;
         }
         try {
             await invoke('save_scheduled_task', {
@@ -151,7 +153,7 @@
 
     function fmt(epoch) {
         if (!epoch) return t.never;
-        try { return new Date(epoch * 1000).toLocaleString(isEN ? 'en-US' : 'es-MX', { hour12: false }); }
+        try { return new Date(epoch * 1000).toLocaleString($trad('es-MX'), { hour12: false }); }
         catch { return String(epoch); }
     }
 
@@ -248,9 +250,9 @@
                                     </div>
                                     <p class="st-prompt">{task.prompt.length > 140 ? task.prompt.slice(0, 140) + '…' : task.prompt}</p>
                                     <div class="st-meta">
-                                        <span>{isEN ? 'Next' : 'Próx.'}: <code>{fmt(task.next_run)}</code></span>
+                                        <span>{$trad('Próx.')}: <code>{fmt(task.next_run)}</code></span>
                                         <span>·</span>
-                                        <span>{isEN ? 'Last' : 'Última'}: <code>{fmt(task.last_run)}</code></span>
+                                        <span>{$trad('Última')}: <code>{fmt(task.last_run)}</code></span>
                                     </div>
                                 </div>
                                 <div class="st-item-r">

@@ -14,6 +14,9 @@ import type jsPDFType from 'jspdf';
 type JsPDF = InstanceType<typeof jsPDFType>;
 import { saveFileDialog } from '$lib/lucy-api';
 
+// La interfaz en cinco idiomas. `tr` y no `$trad`: esto no es un
+// componente, así que no hay nada a lo que suscribirse. Ver `$lib/i18n`.
+import { tr } from '$lib/i18n';
 /** Lazy-load jspdf + autotable on first call. Cached at module scope so
  *  subsequent exports in the same session reuse the loaded chunks. */
 let _jsPDFLazy: typeof jsPDFType | null = null;
@@ -53,7 +56,7 @@ function initDoc(jsPDFCtor: typeof jsPDFType, title: string, isEN: boolean): JsP
     doc.setFontSize(8);
     doc.setTextColor(...GRAY);
     const now = new Date().toLocaleString();
-    doc.text(`${isEN ? 'Generated' : 'Generado'}: ${now}`, 14, 24);
+    doc.text(`${tr('Generado')}: ${now}`, 14, 24);
     return doc;
 }
 
@@ -64,7 +67,7 @@ function addFooter(doc: JsPDF, isEN: boolean) {
         doc.setFontSize(7);
         doc.setTextColor(120, 120, 120);
         doc.text(
-            `Lucy Report — ${isEN ? 'Page' : 'Pag.'} ${i}/${pages}`,
+            `Lucy Report — ${tr('Pag.')} ${i}/${pages}`,
             105, 290, { align: 'center' }
         );
     }
@@ -98,14 +101,14 @@ export interface ComplianceExportData {
 
 export async function exportCompliancePdf(data: ComplianceExportData, isEN: boolean): Promise<string> {
     const { jsPDF, autoTable } = await loadPdfLibs();
-    const doc = initDoc(jsPDF, isEN ? 'Compliance Report' : 'Reporte de Cumplimiento', isEN);
+    const doc = initDoc(jsPDF, tr('Reporte de Cumplimiento'), isEN);
 
     // Summary
     let y = 36;
     doc.setFontSize(11);
     doc.setTextColor(30, 30, 30);
     doc.text(`Host: ${data.hostName}`, 14, y);
-    doc.text(`${isEN ? 'Date' : 'Fecha'}: ${data.scanDate}`, 120, y);
+    doc.text(`${tr('Fecha')}: ${data.scanDate}`, 120, y);
     y += 8;
 
     // Score box
@@ -118,23 +121,23 @@ export async function exportCompliancePdf(data: ComplianceExportData, isEN: bool
 
     doc.setFontSize(10);
     doc.setTextColor(60, 60, 60);
-    doc.text(`${isEN ? 'Passed' : 'Pasaron'}: ${data.passCount}  |  ${isEN ? 'Failed' : 'Fallaron'}: ${data.failCount}`, 60, y + 10);
+    doc.text(`${tr('Pasaron')}: ${data.passCount}  |  ${tr('Fallaron')}: ${data.failCount}`, 60, y + 10);
     y += 24;
 
     // Table
     autoTable(doc, {
         startY: y,
         head: [[
-            isEN ? 'Check' : 'Verificacion',
-            isEN ? 'Category' : 'Categoria',
-            isEN ? 'Severity' : 'Severidad',
+            tr('Verificacion'),
+            tr('Categoria'),
+            tr('Severidad'),
             isEN ? 'Status' : 'Estado',
         ]],
         body: data.results.map(r => [
             r.title,
             r.category,
             r.severity.toUpperCase(),
-            r.passed ? (isEN ? 'PASS' : 'OK') : 'FAIL',
+            r.passed ? (tr('OK')) : 'FAIL',
         ]),
         styles: { fontSize: 8, cellPadding: 2 },
         headStyles: { fillColor: SOC_BG, textColor: SOC_GREEN, fontStyle: 'bold' },
@@ -161,7 +164,7 @@ export async function exportCompliancePdf(data: ComplianceExportData, isEN: bool
         if (ry > 260) { doc.addPage(); ry = 20; }
         doc.setFontSize(12);
         doc.setTextColor(...SOC_RED);
-        doc.text(isEN ? 'Remediation Recommendations' : 'Recomendaciones de Remediacion', 14, ry);
+        doc.text(tr('Recomendaciones de Remediacion'), 14, ry);
         ry += 6;
         doc.setFontSize(8);
         doc.setTextColor(50, 50, 50);
@@ -203,22 +206,22 @@ export interface InventoryExportData {
 
 export async function exportInventoryPdf(data: InventoryExportData, isEN: boolean): Promise<string> {
     const { jsPDF, autoTable } = await loadPdfLibs();
-    const doc = initDoc(jsPDF, isEN ? 'Infrastructure Inventory' : 'Inventario de Infraestructura', isEN);
+    const doc = initDoc(jsPDF, tr('Inventario de Infraestructura'), isEN);
 
     let y = 36;
     doc.setFontSize(11);
     doc.setTextColor(30, 30, 30);
     doc.text(`Host: ${data.hostName}`, 14, y);
-    doc.text(`${isEN ? 'Date' : 'Fecha'}: ${data.scanDate}`, 120, y);
+    doc.text(`${tr('Fecha')}: ${data.scanDate}`, 120, y);
     y += 8;
 
     // Summary cards
     const counts = [
-        { label: isEN ? 'Ports' : 'Puertos', n: data.ports.length },
-        { label: isEN ? 'Services' : 'Servicios', n: data.services.length },
+        { label: tr('Puertos'), n: data.ports.length },
+        { label: tr('Servicios'), n: data.services.length },
         { label: 'Software', n: data.software.length },
-        { label: isEN ? 'Certs' : 'Certificados', n: data.certs.length },
-        { label: isEN ? 'Tasks' : 'Tareas', n: data.scheduled.length },
+        { label: tr('Certificados'), n: data.certs.length },
+        { label: tr('Tareas'), n: data.scheduled.length },
     ];
     doc.setFontSize(9);
     counts.forEach((c, i) => {
@@ -234,11 +237,11 @@ export async function exportInventoryPdf(data: InventoryExportData, isEN: boolea
     if (data.ports.length) {
         doc.setFontSize(11);
         doc.setTextColor(...SOC_BG);
-        doc.text(isEN ? 'Open Ports' : 'Puertos Abiertos', 14, y);
+        doc.text(tr('Puertos Abiertos'), 14, y);
         y += 2;
         autoTable(doc, {
             startY: y,
-            head: [['Port', isEN ? 'Protocol' : 'Protocolo', isEN ? 'Process' : 'Proceso', isEN ? 'State' : 'Estado']],
+            head: [['Port', tr('Protocolo'), tr('Proceso'), isEN ? 'State' : 'Estado']],
             body: data.ports.slice(0, 50).map(p => [String(p.port), p.protocol || 'tcp', p.process || '-', p.state || 'LISTEN']),
             styles: { fontSize: 7, cellPadding: 1.5 },
             headStyles: { fillColor: SOC_BG, textColor: SOC_GREEN },
@@ -251,11 +254,11 @@ export async function exportInventoryPdf(data: InventoryExportData, isEN: boolea
         if (y > 240) { doc.addPage(); y = 20; }
         doc.setFontSize(11);
         doc.setTextColor(...SOC_BG);
-        doc.text(isEN ? 'Services' : 'Servicios', 14, y);
+        doc.text(tr('Servicios'), 14, y);
         y += 2;
         autoTable(doc, {
             startY: y,
-            head: [[isEN ? 'Name' : 'Nombre', isEN ? 'Status' : 'Estado', isEN ? 'Description' : 'Descripcion']],
+            head: [[tr('Nombre'), isEN ? 'Status' : 'Estado', tr('Descripcion')]],
             body: data.services.slice(0, 50).map(s => [s.name, s.status || '-', (s.description || '-').substring(0, 60)]),
             styles: { fontSize: 7, cellPadding: 1.5 },
             headStyles: { fillColor: SOC_BG, textColor: SOC_GREEN },
@@ -272,7 +275,7 @@ export async function exportInventoryPdf(data: InventoryExportData, isEN: boolea
         y += 2;
         autoTable(doc, {
             startY: y,
-            head: [[isEN ? 'Name' : 'Nombre', isEN ? 'Version' : 'Version']],
+            head: [[tr('Nombre'), tr('Version')]],
             body: data.software.slice(0, 80).map(s => [s.name, s.version || '-']),
             styles: { fontSize: 7, cellPadding: 1.5 },
             headStyles: { fillColor: SOC_BG, textColor: SOC_GREEN },
@@ -300,14 +303,14 @@ export interface AuditExportData {
 
 export async function exportAuditPdf(data: AuditExportData, isEN: boolean): Promise<string> {
     const { jsPDF, autoTable } = await loadPdfLibs();
-    const doc = initDoc(jsPDF, isEN ? 'Audit Trail Report' : 'Reporte de Auditoria', isEN);
+    const doc = initDoc(jsPDF, tr('Reporte de Auditoria'), isEN);
 
     let y = 36;
     doc.setFontSize(10);
     doc.setTextColor(50, 50, 50);
-    doc.text(`${isEN ? 'Total entries' : 'Total registros'}: ${data.entries.length}`, 14, y);
+    doc.text(`${tr('Total registros')}: ${data.entries.length}`, 14, y);
     const failed = data.entries.filter(e => e.exitCode !== null && e.exitCode !== 0).length;
-    doc.text(`${isEN ? 'Failed' : 'Fallidos'}: ${failed}`, 80, y);
+    doc.text(`${tr('Fallidos')}: ${failed}`, 80, y);
     const uniqueH = [...new Set(data.entries.map(e => e.hostName))].length;
     doc.text(`Hosts: ${uniqueH}`, 130, y);
     y += 8;
@@ -315,11 +318,11 @@ export async function exportAuditPdf(data: AuditExportData, isEN: boolean): Prom
     autoTable(doc, {
         startY: y,
         head: [[
-            isEN ? 'Time' : 'Hora',
+            tr('Hora'),
             'Host',
-            isEN ? 'Command' : 'Comando',
-            isEN ? 'Source' : 'Fuente',
-            isEN ? 'Exit' : 'Codigo',
+            tr('Comando'),
+            tr('Fuente'),
+            tr('Codigo'),
             'ms',
         ]],
         body: data.entries.slice(0, 200).map(e => [

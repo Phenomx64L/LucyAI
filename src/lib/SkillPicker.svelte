@@ -16,6 +16,8 @@
   backdrop click.
 -->
 <script lang="ts">
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     import { createEventDispatcher, onMount } from 'svelte';
     import { invoke } from '@tauri-apps/api/core';
     import { fade, fly } from 'svelte/transition';
@@ -86,22 +88,22 @@
         const ok = await lucyConfirm(
             isEN ? `Delete skill "${s.name}"?` : `¿Eliminar skill "${s.name}"?`,
             { tone: 'danger',
-              description: isEN ? 'This cannot be undone.' : 'No se puede deshacer.',
-              confirmLabel: isEN ? 'Delete' : 'Eliminar' });
+              description: $trad('No se puede deshacer.'),
+              confirmLabel: $trad('Eliminar') });
         if (!ok) return;
         try {
             await invoke('delete_skill', { id: s.id });
             await loadSkills();
         } catch (e) {
-            await lucyAlert(isEN ? 'Delete failed' : 'Falló la eliminación',
+            await lucyAlert($trad('Falló la eliminación'),
                 { tone: 'danger', description: String(e) });
         }
     }
 
     function relativeTime(unixSec: number | null): string {
-        if (!unixSec) return isEN ? 'never used' : 'sin uso';
+        if (!unixSec) return $trad('sin uso');
         const ageSec = Math.floor(Date.now() / 1000) - unixSec;
-        if (ageSec < 60) return isEN ? 'just now' : 'ahora';
+        if (ageSec < 60) return $trad('ahora');
         if (ageSec < 3600) return `${Math.floor(ageSec / 60)}m`;
         if (ageSec < 86_400) return `${Math.floor(ageSec / 3600)}h`;
         return `${Math.floor(ageSec / 86_400)}d`;
@@ -129,7 +131,7 @@
         <header class="sp-head">
             <div class="sp-title">
                 <span class="sp-glyph">⌖</span>
-                <h2>{isEN ? 'Skills' : 'Skills guardadas'}</h2>
+                <h2>{$trad('Skills guardadas')}</h2>
                 <span class="sp-count">{filtered.length}/{skills.length}</span>
             </div>
             <button class="sp-close" on:click={() => dispatch('close')} title="Esc">✕</button>
@@ -139,13 +141,13 @@
             <input type="text"
                    class="sp-search"
                    bind:value={query}
-                   placeholder={isEN ? 'Search name, description, triggers…' : 'Buscar nombre, descripción, triggers…'}
+                   placeholder={$trad('Buscar nombre, descripción, triggers…')}
                    autocomplete="off" />
             {#if categories.length > 0}
                 <div class="sp-cats">
                     <button class="sp-cat" class:active={activeCategory === null}
                             on:click={() => activeCategory = null}>
-                        {isEN ? 'all' : 'todas'}
+                        {$trad('todas')}
                     </button>
                     {#each categories as cat}
                         <button class="sp-cat" class:active={activeCategory === cat}
@@ -159,17 +161,15 @@
 
         <div class="sp-list">
             {#if loading}
-                <div class="sp-empty">{isEN ? 'Loading…' : 'Cargando…'}</div>
+                <div class="sp-empty">{$trad('Cargando…')}</div>
             {:else if error}
                 <div class="sp-empty sp-err">{error}</div>
             {:else if filtered.length === 0}
                 <div class="sp-empty">
                     {#if skills.length === 0}
-                        {isEN
-                            ? 'No skills yet. Promote a runbook with /promote-runbook to create one.'
-                            : 'Sin skills todavía. Promociona un runbook con /promote-runbook.'}
+                        {$trad('Sin skills todavía. Promociona un runbook con /promote-runbook.')}
                     {:else}
-                        {isEN ? 'No skills match the filter.' : 'Sin coincidencias para el filtro.'}
+                        {$trad('Sin coincidencias para el filtro.')}
                     {/if}
                 </div>
             {:else}
@@ -180,22 +180,22 @@
                         <div class="sp-row-head">
                             <span class="sp-cat-badge">{s.category}</span>
                             <span class="sp-name">{s.name}</span>
-                            <span class="sp-uc" title={isEN ? 'Times used · last execution' : 'Veces usado · última ejecución'}>
+                            <span class="sp-uc" title={$trad('Veces usado · última ejecución')}>
                                 {s.usage_count}× · {relativeTime(s.last_executed)}
                             </span>
                             <button class="sp-btn sp-invoke"
                                     on:click={() => invokeSkill(s)}
-                                    title={isEN ? 'Insert into input' : 'Insertar en el input'}>
-                                ▶ {isEN ? 'Invoke' : 'Invocar'}
+                                    title={$trad('Insertar en el input')}>
+                                ▶ {$trad('Invocar')}
                             </button>
                             <button class="sp-btn sp-expand"
                                     on:click={() => expandedId = (isOpen ? null : s.id)}
-                                    title={isOpen ? (isEN ? 'Collapse' : 'Contraer') : (isEN ? 'Show script' : 'Ver script')}>
+                                    title={isOpen ? ($trad('Contraer')) : ($trad('Ver script'))}>
                                 {isOpen ? '▾' : '▸'}
                             </button>
                             <button class="sp-btn sp-del"
                                     on:click={() => deleteSkill(s)}
-                                    title={isEN ? 'Delete skill' : 'Eliminar skill'}>✕</button>
+                                    title={$trad('Eliminar skill')}>✕</button>
                         </div>
                         {#if s.description}
                             <div class="sp-desc">{s.description}</div>

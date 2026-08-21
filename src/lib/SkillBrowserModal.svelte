@@ -1,4 +1,6 @@
 <script>
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     import { createEventDispatcher } from 'svelte';
     import Books from '@tabler/icons-svelte/icons/books';
     import { getAllSkills, getSkillsByCategory, searchSkills, categoryIcon, categoryLabel } from '$lib/skills/skill-engine';
@@ -55,7 +57,7 @@
     <!-- Header -->
     <div class="sk-hdr">
       <span class="sk-hdr-ico"><Books size={18} stroke={1.9} color="var(--acc, #10b981)"/></span>
-      <span class="sk-hdr-title">{isEN ? 'Skill Browser' : 'Explorador de Skills'}</span>
+      <span class="sk-hdr-title">{$trad('Explorador de Skills')}</span>
       <button class="sk-close" on:click={close}>✕</button>
     </div>
 
@@ -65,7 +67,7 @@
       <!-- Search -->
       <div class="sk-search">
         <input type="text" class="sk-search-input"
-          placeholder={isEN ? 'Search skills...' : 'Buscar skills...'}
+          placeholder={$trad('Buscar skills...')}
           bind:value={query} />
       </div>
 
@@ -75,7 +77,7 @@
         <button class="sk-cat-btn" class:active={selectedCategory === cat}
           on:click={() => { selectedCategory = cat; query = ''; }}>
           {cat === 'all' ? '🔧' : categoryIcon(cat)}
-          {cat === 'all' ? (isEN ? 'All' : 'Todas') : categoryLabel(cat, isEN)}
+          {cat === 'all' ? ($trad('Todas')) : categoryLabel(cat, isEN)}
         </button>
         {/each}
       </div>
@@ -89,7 +91,7 @@
             <div class="sk-card-name">{isEN ? skill.nameEN : skill.name}</div>
             <div class="sk-card-desc">{isEN ? skill.descriptionEN : skill.description}</div>
             <div class="sk-card-meta">
-              <span class="sk-tag">{skill.phases.length} {isEN ? 'phases' : 'fases'}</span>
+              <span class="sk-tag">{skill.phases.length} {$trad('fases')}</span>
               <span class="sk-tag">{skill.os === 'both' ? 'Linux/Win' : skill.os}</span>
               {#if skill.version}<span class="sk-tag">v{skill.version}</span>{/if}
             </div>
@@ -97,7 +99,7 @@
         </button>
         {/each}
         {#if skills.length === 0}
-        <div class="sk-empty">{isEN ? 'No skills found.' : 'No se encontraron skills.'}</div>
+        <div class="sk-empty">{$trad('No se encontraron skills.')}</div>
         {/if}
       </div>
     </div>
@@ -106,7 +108,7 @@
     <!-- ── DETAIL VIEW ── -->
     <div class="sk-detail">
       <button class="sk-back" on:click={() => selectedSkill = null}>
-        ← {isEN ? 'Back' : 'Volver'}
+        ← {$trad('Volver')}
       </button>
 
       <div class="sk-detail-hdr">
@@ -118,7 +120,7 @@
       </div>
 
       <!-- Phases list -->
-      <div class="sk-phases-title">{isEN ? 'Phases' : 'Fases'} ({selectedSkill.phases.length})</div>
+      <div class="sk-phases-title">{$trad('Fases')} ({selectedSkill.phases.length})</div>
       <div class="sk-phases">
         {#each selectedSkill.phases as phase, i}
         <div class="sk-phase" class:optional={phase.optional}>
@@ -126,7 +128,7 @@
           <div class="sk-phase-info">
             <div class="sk-phase-name">
               {isEN ? phase.nameEN : phase.name}
-              {#if phase.optional}<span class="sk-optional-tag">{isEN ? 'optional' : 'opcional'}</span>{/if}
+              {#if phase.optional}<span class="sk-optional-tag">{$trad('opcional')}</span>{/if}
               {#if phase.expectVerdict}<span class="sk-verdict-tag">verdict</span>{/if}
             </div>
           </div>
@@ -143,12 +145,12 @@
 
       <!-- User context input -->
       <div class="sk-run-section">
-        <label for="sk-ctx" class="sk-run-label">{isEN ? 'Additional context (optional):' : 'Contexto adicional (opcional):'}</label>
+        <label for="sk-ctx" class="sk-run-label">{$trad('Contexto adicional (opcional):')}</label>
         <textarea id="sk-ctx" class="sk-run-input" rows="2"
-          placeholder={isEN ? 'e.g., domain: example.com, service: nginx...' : 'ej: dominio: ejemplo.com, servicio: nginx...'}
+          placeholder={$trad('ej: dominio: ejemplo.com, servicio: nginx...')}
           bind:value={userInput}></textarea>
         <button class="sk-run-btn" on:click={runSkill}>
-          ▶ {isEN ? 'Run Skill' : 'Ejecutar Skill'}
+          ▶ {$trad('Ejecutar Skill')}
         </button>
       </div>
     </div>

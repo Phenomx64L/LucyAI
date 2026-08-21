@@ -25,6 +25,8 @@
   chats and short threads don't benefit from a minimap.
 -->
 <script lang="ts">
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     import { onMount, onDestroy, tick } from 'svelte';
 
     /** The active tab. We accept the whole object and read .id + .messages
@@ -277,11 +279,9 @@
         on:pointermove={onStripPointerMove}
         on:pointerup={onStripPointerUp}
         on:pointercancel={onStripPointerUp}
-        title={isEN
-            ? 'Conversation map · click to jump, drag to scrub'
-            : 'Mapa de la conversación · click para saltar, arrastra para recorrer'}
+        title={$trad('Mapa de la conversación · click para saltar, arrastra para recorrer')}
         role="navigation"
-        aria-label={isEN ? 'Conversation minimap' : 'Mapa de conversación'}
+        aria-label={$trad('Mapa de conversación')}
     >
         <!-- Viewport indicator — soft tinted rectangle over the section
              currently scrolled into view. Pointer-events:none so the

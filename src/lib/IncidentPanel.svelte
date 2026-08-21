@@ -12,6 +12,8 @@
   gives them visibility into what Lucy "believes" right now.
 -->
 <script>
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     import { invoke } from '@tauri-apps/api/core';
     import { createEventDispatcher, onDestroy } from 'svelte';
     import ConfirmModal from '$lib/ConfirmModal.svelte';
@@ -232,10 +234,10 @@
         <div class="inc-meta">
             <span>{incident.host_name || 'local'}</span>
             <span>·</span>
-            <span>{isEN ? 'Loop' : 'Ciclo'} {incident.loop_count}/{incident.max_loops}</span>
+            <span>{$trad('Ciclo')} {incident.loop_count}/{incident.max_loops}</span>
             <span>·</span>
-            <span style="color:{scoreColor};font-weight:600;" title={isEN ? 'Validity score — higher means hypotheses are better backed by evidence' : 'Score de validez — más alto = hipótesis mejor respaldadas'}>
-                {isEN ? 'Score' : 'Validez'}: {scorePercent}%
+            <span style="color:{scoreColor};font-weight:600;" title={$trad('Score de validez — más alto = hipótesis mejor respaldadas')}>
+                {$trad('Validez')}: {scorePercent}%
             </span>
         </div>
     </div>
@@ -260,38 +262,38 @@
     <div class="inc-actions">
         {#if incident.phase === 'extract'}
             <button class="inc-btn inc-btn-primary" on:click={() => advanceTo('plan')} disabled={loading}>
-                → {isEN ? 'Start Planning' : 'Iniciar Planificación'}
+                → {$trad('Iniciar Planificación')}
             </button>
         {:else if incident.phase === 'plan'}
             <button class="inc-btn inc-btn-primary" on:click={() => advanceTo('investigate')} disabled={loading}>
-                → {isEN ? 'Begin Investigation' : 'Iniciar Investigación'}
+                → {$trad('Iniciar Investigación')}
             </button>
         {:else if incident.phase === 'investigate'}
             <button class="inc-btn inc-btn-primary" on:click={() => advanceTo('diagnose')} disabled={loading}>
-                → {isEN ? 'Move to Diagnosis' : 'Pasar a Diagnóstico'}
+                → {$trad('Pasar a Diagnóstico')}
             </button>
-            <button class="inc-btn inc-btn-secondary" on:click={() => advanceTo('plan')} disabled={loading} title={isEN ? 'Need more data — replan' : 'Necesito más datos — replanificar'}>
-                <RotateCcw size={12}/> {isEN ? 'Replan' : 'Replanificar'}
+            <button class="inc-btn inc-btn-secondary" on:click={() => advanceTo('plan')} disabled={loading} title={$trad('Necesito más datos — replanificar')}>
+                <RotateCcw size={12}/> {$trad('Replanificar')}
             </button>
         {:else if incident.phase === 'diagnose'}
             <button class="inc-btn inc-btn-primary" on:click={() => advanceTo('report')} disabled={loading || scorePercent < 30}
-                title={scorePercent < 30 ? (isEN ? 'Score too low — gather more evidence first' : 'Score muy bajo — más evidencia primero') : ''}>
-                → {isEN ? 'Generate Report' : 'Generar Reporte'}
+                title={scorePercent < 30 ? ($trad('Score muy bajo — más evidencia primero')) : ''}>
+                → {$trad('Generar Reporte')}
             </button>
             <button class="inc-btn inc-btn-secondary" on:click={() => advanceTo('plan')} disabled={loading}>
-                <RotateCcw size={12}/> {isEN ? 'Reroute to Plan' : 'Volver a Plan'}
+                <RotateCcw size={12}/> {$trad('Volver a Plan')}
             </button>
             <button class="inc-btn inc-btn-subtle" on:click={recalcScore} disabled={loading}>
-                {isEN ? 'Recalc Score' : 'Recalcular'}
+                {$trad('Recalcular')}
             </button>
         {:else if incident.phase === 'report'}
             <button class="inc-btn inc-btn-primary" on:click={() => advanceTo('done')} disabled={loading}>
-                <CheckCircle2 size={12}/> {isEN ? 'Mark Done' : 'Marcar Listo'}
+                <CheckCircle2 size={12}/> {$trad('Marcar Listo')}
             </button>
         {/if}
 
         <button class="inc-btn inc-btn-danger" on:click={abandonIncident} disabled={loading}>
-            <XCircle size={12}/> {isEN ? 'Abandon' : 'Abandonar'}
+            <XCircle size={12}/> {$trad('Abandonar')}
         </button>
     </div>
     {/if}
@@ -299,30 +301,28 @@
     <!-- ── Sprint D — Hash chain verification ─────────────────────────────── -->
     <div class="inc-section">
         <div class="inc-section-header">
-            <span>{isEN ? 'Hash chain integrity' : 'Integridad de la cadena'}</span>
+            <span>{$trad('Integridad de la cadena')}</span>
             {#if chainReport}
                 {#if chainReport.fully_valid}
-                    <span class="hc-badge ok" title={isEN ? 'All actions hash-verified' : 'Todas las acciones verificadas'}>
+                    <span class="hc-badge ok" title={$trad('Todas las acciones verificadas')}>
                         ✓ {chainReport.verified_ok}/{chainReport.total_actions}
                     </span>
                 {:else}
-                    <span class="hc-badge bad" title={isEN ? 'Tamper detected' : 'Manipulación detectada'}>
+                    <span class="hc-badge bad" title={$trad('Manipulación detectada')}>
                         ⚠ {chainReport.mismatches.length}/{chainReport.total_actions}
                     </span>
                 {/if}
             {/if}
             <button class="inc-btn inc-btn-subtle" style="margin-left:auto;font-size:10px;"
                     on:click={verifyHashChain} disabled={chainBusy}>
-                {chainBusy ? '⟳' : '◇'} {isEN ? 'Verify' : 'Verificar'}
+                {chainBusy ? '⟳' : '◇'} {$trad('Verificar')}
             </button>
         </div>
         {#if chainError}
             <div class="inc-empty" style="color:#ef4444;">{chainError}</div>
         {:else if !chainReport}
             <div class="inc-empty">
-                {isEN
-                    ? 'Click Verify to recompute the SHA-256 chain over this incident\'s actions and confirm no row was tampered with.'
-                    : 'Pulsa Verificar para recomputar la cadena SHA-256 sobre las acciones de este incidente y confirmar que ninguna fila fue manipulada.'}
+                {$trad('Pulsa Verificar para recomputar la cadena SHA-256 sobre las acciones de este incidente y confirmar que ninguna fila fue manipulada.')}
             </div>
         {:else if chainReport.fully_valid}
             <div class="inc-empty hc-ok-msg">
@@ -355,11 +355,11 @@
     <!-- ── Evidence list ──────────────────────────────────────────────────── -->
     <div class="inc-section">
         <div class="inc-section-header">
-            <span>{isEN ? 'Evidence' : 'Evidencia'}</span>
+            <span>{$trad('Evidencia')}</span>
             <span class="inc-count">{evidence.length}</span>
         </div>
         {#if evidence.length === 0}
-            <div class="inc-empty">{isEN ? 'No evidence captured yet.' : 'Sin evidencia capturada aún.'}</div>
+            <div class="inc-empty">{$trad('Sin evidencia capturada aún.')}</div>
         {:else}
             <div class="inc-evidence-list">
                 {#each evidence as ev (ev.id)}
@@ -379,7 +379,7 @@
                             <summary>{ev.content.slice(0, 80)}{ev.content.length > 80 ? '…' : ''}</summary>
                             <pre>{ev.content}</pre>
                         </details>
-                        <div class="inc-evidence-id" title={isEN ? 'Hypotheses can reference this id' : 'Hipótesis pueden referenciar este id'}>id: {ev.id.slice(0, 12)}</div>
+                        <div class="inc-evidence-id" title={$trad('Hipótesis pueden referenciar este id')}>id: {ev.id.slice(0, 12)}</div>
                     </div>
                 {/each}
             </div>
@@ -389,11 +389,11 @@
     <!-- ── Hypotheses ─────────────────────────────────────────────────────── -->
     <div class="inc-section">
         <div class="inc-section-header">
-            <span>{isEN ? 'Hypotheses' : 'Hipótesis'}</span>
+            <span>{$trad('Hipótesis')}</span>
             <span class="inc-count">{hypotheses.length}</span>
         </div>
         {#if hypotheses.length === 0}
-            <div class="inc-empty">{isEN ? 'No hypotheses proposed yet.' : 'Sin hipótesis aún.'}</div>
+            <div class="inc-empty">{$trad('Sin hipótesis aún.')}</div>
         {:else}
             {#each hypotheses as h (h.id)}
                 {@const support = parseJson(h.supporting_evidence_ids, [])}
@@ -413,9 +413,9 @@
     <!-- ── Final report ───────────────────────────────────────────────────── -->
     {#if incident.status !== 'open' && (incident.summary || incident.root_cause)}
     <div class="inc-section">
-        <div class="inc-section-header">{isEN ? 'Resolution' : 'Resolución'}</div>
+        <div class="inc-section-header">{$trad('Resolución')}</div>
         {#if incident.root_cause}
-            <div class="inc-resolution-rc"><strong>{isEN ? 'Root cause' : 'Causa raíz'}:</strong> {incident.root_cause}</div>
+            <div class="inc-resolution-rc"><strong>{$trad('Causa raíz')}:</strong> {incident.root_cause}</div>
         {/if}
         {#if incident.summary}
             <div class="inc-resolution-sum">{incident.summary}</div>
@@ -433,12 +433,10 @@
     open={showAbandonConfirm}
     variant="warn"
     icon="🏳"
-    title={isEN ? 'Abandon incident' : 'Abandonar incidente'}
-    message={isEN
-        ? 'Abandon this incident? It will be marked as unresolved.'
-        : '¿Abandonar este incidente? Se marcará como sin resolver.'}
-    confirmLabel={isEN ? 'Abandon' : 'Abandonar'}
-    cancelLabel={isEN ? 'Cancel' : 'Cancelar'}
+    title={$trad('Abandonar incidente')}
+    message={$trad('¿Abandonar este incidente? Se marcará como sin resolver.')}
+    confirmLabel={$trad('Abandonar')}
+    cancelLabel={$trad('Cancelar')}
     on:confirm={doAbandon}
     on:cancel={() => showAbandonConfirm = false}
 />

@@ -5,6 +5,9 @@
 
 import { invoke } from '@tauri-apps/api/core';
 
+// La interfaz en cinco idiomas. `tr` y no `$trad`: esto no es un
+// componente, así que no hay nada a lo que suscribirse. Ver `$lib/i18n`.
+import { tr } from '$lib/i18n';
 export type RiskLevel = 'critical' | 'high' | 'medium' | 'low' | 'safe';
 
 export interface PermissionCheckResult {
@@ -287,16 +290,12 @@ export function analyzeCommand(
         summary = isEN
             ? `CRITICAL RISK: This command could cause irreversible damage. ${topMatch?.description || ''}`
             : `RIESGO CRITICO: Este comando podria causar dano irreversible. ${topMatch?.description || ''}`;
-        suggestion = isEN
-            ? 'Consider creating a backup or snapshot before proceeding.'
-            : 'Considera crear un respaldo o snapshot antes de continuar.';
+        suggestion = tr('Considera crear un respaldo o snapshot antes de continuar.');
     } else if (level === 'high') {
         summary = isEN
             ? `HIGH RISK: This command modifies critical system configuration. ${topMatch?.description || ''}`
             : `RIESGO ALTO: Este comando modifica configuracion critica del sistema. ${topMatch?.description || ''}`;
-        suggestion = isEN
-            ? 'Verify the target and parameters are correct.'
-            : 'Verifica que el objetivo y los parametros sean correctos.';
+        suggestion = tr('Verifica que el objetivo y los parametros sean correctos.');
     } else if (level === 'medium') {
         summary = isEN
             ? `MODERATE RISK: ${topMatch?.description || 'This command makes notable changes.'}`
@@ -306,7 +305,7 @@ export function analyzeCommand(
             ? `LOW RISK: ${topMatch?.description || 'Minor privilege or config change.'}`
             : `RIESGO BAJO: ${topMatch?.description || 'Cambio menor de privilegios o configuracion.'}`;
     } else {
-        summary = isEN ? 'No risk detected.' : 'Sin riesgo detectado.';
+        summary = tr('Sin riesgo detectado.');
     }
 
     return { level, score, command, matches, summary, suggestion };

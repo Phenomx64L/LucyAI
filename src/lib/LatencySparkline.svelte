@@ -22,6 +22,8 @@
   the rendered window.
 -->
 <script lang="ts">
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     import { onMount, onDestroy, tick } from 'svelte';
     import { invoke } from '@tauri-apps/api/core';
     // v1.7.174 — visibility-gated polling (skip IPC while window hidden).
@@ -209,10 +211,10 @@
 <div
     class="latency-spark-wrap"
     role="img"
-    aria-label={isEN ? 'LLM latency sparkline' : 'Sparkline de latencia LLM'}
+    aria-label={$trad('Sparkline de latencia LLM')}
     on:mouseenter={onHover}
     on:mouseleave={onLeave}
-    title={tipText || (isEN ? 'LLM latency · last samples' : 'Latencia LLM · últimas muestras')}
+    title={tipText || ($trad('Latencia LLM · últimas muestras'))}
 >
     <canvas bind:this={canvas} class="latency-spark" aria-hidden="true"></canvas>
     {#if hovering && tipText}

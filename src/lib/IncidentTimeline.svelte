@@ -3,13 +3,14 @@
      timeline and a running duration. Uses OPSCENTER design tokens.
 -->
 <script lang="ts">
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     import { invoke } from '@tauri-apps/api/core';
     import { onMount } from 'svelte';
 
     import { createEventDispatcher } from 'svelte';
 
     export let incidentId: string;
-    export let isEN: boolean = false;
 
     const dispatch = createEventDispatcher<{ dismiss: void }>();
     let closing = false;
@@ -140,14 +141,14 @@
 </script>
 
 {#if loading}
-    <div class="tl-loading">{isEN ? 'Loading timeline...' : 'Cargando timeline...'}</div>
+    <div class="tl-loading">{$trad('Cargando timeline...')}</div>
 {:else if error}
     <div class="tl-error">{error}</div>
 {:else if incident}
     <div class="tl-wrap">
         <div class="tl-header">
             <span class="tl-title" title="ID: {incident.id}">
-                {incident.title || (isEN ? 'Incident' : 'Incidente')}
+                {incident.title || ($trad('Incidente'))}
                 {#if incident.host_name}
                     <span class="tl-host">@ {incident.host_name}</span>
                 {/if}
@@ -155,12 +156,12 @@
             <span class="tl-duration">{totalDuration}</span>
             {#if incident.status !== 'resolved' && incident.status !== 'done'}
                 <button class="tl-status tl-status-btn" on:click={closeIncident} disabled={closing}
-                        title={isEN ? 'Click to close this incident' : 'Clic para cerrar este incidente'}>
+                        title={$trad('Clic para cerrar este incidente')}>
                     {closing ? '...' : incident.status}
                     <span class="tl-close-hint">✕</span>
                 </button>
             {:else}
-                <span class="tl-status resolved">{isEN ? 'resolved' : 'resuelto'}</span>
+                <span class="tl-status resolved">{$trad('resuelto')}</span>
             {/if}
         </div>
         {#if incident.description}
@@ -210,7 +211,7 @@
                     </div>
                     <div class="tl-phase-body">
                         <div class="tl-phase-header">
-                            <span class="tl-phase-name" style="color:var(--ops-status-ok)">{isEN ? 'Resolved' : 'Resuelto'}</span>
+                            <span class="tl-phase-name" style="color:var(--ops-status-ok)">{$trad('Resuelto')}</span>
                             <span class="tl-phase-time">{fmtTime(incident.resolved_at)}</span>
                         </div>
                     </div>

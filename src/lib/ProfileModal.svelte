@@ -1,4 +1,6 @@
 <script>
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     import { createEventDispatcher } from 'svelte';
     import { profiles, hosts } from '$lib/stores';
     import AlertTriangle from '@tabler/icons-svelte/icons/alert-triangle';
@@ -10,7 +12,6 @@
     import User from '@tabler/icons-svelte/icons/user';
     const dispatch = createEventDispatcher();
 
-    export let isEN = false;
 
     let editingId   = null;
     let form        = { name: '', icon: '⊞', hostIds: [] };
@@ -63,12 +64,12 @@
             $profiles = [...$profiles, newP];
         }
         resetForm();
-        dispatch('toast', { msg: isEN ? 'Profile saved' : 'Perfil guardado', type: 'info' });
+        dispatch('toast', { msg: $trad('Perfil guardado'), type: 'info' });
     }
 
     function deleteProfile(id) {
         $profiles = $profiles.filter(p => p.id !== id);
-        dispatch('toast', { msg: isEN ? 'Profile deleted' : 'Perfil eliminado', type: 'info' });
+        dispatch('toast', { msg: $trad('Perfil eliminado'), type: 'info' });
     }
 
     function exportProfiles() {
@@ -101,7 +102,7 @@
                     $profiles = [...$profiles, { ...p, createdAt: p.createdAt || Date.now(), lastUsed: Date.now() }];
                     imported++;
                 }
-                dispatch('toast', { msg: `${imported} ${isEN ? 'profiles imported' : 'perfiles importados'}`, type: 'info' });
+                dispatch('toast', { msg: `${imported} ${$trad('perfiles importados')}`, type: 'info' });
             } catch(err) {
                 importError = String(err);
             }
@@ -118,14 +119,14 @@
   <div class="pm-modal">
     <div class="pm-hdr">
       <span class="pm-hdr-ico"><User size={16} stroke={1.9} color="var(--acc, #10b981)"/></span>
-      <span class="pm-title">{isEN ? 'Manage Profiles' : 'Gestionar Perfiles'}</span>
+      <span class="pm-title">{$trad('Gestionar Perfiles')}</span>
       <div style="display:flex;gap:6px;margin-left:auto;">
         <button class="pm-btn sm" on:click={exportProfiles} title="Export JSON">⬇ JSON</button>
         <label class="pm-btn sm" title="Import JSON">
           ⬆ Import
           <input type="file" accept=".json" on:change={importProfiles} style="display:none;">
         </label>
-        <button class="pm-btn sm" on:click={openNew}>+ {isEN ? 'New' : 'Nuevo'}</button>
+        <button class="pm-btn sm" on:click={openNew}>+ {$trad('Nuevo')}</button>
       </div>
       <button class="pm-close" on:click={close}>✕</button>
     </div>
@@ -137,11 +138,11 @@
     {#if showForm}
     <div class="pm-form">
       <div class="pm-form-row">
-        <label for="pm-name">{isEN ? 'Name' : 'Nombre'}</label>
-        <input id="pm-name" type="text" class="pm-input" bind:value={form.name} placeholder={isEN ? 'e.g. Production' : 'ej. Producción'} maxlength="40">
+        <label for="pm-name">{$trad('Nombre')}</label>
+        <input id="pm-name" type="text" class="pm-input" bind:value={form.name} placeholder={$trad('ej. Producción')} maxlength="40">
       </div>
       <div class="pm-form-row">
-        <span>{isEN ? 'Icon' : 'Icono'}</span>
+        <span>{$trad('Icono')}</span>
         <div class="pm-icons">
           {#each ICONS as ic}
           <button class="pm-icon-btn" class:sel={form.icon === ic} on:click={() => form.icon = ic}>{ic}</button>
@@ -149,7 +150,7 @@
         </div>
       </div>
       <div class="pm-form-row">
-        <span>{isEN ? 'Hosts' : 'Hosts'} ({form.hostIds.length})</span>
+        <span>{$trad('Hosts')} ({form.hostIds.length})</span>
         <div class="pm-hosts">
           {#each $hosts as h}
           <button class="pm-host-btn" class:sel={form.hostIds.includes(h.id)} on:click={() => toggleHost(h.id)}>
@@ -157,14 +158,14 @@
           </button>
           {/each}
           {#if $hosts.length === 0}
-          <span class="pm-nohosts">{isEN ? 'No hosts configured' : 'Sin hosts configurados'}</span>
+          <span class="pm-nohosts">{$trad('Sin hosts configurados')}</span>
           {/if}
         </div>
       </div>
       <div class="pm-form-actions">
-        <button class="pm-btn" on:click={resetForm}>{isEN ? 'Cancel' : 'Cancelar'}</button>
+        <button class="pm-btn" on:click={resetForm}>{$trad('Cancelar')}</button>
         <button class="pm-btn accent" on:click={saveProfile} disabled={!form.name.trim()}>
-          {editingId ? (isEN ? 'Update' : 'Actualizar') : (isEN ? 'Create' : 'Crear')}
+          {editingId ? ($trad('Actualizar')) : ($trad('Crear'))}
         </button>
       </div>
     </div>
@@ -176,7 +177,7 @@
         <span class="pm-item-icon">{p.icon}</span>
         <div class="pm-item-info">
           <div class="pm-item-name">{p.name}</div>
-          <div class="pm-item-meta">{p.hostIds.length} hosts · {isEN ? 'Created' : 'Creado'} {new Date(p.createdAt).toLocaleDateString()}</div>
+          <div class="pm-item-meta">{p.hostIds.length} hosts · {$trad('Creado')} {new Date(p.createdAt).toLocaleDateString()}</div>
         </div>
         <button class="pm-btn sm" on:click={() => openEdit(p)} style="display:flex;align-items:center;justify-content:center;"><Pencil size={12} stroke={2}/></button>
         <button class="pm-btn sm danger" on:click={() => deleteProfile(p.id)} style="display:flex;align-items:center;justify-content:center;"><Trash2 size={12} stroke={2}/></button>
@@ -185,8 +186,8 @@
       {#if $profiles.length === 0 && !showForm}
       <div class="pm-empty">
         <div style="font-size:32px;margin-bottom:8px;display:flex;justify-content:center;"><User size={32} stroke={1.5} style="color:var(--txt3)"/></div>
-        <div>{isEN ? 'No profiles yet. Create one to group your hosts.' : 'Sin perfiles. Crea uno para agrupar tus hosts.'}</div>
-        <button class="pm-btn accent" style="margin-top:12px;" on:click={openNew}>+ {isEN ? 'Create Profile' : 'Crear Perfil'}</button>
+        <div>{$trad('Sin perfiles. Crea uno para agrupar tus hosts.')}</div>
+        <button class="pm-btn accent" style="margin-top:12px;" on:click={openNew}>+ {$trad('Crear Perfil')}</button>
       </div>
       {/if}
     </div>

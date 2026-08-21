@@ -1,4 +1,6 @@
 <script>
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     import { createEventDispatcher } from 'svelte';
     import { profiles, activeProfileId } from '$lib/stores';
     import User from '@tabler/icons-svelte/icons/user';
@@ -12,7 +14,6 @@
     import ChevronUp from '@tabler/icons-svelte/icons/chevron-up';
     const dispatch = createEventDispatcher();
 
-    export let isEN = false;
 
     let open = false;
 
@@ -41,9 +42,9 @@
 <svelte:window on:keydown={handleKey} />
 
 <div class="ps-wrap">
-    <button class="ps-btn" on:click={() => open = !open} title={isEN ? 'Switch profile' : 'Cambiar perfil'}>
+    <button class="ps-btn" on:click={() => open = !open} title={$trad('Cambiar perfil')}>
         <span class="ps-icon">{#if active}{active.icon}{:else}<User size={13}/>{/if}</span>
-        <span class="ps-name">{active ? active.name : (isEN ? 'All Hosts' : 'Todos')}</span>
+        <span class="ps-name">{active ? active.name : ($trad('Todos'))}</span>
         <span class="ps-caret">{#if open}<ChevronUp size={11}/>{:else}<ChevronDown size={11}/>{/if}</span>
     </button>
 
@@ -53,7 +54,7 @@
     <div class="ps-dropdown">
         <button class="ps-opt" class:active={!$activeProfileId} on:click={() => select(null)}>
             <span class="ps-opt-icon"><Globe size={13}/></span>
-            <span>{isEN ? 'All Hosts (No Filter)' : 'Todos los Hosts (Sin Filtro)'}</span>
+            <span>{$trad('Todos los Hosts (Sin Filtro)')}</span>
         </button>
         {#each $profiles as p}
         <button class="ps-opt" class:active={$activeProfileId === p.id} on:click={() => select(p.id)}>
@@ -63,11 +64,11 @@
         </button>
         {/each}
         {#if $profiles.length === 0}
-        <div class="ps-empty">{isEN ? 'No profiles yet' : 'Sin perfiles aún'}</div>
+        <div class="ps-empty">{$trad('Sin perfiles aún')}</div>
         {/if}
         <button class="ps-opt ps-add" on:click={() => { open = false; dispatch('manage'); }}>
             <span class="ps-opt-icon"><Settings size={12}/></span>
-            <span>{isEN ? 'Manage Profiles...' : 'Gestionar Perfiles...'}</span>
+            <span>{$trad('Gestionar Perfiles...')}</span>
         </button>
     </div>
     {/if}

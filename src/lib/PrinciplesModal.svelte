@@ -1,4 +1,6 @@
 <script>
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     // ── PrinciplesModal — manage Lucy's behavioral rules (Maestro-inspired)
     //
     // Backend: src-tauri/src/commands/principles.rs
@@ -106,7 +108,7 @@
 
     async function save() {
         if (!draft.name?.trim() || !draft.rule?.trim()) {
-            toast(isEN ? 'Name and rule required' : 'Nombre y regla son obligatorios', 'warn'); return;
+            toast($trad('Nombre y regla son obligatorios'), 'warn'); return;
         }
         const scope = (draft.scope || '').trim().toLowerCase() === 'global' || !draft.scope?.trim()
             ? null : draft.scope.trim();

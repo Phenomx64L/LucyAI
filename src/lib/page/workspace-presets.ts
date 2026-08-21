@@ -11,6 +11,9 @@
 
 import { safeSetLS, safeSetLSString } from '$lib/safe-ls';
 
+// La interfaz en cinco idiomas. `tr` y no `$trad`: esto no es un
+// componente, así que no hay nada a lo que suscribirse. Ver `$lib/i18n`.
+import { tr } from '$lib/i18n';
 /** Persistence schema (v2). v1 lacked the `view/sidebarCollapsed/focusMode/
  *  tabs/lang` fields — applyPreset gracefully accepts older shapes. */
 export interface WorkspacePreset {
@@ -121,11 +124,11 @@ export function ageString(ts: number | null | undefined, isEN: boolean, userLang
     if (!ts) return '';
     const diff = Date.now() - ts;
     const m = Math.round(diff / 60000);
-    if (m < 1)  return isEN ? 'just now' : 'ahora';
-    if (m < 60) return `${m}${isEN ? 'm ago' : 'm'}`;
+    if (m < 1)  return tr('ahora');
+    if (m < 60) return `${m}${tr('m')}`;
     const h = Math.round(m / 60);
-    if (h < 24) return `${h}${isEN ? 'h ago' : 'h'}`;
+    if (h < 24) return `${h}${tr('h')}`;
     const d = Math.round(h / 24);
-    if (d < 30) return `${d}${isEN ? 'd ago' : 'd'}`;
+    if (d < 30) return `${d}${tr('d')}`;
     return new Date(ts).toLocaleDateString(userLang);
 }

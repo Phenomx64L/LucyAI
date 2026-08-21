@@ -1,4 +1,6 @@
 <script lang="ts">
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     import { createEventDispatcher, onMount, onDestroy } from 'svelte';
     import { invoke } from '@tauri-apps/api/core';
     import StatusOrb from '$lib/StatusOrb.svelte';
@@ -110,7 +112,7 @@
                    : 'cr';
     $: guardLabelShort = (() => {
         const s = String(guardLabel || '').trim();
-        if (!s) return isEN ? 'clean' : 'limpio';
+        if (!s) return $trad('limpio');
         return s.length > 28 ? s.slice(0, 27) + '…' : s;
     })();
 
@@ -241,9 +243,9 @@
     }
 
     $: mlBadge =
-        mlStatus === 'active'           ? { txt: '🧠 ML', cls: 'cok',  tip: isEN ? 'PromptGuard 2 ML active — catches paraphrased prompt injection.' : 'PromptGuard 2 ML activo — detecta prompt injection parafraseado.' }
-      : mlStatus === 'model_missing'   ? { txt: '🧠 ?',  cls: 'cy',   tip: isEN ? 'ML feature compiled but PromptGuard model not installed. See PROMPT_GUARD_INSTALL.md.' : 'Feature ML compilado pero modelo PromptGuard no instalado. Ver PROMPT_GUARD_INSTALL.md.' }
-      : mlStatus === 'runtime_missing' ? { txt: '🧠 !',  cls: 'cy',   tip: isEN ? 'PromptGuard model is on disk but ONNX Runtime DLL is missing.' : 'Modelo PromptGuard en disco pero falta ONNX Runtime DLL.' }
+        mlStatus === 'active'           ? { txt: '🧠 ML', cls: 'cok',  tip: $trad('PromptGuard 2 ML activo — detecta prompt injection parafraseado.') }
+      : mlStatus === 'model_missing'   ? { txt: '🧠 ?',  cls: 'cy',   tip: $trad('Feature ML compilado pero modelo PromptGuard no instalado. Ver PROMPT_GUARD_INSTALL.md.') }
+      : mlStatus === 'runtime_missing' ? { txt: '🧠 !',  cls: 'cy',   tip: $trad('Modelo PromptGuard en disco pero falta ONNX Runtime DLL.') }
       : mlStatus === 'failed'          ? { txt: '🧠 ✕',  cls: 'cr',   tip: `ML load failed: ${mlNote}` }
       : null;  // feature_disabled / null → no badge (default build)
 </script>
@@ -254,7 +256,7 @@
          "Host:" label, no user name prefix). Lucy's title bar carries
          the user's identity already; here we only need the machine. -->
     {#if hostName !== '---'}
-    <div class="bi sb-host" title={`${isEN ? 'Local host' : 'Host local'}: ${hostName}`}>
+    <div class="bi sb-host" title={`${$trad('Host local')}: ${hostName}`}>
         <span class="sb-host-dot" aria-hidden="true"></span>
         <span style="color:#0f7b5a;">{hostName}</span>
     </div>
@@ -271,7 +273,7 @@
                 : `Hosts remotos online / total. Click para abrir NexShell.`}>
         <span class="sb-ms-glyph">⚯</span>
         <span class={hostsTone}>{remoteHostsOnline}/{remoteHostsTotal}</span>
-        <span class="sb-ms-unit">{isEN ? 'hosts' : 'hosts'}</span>
+        <span class="sb-ms-unit">{$trad('hosts')}</span>
     </button>
 
     <button class="bi sb-ms-chip" type="button"
@@ -281,7 +283,7 @@
                 : `Alertas de incidente activas. Click para abrir Dashboard.`}>
         <span class="sb-ms-glyph"><AlertTriangle size={12} stroke={2} /></span>
         <span class={alertsTone}>{activeAlerts}</span>
-        <span class="sb-ms-unit">{isEN ? 'alerts' : 'alertas'}</span>
+        <span class="sb-ms-unit">{$trad('alertas')}</span>
     </button>
 
     <button class="bi sb-ms-chip sb-ms-guard" type="button"
@@ -303,7 +305,7 @@
         {/each}
     </button>
 
-    <span class="bi sb-ms-clock" aria-label={isEN ? 'Local time' : 'Hora local'}>
+    <span class="bi sb-ms-clock" aria-label={$trad('Hora local')}>
         <span class="sb-ms-glyph">◷</span>
         <span>{_now}</span>
     </span>
@@ -348,9 +350,9 @@
              title={isEN
                 ? `Rate for ${_shortModel}: ${pricingLabel(_model)}${_pricing.effort ? ` · effort ${_pricing.effort}` : ''}. Effort only multiplies token COUNT, not the per-token price.`
                 : `Tarifa para ${_shortModel}: ${pricingLabel(_model)}${_pricing.effort ? ` · esfuerzo ${_pricing.effort}` : ''}. El esfuerzo solo multiplica el NÚMERO de tokens, no la tarifa por token.`}>
-            <span>{isEN ? 'Rate:' : 'Tarifa:'}</span>
+            <span>{$trad('Tarifa:')}</span>
             {#if _isFree}
-                <span class="rate-val rate-free-tag">{isEN ? 'Free · Local' : 'Gratis · Local'}</span>
+                <span class="rate-val rate-free-tag">{$trad('Gratis · Local')}</span>
             {:else}
                 <span class="rate-val">
                     ${(_pricing.inputPer1K * 1000).toFixed(_pricing.inputPer1K < 0.001 ? 3 : 2)}
@@ -359,7 +361,7 @@
                 </span>
                 <span class="rate-unit">/1M</span>
                 {#if _pricing.effort}
-                    <span class="rate-effort" title={isEN ? 'Effort multiplier on token count' : 'Multiplicador del nivel de esfuerzo sobre el conteo de tokens'}>·{_pricing.effort}</span>
+                    <span class="rate-effort" title={$trad('Multiplicador del nivel de esfuerzo sobre el conteo de tokens')}>·{_pricing.effort}</span>
                 {/if}
             {/if}
         </div>
@@ -371,9 +373,9 @@
         {@const _critical = _budget > 0 && _pct >= (tokenBudgetConfig?.alertThreshold || 80)}
         {@const _warn = _budget > 0 && _pct >= 60 && !_critical}
         <div class="bi" title={_budget > 0
-            ? `${isEN ? 'This month' : 'Este mes'}: $${costSummaryMonth.total_cost.toFixed(4)} de $${_budget.toFixed(2)} (${_pct.toFixed(1)}%) · ${costSummaryMonth.total_tokens.toLocaleString()} tokens · ${costSummaryMonth.request_count} ${isEN?'requests':'consultas'}`
-            : `${isEN ? 'This month' : 'Este mes'}: $${costSummaryMonth.total_cost.toFixed(4)} · ${costSummaryMonth.total_tokens.toLocaleString()} tokens`}>
-            <span>{isEN ? 'Cost:' : 'Costo:'}</span>
+            ? `${$trad('Este mes')}: $${costSummaryMonth.total_cost.toFixed(4)} de $${_budget.toFixed(2)} (${_pct.toFixed(1)}%) · ${costSummaryMonth.total_tokens.toLocaleString()} tokens · ${costSummaryMonth.request_count} ${$trad('consultas')}`
+            : `${$trad('Este mes')}: $${costSummaryMonth.total_cost.toFixed(4)} · ${costSummaryMonth.total_tokens.toLocaleString()} tokens`}>
+            <span>{$trad('Costo:')}</span>
             <span class="cost-num {_critical ? 'cr' : _warn ? 'cy' : 'cok'}" class:cost-pulse={costPulse}
                   >${$tweenedCost.toFixed(_budget > 0 && _budget < 1 ? 4 : 3)}</span>
             {#if _budget > 0}
@@ -384,7 +386,7 @@
             <!-- v1.7.31 — 7-day cost sparkline. Bars (not line) so days
                  with zero spend remain visible as a baseline. -->
             {#if costSeries.length > 1 && costSeries.some(v => v > 0)}
-                <span class="sb-cost-spark" title="{isEN ? 'Cost last 7 days' : 'Costo últimos 7 días'}: {costByDay.map(p => `${p.date.slice(5)} $${p.cost.toFixed(3)}`).join(' · ')}">
+                <span class="sb-cost-spark" title="{$trad('Costo últimos 7 días')}: {costByDay.map(p => `${p.date.slice(5)} $${p.cost.toFixed(3)}`).join(' · ')}">
                     <Sparkline values={costSeries}
                                width={36} height={11}
                                kind="bar"
@@ -396,8 +398,8 @@
 
     {#if activeTab?._streamTPS && activeTab._streamTPS > 0}
         <div class="bi sb-stream"
-             title={`${isEN ? 'Tokens per second (last 30s)' : 'Tokens por segundo (últimos 30s)'}${activeTab._streamTTFT ? ` · TTFT ${activeTab._streamTTFT}ms` : ''}`}>
-            <span>{isEN ? 'Stream:' : 'Stream:'}</span>
+             title={`${$trad('Tokens por segundo (últimos 30s)')}${activeTab._streamTTFT ? ` · TTFT ${activeTab._streamTTFT}ms` : ''}`}>
+            <span>{$trad('Stream:')}</span>
             <span class="cok">~{activeTab._streamTPS}</span>
             {#if Array.isArray(activeTab._streamTpsHistory) && activeTab._streamTpsHistory.length > 1}
                 <span class="sb-stream-spark">
@@ -419,13 +421,13 @@
              title={isEN
                 ? `Prompt cache (this session): ${cacheStats.calls_with_cache_activity}/${cacheStats.calls_total_anthropic} Anthropic calls used the cache. Read: ${cacheStats.cache_read_total.toLocaleString()} tokens at 0.1× price. Write: ${cacheStats.cache_creation_total.toLocaleString()} tokens at 1.25× price.`
                 : `Cache de prompt (esta sesión): ${cacheStats.calls_with_cache_activity}/${cacheStats.calls_total_anthropic} llamadas Anthropic usaron caché. Leído: ${cacheStats.cache_read_total.toLocaleString()} tokens a 0.1× precio. Escrito: ${cacheStats.cache_creation_total.toLocaleString()} tokens a 1.25×.`}>
-            <span class="sb-cache-glyph"><Bolt size={12} stroke={2} /></span><span class={cacheHitTier(cacheHitPct)} data-testid="cache-badge-pct">{cacheHitPct.toFixed(0)}% {isEN ? 'cached' : 'caché'}</span>
+            <span class="sb-cache-glyph"><Bolt size={12} stroke={2} /></span><span class={cacheHitTier(cacheHitPct)} data-testid="cache-badge-pct">{cacheHitPct.toFixed(0)}% {$trad('caché')}</span>
         </div>
     {/if}
 
     {#if !keyringOk}
-        <div class="bi" title={isEN ? 'Keyring unavailable — credentials cannot be saved securely' : 'Keyring no disponible — las credenciales no se pueden guardar de forma segura'}>
-            <span class="cr sb-cache-glyph"><AlertTriangle size={12} stroke={2} /></span><span class="cr">{isEN ? 'Keyring failed' : 'Keyring falló'}</span>
+        <div class="bi" title={$trad('Keyring no disponible — las credenciales no se pueden guardar de forma segura')}>
+            <span class="cr sb-cache-glyph"><AlertTriangle size={12} stroke={2} /></span><span class="cr">{$trad('Keyring falló')}</span>
         </div>
     {/if}
 
@@ -440,9 +442,7 @@
          active, amber for ML downgraded, red for breached. Currently
          all layers are static-green; layer health hookups come in a
          later sprint (tracked). -->
-    <div class="bi sb-guard" title={isEN
-        ? 'Guardrail layer active — S1 destructive · S2 bypass shapes · S5 prompt injection · S8 force-execute · S10 UAC elevation'
-        : 'Guardrails activos — S1 destructivo · S2 bypass · S5 prompt-injection · S8 force-execute · S10 elevación UAC'}>
+    <div class="bi sb-guard" title={$trad('Guardrails activos — S1 destructivo · S2 bypass · S5 prompt-injection · S8 force-execute · S10 elevación UAC')}>
         <span class="sb-guard-glyph"><Shield size={13} stroke={2} /></span>
         <span class="sb-guard-dots" aria-hidden="true">
             <span class="sb-led sb-led-ok" data-layer="S1"></span>

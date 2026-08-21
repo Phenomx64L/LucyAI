@@ -13,13 +13,14 @@
   stays consistent.
 -->
 <script lang="ts">
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     import {
         ACCENT_PRESETS,
         applyAccent,
         type AccentId,
     } from '$lib/accent-store';
 
-    export let isEN: boolean = false;
     export let active: AccentId = 'emerald';
 
     function pick(id: AccentId) {
@@ -28,8 +29,8 @@
     }
 </script>
 
-<div class="accent-row" title={isEN ? 'Accent color' : 'Color de acento'}>
-    <span class="accent-row-label">{isEN ? 'Accent' : 'Acento'}</span>
+<div class="accent-row" title={$trad('Color de acento')}>
+    <span class="accent-row-label">{$trad('Acento')}</span>
     <div class="accent-swatches">
         {#each ACCENT_PRESETS as a (a.id)}
             <button

@@ -5,6 +5,8 @@
      Query filtering and keyboard navigation are handled internally.
 ──────────────────────────────────────────────────────────────────────────── -->
 <script>
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     import { tick } from 'svelte';
     import { focusTrap } from '$lib/actions';
     // v1.4.12 — fzf-style fuzzy matcher upgrades the substring filter
@@ -19,7 +21,6 @@
     export let allItems = [];
     /** Controls visibility; supports bind:show */
     export let show = false;
-    export let isEN = false;
 
     let query = '';
     let idx   = 0;
@@ -61,7 +62,7 @@
   <div class="cp-search">
     <span class="cp-ico">⌕</span>
     <input id="cp-input" class="cp-input"
-      placeholder={isEN ? 'Search commands, actions, hosts...' : 'Buscar comandos, acciones, hosts...'}
+      placeholder={$trad('Buscar comandos, acciones, hosts...')}
       bind:value={query}
       on:input={() => idx = 0}
       on:keydown={(e) => {
@@ -85,14 +86,14 @@
       </button>
     {/each}
     {#if filtered.length === 0}
-      <div class="cp-empty">{isEN ? 'No results for' : 'Sin resultados para'} "{query}"</div>
+      <div class="cp-empty">{$trad('Sin resultados para')} "{query}"</div>
     {/if}
   </div>
 
   <div class="cp-footer">
-    <span>↑↓ {isEN ? 'navigate' : 'navegar'}</span>
-    <span>↵ {isEN ? 'execute' : 'ejecutar'}</span>
-    <span>Ctrl+P {isEN ? 'close' : 'cerrar'}</span>
+    <span>↑↓ {$trad('navegar')}</span>
+    <span>↵ {$trad('ejecutar')}</span>
+    <span>Ctrl+P {$trad('cerrar')}</span>
   </div>
 
 </div>

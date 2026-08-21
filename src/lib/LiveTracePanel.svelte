@@ -12,6 +12,8 @@
   scrolls up (sticky-scroll discipline).
 -->
 <script lang="ts">
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     import { onDestroy } from 'svelte';
     import { liveTrace, clearTrace, type TraceEntry, type TracePhase } from '$lib/liveTrace';
     import VirtualList from '$lib/VirtualList.svelte';
@@ -22,7 +24,6 @@
     import ChevronDown  from '@tabler/icons-svelte/icons/chevron-down';
     import ChevronUp    from '@tabler/icons-svelte/icons/chevron-up';
 
-    export let isEN: boolean = false;
     export let activeTabId: string = '';
     /** When true, panel is open. Bind from parent to allow external toggle. */
     export let open: boolean = false;
@@ -118,18 +119,18 @@
     <header class="tp-head">
         <div class="tp-title">
             <span class="tp-ico"><Activity size={14} stroke={2.2}/></span>
-            <span>{isEN ? 'Agent trace' : 'Telemetría'}</span>
+            <span>{$trad('Telemetría')}</span>
             <span class="tp-count">{visible.length}</span>
         </div>
         <div class="tp-actions">
             <button class="tp-btn" class:on={showFilters}
-                title={isEN ? 'Filters' : 'Filtros'} on:click={() => showFilters = !showFilters}>
+                title={$trad('Filtros')} on:click={() => showFilters = !showFilters}>
                 <Filter size={13}/>
             </button>
-            <button class="tp-btn" title={isEN ? 'Clear' : 'Limpiar'} on:click={clearTrace}>
+            <button class="tp-btn" title={$trad('Limpiar')} on:click={clearTrace}>
                 <Trash size={13}/>
             </button>
-            <button class="tp-btn close" title={isEN ? 'Close' : 'Cerrar'} on:click={() => open = false}>
+            <button class="tp-btn close" title={$trad('Cerrar')} on:click={() => open = false}>
                 <X size={13}/>
             </button>
         </div>
@@ -139,7 +140,7 @@
         <div class="tp-filters">
             <label class="tp-scope">
                 <input type="checkbox" bind:checked={scopeToActiveTab}/>
-                <span>{isEN ? 'Active tab only' : 'Solo pestaña activa'}</span>
+                <span>{$trad('Solo pestaña activa')}</span>
             </label>
             <div class="tp-phases">
                 {#each ALL_PHASES as p}
@@ -156,7 +157,7 @@
     {#if visible.length === 0}
         <div class="tp-list">
             <div class="tp-empty">
-                {isEN ? 'No events yet. Start a task — Lucy will narrate every step here.' : 'Sin eventos aún. Inicia una tarea — Lucy narrará cada paso aquí.'}
+                {$trad('Sin eventos aún. Inicia una tarea — Lucy narrará cada paso aquí.')}
             </div>
         </div>
     {:else}
@@ -183,7 +184,7 @@
                 {#if e.ok === true}<span class="tp-ok">OK</span>{/if}
                 {#if e.detail}
                     <button class="tp-expand" on:click={() => toggleDetail(e.id)}
-                        title={isEN ? 'Show detail' : 'Mostrar detalle'}>
+                        title={$trad('Mostrar detalle')}>
                         {#if expandedDetail.has(e.id)}<ChevronUp size={11}/>{:else}<ChevronDown size={11}/>{/if}
                     </button>
                 {/if}
@@ -196,7 +197,7 @@
 
     {#if !stickyScroll}
         <button class="tp-jump" on:click={() => { stickyScroll = true; virtualList?.scrollToBottom(); }}>
-            ↓ {isEN ? 'Jump to latest' : 'Ir al último'}
+            ↓ {$trad('Ir al último')}
         </button>
     {/if}
 </aside>

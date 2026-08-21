@@ -20,6 +20,8 @@
          to SQLite. Closing Lucy resets the artifact tabs.
 -->
 <script lang="ts">
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     import { createEventDispatcher } from 'svelte';
     import { marked } from 'marked';
     // v1.7.85 — Lazy-language highlight.js (matches message-render.ts).
@@ -79,7 +81,6 @@
     /** Whether the panel is rendered at all. */
     export let open: boolean = false;
 
-    export let isEN: boolean = false;
 
     const dispatch = createEventDispatcher<{
         close: void;
@@ -172,7 +173,7 @@
 </script>
 
 {#if open && artifacts.length > 0}
-<aside class="art-panel" aria-label={isEN ? 'Artifacts' : 'Artefactos'}>
+<aside class="art-panel" aria-label={$trad('Artefactos')}>
     <header class="art-head">
         <div class="art-tabs" role="tablist">
             {#each artifacts as a (a.id)}
@@ -187,7 +188,7 @@
                     <span class="art-tab-title">{a.title}</span>
                     <span class="art-tab-close"
                           role="button" tabindex="0"
-                          title={isEN ? 'Remove from artifacts' : 'Quitar de artefactos'}
+                          title={$trad('Quitar de artefactos')}
                           on:click|stopPropagation={() => dispatch('remove', { id: a.id })}
                           on:keydown={(ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); dispatch('remove', { id: a.id }); } }}>
                         ✕
@@ -196,23 +197,23 @@
             {/each}
         </div>
         <div class="art-actions">
-            <button class="art-btn" type="button" on:click={copyToClipboard} title={isEN ? 'Copy to clipboard' : 'Copiar al portapapeles'}>
+            <button class="art-btn" type="button" on:click={copyToClipboard} title={$trad('Copiar al portapapeles')}>
                 {_copied ? '✓' : '⧉'}
             </button>
-            <button class="art-btn" type="button" on:click={download} title={isEN ? 'Download as file' : 'Descargar como archivo'}>
+            <button class="art-btn" type="button" on:click={download} title={$trad('Descargar como archivo')}>
                 ↓
             </button>
             {#if activeArtifact && activeArtifact.sourceTabId}
                 {@const _srcId = String(activeArtifact.sourceTabId)}
                 <button class="art-btn" type="button"
                         on:click={() => dispatch('gotoSource', { id: activeArtifact.id, sourceTabId: _srcId })}
-                        title={isEN ? 'Jump to source message' : 'Ir al mensaje origen'}>
+                        title={$trad('Ir al mensaje origen')}>
                     ↗
                 </button>
             {/if}
             <button class="art-btn art-btn-close" type="button"
                     on:click={() => dispatch('close')}
-                    title={isEN ? 'Close panel' : 'Cerrar panel'}>
+                    title={$trad('Cerrar panel')}>
                 ✕
             </button>
         </div>
@@ -227,7 +228,7 @@
             </span>
             <span class="art-meta-sep">·</span>
             <span class="art-meta-lines">
-                {activeArtifact.content.split('\n').length} {isEN ? 'lines' : 'líneas'}
+                {activeArtifact.content.split('\n').length} {$trad('líneas')}
             </span>
             <span class="art-meta-sep">·</span>
             <span class="art-meta-age">{fmtAge(activeArtifact.createdAt)}</span>

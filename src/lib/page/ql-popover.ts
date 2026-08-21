@@ -1,3 +1,6 @@
+// La interfaz en cinco idiomas. `tr` y no `$trad`: esto no es un
+// componente, así que no hay nada a lo que suscribirse. Ver `$lib/i18n`.
+import { tr } from '$lib/i18n';
 // ── page/ql-popover.ts ────────────────────────────────────────────────────
 //
 // Quick-Look popover for tool-card references extracted from `+page.svelte`
@@ -41,7 +44,7 @@ export function attachQlPopover(opts: QlOptions): QlHandle {
               <span class="ql-status"></span>
             </div>
             <pre class="ql-body"></pre>
-            <div class="ql-foot">${isEN ? 'Click to expand' : 'Click para expandir'}</div>
+            <div class="ql-foot">${tr('Click para expandir')}</div>
         `;
         // Keep popover alive while user hovers it (lets them select text)
         p.addEventListener('mouseenter', () => { if (hideTimer !== null) { clearTimeout(hideTimer); hideTimer = null; } });
@@ -76,7 +79,7 @@ export function attachQlPopover(opts: QlOptions): QlHandle {
         const st = pop.querySelector('.ql-status') as HTMLElement;
         st.textContent = status === 'error' ? '✕' : status === 'running' ? '↻' : '✓';
         st.className   = 'ql-status ql-st-' + status;
-        (pop.querySelector('.ql-body') as HTMLElement).textContent = preview || (isEN ? '(no output)' : '(sin salida)');
+        (pop.querySelector('.ql-body') as HTMLElement).textContent = preview || (tr('(sin salida)'));
         pop.classList.add('ql-show');
         pop.setAttribute('aria-hidden', 'false');
 

@@ -1,4 +1,6 @@
 <script>
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad } from '$lib/i18n';
     import { createEventDispatcher } from 'svelte';
     import { PHASE_ORDER, phaseLabel, phaseIcon } from '$lib/hooks/turn-loop';
     import CheckCircle from '@tabler/icons-svelte/icons/circle-check';
@@ -34,16 +36,16 @@
   <div class="tl-hdr">
     <span class="tl-icon">↻</span>
     <span class="tl-title">Turn-Loop</span>
-    <span class="tl-iter">{isEN ? 'Iter' : 'Iter'} {loop.iteration}/{loop.maxIterations}</span>
+    <span class="tl-iter">{$trad('Iter')} {loop.iteration}/{loop.maxIterations}</span>
     <span class="tl-time">{fmtTime(elapsed)}</span>
     {#if loop.phase !== 'done' && loop.phase !== 'failed'}
-    <button class="tl-stop" on:click={stop} title={isEN ? 'Stop loop' : 'Detener loop'}>■</button>
+    <button class="tl-stop" on:click={stop} title={$trad('Detener loop')}>■</button>
     {/if}
   </div>
 
   <!-- Problem -->
   <div class="tl-problem">
-    <span class="tl-problem-lbl">{isEN ? 'Problem' : 'Problema'}:</span>
+    <span class="tl-problem-lbl">{$trad('Problema')}:</span>
     {loop.problem.substring(0, 120)}{loop.problem.length > 120 ? '...' : ''}
   </div>
 
@@ -96,9 +98,9 @@
   {#if loop.phase === 'done' || loop.phase === 'failed'}
   <div class="tl-summary" class:ok={loop.resolved}>
     {#if loop.resolved}
-      <CheckCircle size={13} stroke={2} style="color:var(--acc)"/> {isEN ? 'Problem resolved!' : 'Problema resuelto!'}
+      <CheckCircle size={13} stroke={2} style="color:var(--acc)"/> {$trad('Problema resuelto!')}
     {:else}
-      <AlertTriangle size={13} stroke={2} style="color:var(--amber)"/> {isEN ? 'Could not fully resolve.' : 'No se pudo resolver completamente.'}
+      <AlertTriangle size={13} stroke={2} style="color:var(--amber)"/> {$trad('No se pudo resolver completamente.')}
     {/if}
     {#if loop.summary}
       <div class="tl-summary-text">{loop.summary}</div>
