@@ -107,6 +107,11 @@ pub mod posture;
 /// no sabía decir si eso es nuevo, que es la pregunta que se hace de verdad
 /// delante de ese número.
 pub mod history;
+/// El esquema completo de lo que el núcleo lee y escribe. Existe para que un
+/// shell que no sea la app Tauri pueda CREAR la base en vez de exigir que ya
+/// esté — que era lo que ataba el shell nativo a tener la app de escritorio
+/// instalada antes.
+pub mod schema;
 /// A partir de qué número se avisa. Había tres escalas distintas para el mismo
 /// dato en la misma pantalla; ahora hay una, y se puede mover por equipo.
 pub mod thresholds;
