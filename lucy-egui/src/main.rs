@@ -1743,15 +1743,22 @@ fn db_path() -> Option<PathBuf> {
     dirs::config_dir().map(|d| d.join("com.lucy.dev").join("lucy.db"))
 }
 
-/// Inicializa el pool del CORAZÓN sin-Tauri (`lucy_core::init`) sobre tu DB real y
-/// llama `lucy_core::get_recent_memories` — la MISMA lógica que el backend Tauri,
+/// Inicializa el pool del CORAZÓN sin-Tauri sobre tu DB real y llama
+/// `lucy_core::get_recent_memories` — la MISMA lógica que el backend Tauri,
 /// pero en un crate compartido SIN motor de navegador. Sin IPC, sin duplicar.
+///
+/// AHORA LA CREA SI NO ESTÁ. Antes esto devolvía «DB no encontrada» y ahí se
+/// acababa: el shell nativo necesitaba que la app Tauri se hubiera ejecutado
+/// antes en esa máquina para tener una base con esquema. Eso lo hacía
+/// imposible de instalar solo — se podía copiar el binario, pero arrancaba sin
+/// memoria y sin forma de arreglarlo desde dentro.
+///
+/// `lucy_core::schema::init_or_create` es idempotente y sirve para las dos
+/// cosas: crea la base entera si no hay nada, y sobre una que ya existe se
+/// limita a comprobar que estén las tablas y las columnas.
 fn load_memories() -> Result<Vec<AgentMemory>, String> {
     let path = db_path().ok_or("no se pudo resolver %APPDATA%")?;
-    if !path.exists() {
-        return Err(format!("DB no encontrada en {}", path.display()));
-    }
-    lucy_core::init(&path)?;
+    lucy_core::schema::init_or_create(&path)?;
     lucy_core::get_recent_memories(Some(300))
 }
 
