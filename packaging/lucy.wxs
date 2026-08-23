@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ── lucy.wxs — el MSI del shell NATIVO de Lucy ─────────────────────────────
+
+  UN MSI POR IDIOMA, y no uno con desplegable. No es una limitación de este
+  fichero: un MSI lleva su idioma horneado en la cabecera del paquete, y
+  ofrecer un selector dentro exige transformaciones .mst más un arrancador que
+  las aplique. Cinco ficheros es la forma normal de hacerlo, y además es la que
+  quieren los despliegues por directiva de grupo — ahí un diálogo que pregunta
+  es justo lo que estorba, porque nadie está delante.
+
+  El selector de idioma vive en el instalador NSIS. Ver `lucy.nsi`.
+
+  `Product/@Id` es "*": se regenera en cada build, que es lo correcto para un
+  paquete cuyo contenido cambia. `UpgradeCode` NO: es el mismo para siempre, y
+  es lo único que le dice a Windows que la 2.0.2 sustituye a la 2.0.1 en vez de
+  instalarse al lado.
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*"
+           Name="!(loc.NombreProducto)"
+           Language="$(var.Lang)"
+           Version="$(var.Version)"
+           Manufacturer="Iván Eduardo Luna"
+           UpgradeCode="B7E3B1B4-9C2A-4F51-A0D8-6E2F7C1A5D30">
+
+    <Package InstallerVersion="500"
+             Compressed="yes"
+             InstallScope="perMachine"
+             Manufacturer="Iván Eduardo Luna"
+             Description="!(loc.DescripcionPaquete)"
+             Languages="$(var.Lang)"
+             SummaryCodepage="1252" />
+
+    <MajorUpgrade DowngradeErrorMessage="!(loc.YaHayVersionNueva)" />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Icon Id="LucyIcon" SourceFile="$(var.IconoRuta)" />
+    <Property Id="ARPPRODUCTICON" Value="LucyIcon" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/Phenomx64L/LucyAI" />
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLFOLDER" Name="Lucy" />
+      </Directory>
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="MenuLucy" Name="Lucy" />
+      </Directory>
+      <Directory Id="DesktopFolder" />
+    </Directory>
+
+    <!--
+      Un componente por fichero y con GUID FIJO. Con GUID generado en cada
+      build, una actualización no reconoce el componente de antes: deja el
+      fichero viejo y añade el nuevo, y el desinstalador se olvida de uno de
+      los dos.
+    -->
+    <DirectoryRef Id="INSTALLFOLDER">
+      <Component Id="CmpLucyExe" Guid="4C1D7A28-3E5B-4A96-8B0F-2D9A6C4E1F73">
+        <File Id="FilLucyExe"
+              Source="$(var.ExeRuta)"
+              Name="lucy-egui.exe"
+              KeyPath="yes">
+          <Shortcut Id="AccesoMenu"
+                    Directory="MenuLucy"
+                    Name="!(loc.NombreProducto)"
+                    Icon="LucyIcon"
+                    WorkingDirectory="INSTALLFOLDER"
+                    Advertise="yes" />
+          <Shortcut Id="AccesoEscritorio"
+                    Directory="DesktopFolder"
+                    Name="!(loc.NombreProducto)"
+                    Icon="LucyIcon"
+                    WorkingDirectory="INSTALLFOLDER"
+                    Advertise="yes" />
+        </File>
+      </Component>
+
+      <Component Id="CmpLicencia" Guid="9F2A6B14-77C8-4D3E-95A1-0B8E5C2A7D46">
+        <File Id="FilLicencia" Source="$(var.LicenciaRuta)" Name="LICENSE" KeyPath="yes" />
+      </Component>
+
+      <!--
+        El idioma elegido, para que LUCY lo lea y no solo el instalador. Sin
+        esto, elegir alemán aquí cambiaría el instalador durante dos minutos y
+        la aplicación arrancaría en español igual.
+
+        En HKCU porque es una preferencia del usuario, no de la máquina.
+      -->
+      <Component Id="CmpIdioma" Guid="1E7C4D90-5A2B-4E68-B3F7-8C0D9A1E6B25">
+        <RegistryKey Root="HKCU" Key="Software\Lucy">
+          <RegistryValue Name="Language" Type="string" Value="$(var.CodigoIdioma)" KeyPath="yes" />
+        </RegistryKey>
+      </Component>
+
+      <Component Id="CmpCarpetaMenu" Guid="6D3F8E27-1B94-4C50-A7E2-4F1C8B6D3A09">
+        <RemoveFolder Id="QuitaMenuLucy" Directory="MenuLucy" On="uninstall" />
+        <RegistryKey Root="HKCU" Key="Software\Lucy">
+          <RegistryValue Name="Installed" Type="integer" Value="1" KeyPath="yes" />
+        </RegistryKey>
+      </Component>
+    </DirectoryRef>
+
+    <Feature Id="Principal" Title="!(loc.NombreProducto)" Level="1" Absent="disallow">
+      <ComponentRef Id="CmpLucyExe" />
+      <ComponentRef Id="CmpLicencia" />
+      <ComponentRef Id="CmpIdioma" />
+      <ComponentRef Id="CmpCarpetaMenu" />
+    </Feature>
+
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.RtfRuta)" />
+    <UIRef Id="WixUI_InstallDir" />
+  </Product>
+</Wix>

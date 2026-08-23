@@ -4361,6 +4361,55 @@ const MAX_LOOPS_MAX: u32 = 200;
 /// de agente sin ser el más caro del catálogo.
 const DEFAULT_MODEL: &str = "gemini-3.5-flash";
 
+/// El idioma que eligió quien instaló, si lo eligió.
+///
+/// El instalador —NSIS y los cinco MSI— escribe el código en
+/// `HKCU\Software\Lucy\Language`. Se lee UNA VEZ, al arrancar sin nada
+/// guardado: en cuanto el operador toca el selector de Configuración, manda lo
+/// suyo y esto no se vuelve a mirar.
+///
+/// CON `reg query` Y NO CON UN CRATE DE REGISTRO. Es una lectura, de una clave,
+/// una vez en la vida del proceso. Añadir `winreg` al árbol por esto son más
+/// dependencias que mantener y una superficie de compilación mayor para algo
+/// que `reg.exe` —que está en todos los Windows desde hace veinte años—
+/// resuelve en una línea. Si falla, se devuelve `None` y Lucy arranca en
+/// español, que es exactamente lo que hacía antes.
+#[cfg(windows)]
+fn idioma_del_instalador() -> Option<i18n::Lang> {
+    use std::os::windows::process::CommandExt;
+    const SIN_VENTANA: u32 = 0x0800_0000; // CREATE_NO_WINDOW
+
+    let salida = std::process::Command::new("reg")
+        .args(["query", r"HKCU\Software\Lucy", "/v", "Language"])
+        .creation_flags(SIN_VENTANA)
+        .output()
+        .ok()?;
+    if !salida.status.success() {
+        return None;
+    }
+    i18n::Lang::de_clave(codigo_de_reg(&String::from_utf8_lossy(&salida.stdout))?)
+}
+
+/// El código de idioma dentro de la salida de `reg query`.
+///
+/// APARTE Y PROBADO, porque es donde de verdad puede fallar: la salida lleva
+/// una línea en blanco, la ruta de la clave, y luego el valor separado por
+/// tabuladores o por espacios según la versión de Windows. La llamada a
+/// `reg.exe` no se puede probar sin tocar el registro de quien ejecute los
+/// tests; esto sí, y es la parte que se rompe.
+fn codigo_de_reg(salida: &str) -> Option<&str> {
+    salida
+        .lines()
+        .find(|l| l.contains("Language") && l.contains("REG_SZ"))?
+        .split_whitespace()
+        .next_back()
+}
+
+#[cfg(not(windows))]
+fn idioma_del_instalador() -> Option<i18n::Lang> {
+    None
+}
+
 impl App {
     fn new(storage: Option<&dyn eframe::Storage>) -> Self {
         // EL IDIOMA, LO PRIMERO DE TODO. Va antes que cualquier otra cosa porque
@@ -4368,14 +4417,20 @@ impl App {
         // abajo, la primera pantalla saldría en español y cambiaría sola al
         // segundo frame, que se ve como un parpadeo.
         //
-        // Sin nada guardado, español. Lo suyo sería heredar lo que el operador
-        // eligiera en la app de escritorio —la V1 lo deja en `lucy_user_lang`—
-        // pero eso vive en el almacenamiento local del WebView y desde aquí no
-        // se lee; queda para cuando este shell tenga su propio instalador.
-        if let Some(l) = storage
+        // MANDA LO QUE EL OPERADOR ELIGIÓ DENTRO DE LUCY. Si hay algo guardado,
+        // se acabó la discusión: lo eligió a conciencia y en esta aplicación.
+        //
+        // Y SI NO HAY NADA, el idioma del INSTALADOR. Ya hay instalador propio
+        // —el comentario que estaba aquí decía que quedaba para cuando lo
+        // hubiera— y su selector escribe el código en el registro. Sin leerlo,
+        // elegir alemán al instalar cambiaría el idioma del instalador durante
+        // dos minutos y Lucy arrancaría en español igual: un selector que no
+        // decide nada es peor que no tenerlo, porque promete.
+        let elegido = storage
             .and_then(|s| s.get_string(K_LANG))
             .and_then(|v| i18n::Lang::de_clave(&v))
-        {
+            .or_else(idioma_del_instalador);
+        if let Some(l) = elegido {
             i18n::set(l);
         }
         let models = lucy_core::chat::list_models();
@@ -17479,6 +17534,34 @@ mod layout {
             s.observa(n, t0 + Duration::from_secs(i));
         }
         assert_eq!(s.nivel, Nivel::Ok, "ninguno de los dos aguantó su plazo");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn el_idioma_del_instalador_se_lee_de_la_salida_de_reg() {
+        // LO QUE HACE ÚTIL AL SELECTOR DEL INSTALADOR. Si esto no lee el
+        // código, elegir alemán al instalar cambia el idioma del instalador
+        // durante dos minutos y Lucy arranca en español igual — un selector que
+        // promete y no cumple.
+        //
+        // La salida de `reg query` trae una línea en blanco, la ruta, y el
+        // valor separado por tabuladores en unas versiones de Windows y por
+        // espacios en otras. Las dos formas, comprobadas.
+        let con_espacios = "\r\nHKEY_CURRENT_USER\\Software\\Lucy\r\n    Language    REG_SZ    de\r\n\r\n";
+        let con_tabs = "\r\nHKEY_CURRENT_USER\\Software\\Lucy\r\n\tLanguage\tREG_SZ\tpt\r\n";
+        assert_eq!(codigo_de_reg(con_espacios), Some("de"));
+        assert_eq!(codigo_de_reg(con_tabs), Some("pt"));
+        assert_eq!(i18n::Lang::de_clave(codigo_de_reg(con_espacios).unwrap()), Some(i18n::Lang::De));
+
+        // Sin la clave, `reg` escribe un error y no una línea de valor. Se
+        // devuelve `None` y Lucy arranca como siempre: es una preferencia, no
+        // un requisito.
+        assert_eq!(codigo_de_reg("ERROR: no se encuentra la clave del Registro.\r\n"), None);
+        assert_eq!(codigo_de_reg(""), None);
+
+        // Y un valor que no es un idioma que Lucy hable tampoco vale.
+        let raro = "\r\n    Language    REG_SZ    klingon\r\n";
+        assert_eq!(i18n::Lang::de_clave(codigo_de_reg(raro).unwrap()), None);
     }
 
     #[test]

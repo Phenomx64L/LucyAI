@@ -1,7 +1,9 @@
 [package]
 name = "lucy-egui"
-version = "0.1.0"
+version = "2.0.1"
 edition = "2021"
+description = "Lucy — asistente de administración de sistemas Windows"
+authors = ["Iván Eduardo Luna"]
 
 # ── Fase 1 · shell nativo egui de Lucy ────────────────────────────────────────
 # Slice `lucy-core`: el shell depende del CORAZÓN SIN-TAURI (`lucy-core`), NO del
