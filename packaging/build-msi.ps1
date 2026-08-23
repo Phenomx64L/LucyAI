@@ -1,4 +1,4 @@
-# ── build-msi.ps1 — los cinco MSI del shell nativo de Lucy ───────────────────
+﻿# ── build-msi.ps1 — los cinco MSI del shell nativo de Lucy ───────────────────
 #
 # UNO POR IDIOMA. Un MSI lleva su idioma horneado en la cabecera del paquete;
 # un desplegable dentro exige transformaciones .mst y un arrancador que las
