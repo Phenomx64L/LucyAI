@@ -50,13 +50,25 @@ Get-ChildItem $dist -File -ErrorAction SilentlyContinue | Remove-Item -Force
 
 # ── 2. el instalador con selector de idioma ─────────────────────────────────
 Write-Host '── NSIS (con selector de idioma) ──' -ForegroundColor Cyan
+
+# EL .nsi TIENE QUE LLEVAR BOM. Con `Unicode true`, NSIS lee un fichero sin
+# marca de orden de bytes como ANSI, y «Iván Eduardo Luna» se registra en
+# Windows como «IvÃ¡n Eduardo Luna». No falla nada al compilar: el instalador
+# sale, se instala, y el nombre roto solo se ve en «Aplicaciones instaladas»,
+# que es donde nadie vuelve a mirar. Por eso se comprueba aquí y no se confía.
+$nsi = Join-Path $aqui 'lucy.nsi'
+$primeros = [System.IO.File]::ReadAllBytes($nsi)[0..2]
+if ($primeros[0] -ne 0xEF -or $primeros[1] -ne 0xBB -or $primeros[2] -ne 0xBF) {
+    throw "lucy.nsi no tiene BOM: los acentos se registrarian mal. Guardalo como UTF-8 con BOM."
+}
+
 $nsis = "$env:LOCALAPPDATA\tauri\NSIS\makensis.exe"
 if (-not (Test-Path $nsis)) {
     # Sin comilla invertida en el mensaje: en PowerShell es el carácter de
     # escape y parte la cadena por la mitad.
     throw "falta makensis en $nsis - lo descarga 'npm run tauri build' en lucy-svelte"
 }
-& $nsis /V2 (Join-Path $aqui 'lucy.nsi')
+& $nsis /V2 $nsi
 if ($LASTEXITCODE -ne 0) { throw 'makensis falló' }
 
 # ── 3. los cinco MSI ────────────────────────────────────────────────────────

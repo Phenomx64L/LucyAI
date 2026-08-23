@@ -5,6 +5,11 @@ edition = "2021"
 description = "Lucy — asistente de administración de sistemas Windows"
 authors = ["Iván Eduardo Luna"]
 
+# El icono y los datos de versión DEL FICHERO, que son un recurso Win32 y no
+# tienen nada que ver con el icono de la ventana. Ver `build.rs`.
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
+
 # ── Fase 1 · shell nativo egui de Lucy ────────────────────────────────────────
 # Slice `lucy-core`: el shell depende del CORAZÓN SIN-TAURI (`lucy-core`), NO del
 # backend Tauri completo. Resultado: este binario NO enlaza tauri/wry/webview2 —

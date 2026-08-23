@@ -1,4 +1,4 @@
-; ── lucy.nsi — instalador del shell NATIVO de Lucy ──────────────────────────
+﻿; ── lucy.nsi — instalador del shell NATIVO de Lucy ──────────────────────────
 ;
 ; QUÉ EMPAQUETA, y conviene decirlo porque hay dos Lucys. Esto empaqueta
 ; `lucy-egui.exe`: el shell nativo, sin WebView2, sin Tauri. Son 19,6 MB de un
@@ -29,6 +29,12 @@ SetCompressor /SOLID lzma
 !define EDITOR      "Iván Eduardo Luna"
 !define EXE         "lucy-egui.exe"
 !define CLAVE_REG   "Software\Microsoft\Windows\CurrentVersion\Uninstall\LucyNative"
+
+; ESTE FICHERO NECESITA BOM. Con `Unicode true`, NSIS lee un .nsi sin marca de
+; orden de bytes como ANSI: «Iván Eduardo Luna» acaba registrado en Windows como
+; «IvÃ¡n Eduardo Luna», y se ve en «Aplicaciones instaladas» — donde nadie
+; vuelve a mirar después de instalar. `build-all.ps1` lo comprueba antes de
+; llamar a makensis.
 
 Name          "${NOMBRE} ${VERSION}"
 OutFile       "..\dist\Lucy_${VERSION}_x64-setup.exe"
@@ -106,7 +112,11 @@ Section "Lucy" SecPrincipal
     CreateShortcut  "$DESKTOP\Lucy.lnk"         "$INSTDIR\${EXE}"
 
     WriteUninstaller "$INSTDIR\uninstall.exe"
-    WriteRegStr   HKLM "${CLAVE_REG}" "DisplayName"     "${NOMBRE} ${VERSION}"
+    ; SIN LA VERSIÓN EN EL NOMBRE. Windows ya la enseña en su propia columna a
+    ; partir de `DisplayVersion`, así que «Lucy 2.0.1» quedaba como
+    ; «Lucy 2.0.1 · 2.0.1» — y al actualizar, el nombre cambia y parece otro
+    ; programa distinto en la lista.
+    WriteRegStr   HKLM "${CLAVE_REG}" "DisplayName"     "${NOMBRE}"
     WriteRegStr   HKLM "${CLAVE_REG}" "DisplayVersion"  "${VERSION}"
     WriteRegStr   HKLM "${CLAVE_REG}" "Publisher"       "${EDITOR}"
     WriteRegStr   HKLM "${CLAVE_REG}" "DisplayIcon"     "$INSTDIR\${EXE}"
