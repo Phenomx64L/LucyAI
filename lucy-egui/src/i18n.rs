@@ -472,6 +472,7 @@ pub const FRASES: &[Frase] = &[
     f!("Animaciones", "Animations", "Animações", "Animations", "Animationen"),
     f!("Apagadas", "Off", "Desligadas", "Désactivées", "Aus"),
     f!("Apagado", "Off", "Desligado", "Désactivé", "Aus"),
+    f!("Aplicar", "Apply", "Aplicar", "Appliquer", "Übernehmen"),
     f!(
         "Aplicar el cambio en {ruta}",
         "Apply the change to {ruta}",
@@ -569,6 +570,13 @@ pub const FRASES: &[Frase] = &[
         "Bypass des Fork Advisors (dieser Tab)",
     ),
     f!(
+        "C:\\ruta\\a\\tu\\carpeta",
+        "C:\\path\\to\\your\\folder",
+        "C:\\caminho\\para\\a\\sua\\pasta",
+        "C:\\chemin\\vers\\votre\\dossier",
+        "C:\\Pfad\\zu\\Ihrem\\Ordner",
+    ),
+    f!(
         "C:\\ruta\\al\\archivo.log",
         "C:\\path\\to\\file.log",
         "C:\\caminho\\para\\ficheiro.log",
@@ -651,6 +659,13 @@ pub const FRASES: &[Frase] = &[
         "Cargas sensíveis ao custo",
         "Charges sensibles au coût",
         "Kostensensible Workloads",
+    ),
+    f!(
+        "Carpeta de trabajo de Lucy",
+        "Lucy's working folder",
+        "Pasta de trabalho da Lucy",
+        "Dossier de travail de Lucy",
+        "Arbeitsordner von Lucy",
     ),
     f!(
         "Carpeta del skill (o una que contenga varios)",
@@ -895,6 +910,20 @@ pub const FRASES: &[Frase] = &[
         "Eine Regel festlegen, die Lucy immer anwendet",
     ),
     f!("Dirección", "Address", "Endereço", "Adresse", "Adresse"),
+    f!(
+        "Directorio de trabajo",
+        "Working directory",
+        "Diretório de trabalho",
+        "Répertoire de travail",
+        "Arbeitsverzeichnis",
+    ),
+    f!(
+        "Directorio de trabajo: {ruta}",
+        "Working directory: {ruta}",
+        "Diretório de trabalho: {ruta}",
+        "Répertoire de travail : {ruta}",
+        "Arbeitsverzeichnis: {ruta}",
+    ),
     f!("Disco sistema", "System disk", "Disco do sistema", "Disque système", "Systemlaufwerk"),
     f!(
         "Disco {mount} al {pct}%",
@@ -926,6 +955,18 @@ pub const FRASES: &[Frase] = &[
         "Netzwerkgerät",
     ),
     f!("Documentos", "Documents", "Documentos", "Documents", "Dokumente"),
+    f!(
+        "Donde Lucy crea ficheros, resuelve nombres sin ruta y ejecuta los comandos que \
+         propone.",
+        "Where Lucy creates files, resolves names without a path, and runs the commands \
+         she proposes.",
+        "Onde a Lucy cria ficheiros, resolve nomes sem caminho e executa os comandos que \
+         propõe.",
+        "Où Lucy crée les fichiers, résout les noms sans chemin et exécute les commandes \
+         qu'elle propose.",
+        "Wo Lucy Dateien anlegt, Namen ohne Pfad auflöst und die vorgeschlagenen Befehle \
+         ausführt.",
+    ),
     f!(
         "Dónde guardar la copia",
         "Where to save the copy",
@@ -1056,6 +1097,7 @@ pub const FRASES: &[Frase] = &[
         "Le sondage distant (`get_remote_health_windows` / `_linux`)",
         "Die Fernabfrage (`get_remote_health_windows` / `_linux`)",
     ),
+    f!("Elegir carpeta…", "Choose folder…", "Escolher pasta…", "Choisir un dossier…", "Ordner wählen…"),
     f!(
         "Elige la carpeta de un skill, o una que contenga varios — un repositorio descargado sirve tal cual",
         "Pick a skill's folder, or one holding several — a downloaded repository works as is",
@@ -2708,6 +2750,13 @@ pub const FRASES: &[Frase] = &[
         "Eine Momentaufnahme dieses Rechners: offene Ports, Dienste, installierte Software, \
          Zertifikate und geplante Aufgaben. Er schaut nicht von selbst — du musst auf Scannen \
          drücken, bis dahin bleiben die Zahlen leer.",
+    ),
+    f!(
+        "Usar mi carpeta personal",
+        "Use my home folder",
+        "Usar a minha pasta pessoal",
+        "Utiliser mon dossier personnel",
+        "Meinen Benutzerordner verwenden",
     ),
     f!("Usuario", "Username", "Utilizador", "Utilisateur", "Benutzer"),
     f!(

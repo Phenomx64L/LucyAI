@@ -19,14 +19,36 @@ pub struct Pty {
 
 impl Pty {
     /// Spawn the default OS shell (PowerShell on Windows, bash elsewhere).
+    ///
+    /// Inherits the process working directory. Prefer `spawn_in` when the caller
+    /// has somewhere better to start — for Lucy that is the operator's chosen
+    /// working directory, because inheriting means the terminal opens in the
+    /// install folder.
     pub fn spawn(cols: u16, rows: u16) -> Result<Self, String> {
+        Self::spawn_in(cols, rows, None)
+    }
+
+    /// Same, but starting in `cwd`.
+    ///
+    /// EL PORQUÉ, en español porque el motivo es de Lucy y no del prototipo: sin
+    /// esto, NexShell abre la terminal en el directorio del proceso — instalada,
+    /// `C:\Program Files\Lucy`. El operador escribe `dir` y ve la instalación, o
+    /// escribe `> notas.txt` y el fichero acaba ahí. Es la misma fuga que la de
+    /// los comandos que Lucy ejecuta, por la puerta de al lado.
+    pub fn spawn_in(cols: u16, rows: u16, cwd: Option<&std::path::Path>) -> Result<Self, String> {
         let sys = native_pty_system();
         let pair = sys
             .openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
             .map_err(|e| format!("openpty: {e}"))?;
 
         let shell = if cfg!(windows) { "powershell.exe" } else { "bash" };
-        let cmd = CommandBuilder::new(shell);
+        let mut cmd = CommandBuilder::new(shell);
+        // Solo si existe. Un `cwd` que se borró entre que se eligió y que se
+        // abre la terminal hace fallar el spawn entero, y quedarse sin NexShell
+        // por una carpeta que ya no está es peor que abrirla donde se pueda.
+        if let Some(d) = cwd.filter(|d| d.is_dir()) {
+            cmd.cwd(d);
+        }
         let child = pair
             .slave
             .spawn_command(cmd)

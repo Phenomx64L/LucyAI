@@ -69,6 +69,29 @@ fn icono_ventana() -> egui::IconData {
 }
 
 fn main() -> eframe::Result {
+    // LA BASE, ANTES QUE NADA, y esto es un orden que importa de verdad.
+    //
+    // La construcción de `App` es un literal de struct, y sus campos se evalúan
+    // EN EL ORDEN EN QUE ESTÁN ESCRITOS. `skills:` y `pty:` van arriba y los dos
+    // preguntan por el directorio de trabajo; `mems: load_memories()` va abajo y
+    // era lo único que abría la base. O sea que los dos primeros preguntaban con
+    // la base todavía cerrada, no encontraban nada, y `workdir` se quedaba
+    // cacheando «no hay nada configurado» PARA TODA LA SESIÓN — con lo que la
+    // carpeta que eligió el operador no regía en ninguna parte.
+    //
+    // Un fallo así no se ve: no hay error, la aplicación abre, y el ajuste
+    // simplemente no hace nada. Abrir la base aquí lo cierra para todos los
+    // campos y de paso quita el efecto secundario de que quien abría la base
+    // fuera la función que lee las memorias.
+    if let Some(p) = db_path() {
+        if let Err(e) = lucy_core::schema::init_or_create(&p) {
+            eprintln!("lucy: no se pudo preparar la base ({p:?}): {e}");
+        }
+    }
+    // Y el directorio de trabajo a memoria, para que el primer turno no pague la
+    // consulta y para que lo que se cachee sea lo que hay de verdad.
+    lucy_core::workdir::carga();
+
     let opts = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size(VENTANA)
@@ -3915,6 +3938,19 @@ struct App {
     privacy: bool,
     /// Texto del buscador del desplegable de modelos.
     model_query: String,
+    /// Lo que hay escrito en el campo de ruta del directorio de trabajo.
+    ///
+    /// SEPARADO DEL VALOR QUE RIGE. Mientras el operador teclea una ruta, lo
+    /// escrito no es válido todavía —lleva media carpeta— y aplicarlo letra a
+    /// letra pondría a Lucy a trabajar en sitios que no existen. Aquí se escribe,
+    /// y solo al aceptar pasa por `workdir::pon`.
+    workdir_input: String,
+    /// Por qué no se pudo poner la carpeta que se pidió. Vacío = ninguna queja.
+    ///
+    /// Se enseña DENTRO del desplegable y no en una notificación que se va: es
+    /// una respuesta a algo que el operador acaba de hacer, y tiene que seguir
+    /// ahí mientras mire el campo que la provocó.
+    workdir_msg: String,
     /// El retrato de Lucy. Se sube una vez, en el primer frame que lo necesita:
     /// subir una textura exige el contexto, y `new` todavía no lo tiene.
     face: Option<egui::TextureHandle>,
@@ -4539,10 +4575,15 @@ impl App {
             slash_sel: 0,
             dedup: None,
             model_query: String::new(),
+            workdir_input: String::new(),
+            workdir_msg: String::new(),
             face: None,
             ws_tab: WsTab::Plan,
             models,
-            pty: Pty::spawn(140, 44).ok(),
+            // EN EL DIRECTORIO DE TRABAJO. Sin esto NexShell abre en la carpeta
+            // de instalación: un `dir` enseña los ficheros de Lucy y un
+            // `> notas.txt` los deja ahí.
+            pty: Pty::spawn_in(140, 44, Some(&lucy_core::workdir::actual())).ok(),
             vt: vt100::Parser::new(44, 140, 4000),
             term_input: String::new(),
             nx_history: Vec::new(),
@@ -5753,7 +5794,18 @@ impl App {
                 egui::Layout::right_to_left(egui::Align::Center),
                 |ui| {
                     ui.set_max_width(ui.available_width());
+                    // EL ORDEN ES EL INVERSO AL QUE SE VE. En un layout de
+                    // derecha a izquierda, lo primero que se pide es lo que
+                    // queda más a la derecha, así que el modelo va antes y el
+                    // directorio aparece a su izquierda.
                     self.model_picker(ui, w);
+                    ui.add_space(6.0);
+                    // CON UN TOPE PROPIO Y PEQUEÑO. Una ruta larga
+                    // —`C:\Users\eleue\Documents\proyectos\cliente-x`— no puede
+                    // comerse el ancho del selector de modelo ni empujar la
+                    // fila: la píldora recorta con un `clip_rect` y lo que no
+                    // cabe se ve entero al pasar por encima.
+                    self.workdir_picker(ui, 190.0);
                 },
             );
         });
@@ -5884,6 +5936,145 @@ impl App {
             self.tabs_opened += 1;
             self.tab = self.tabs.len() - 1;
         }
+    }
+
+    /// El selector de directorio de trabajo, al lado del de modelo.
+    ///
+    /// POR QUÉ AQUÍ Y NO EN CONFIGURACIÓN. Es la respuesta a «que no se tenga que
+    /// sondear a cada rato la ruta donde deberá trabajar», y eso cambia entre una
+    /// conversación y la siguiente: se revisa un proyecto, luego otro. Un ajuste
+    /// que se cambia a diario enterrado tres pantallas más allá se deja como
+    /// esté, y volvemos a que Lucy escriba donde no toca.
+    ///
+    /// SE ENSEÑA EL ÚLTIMO TRAMO Y NO LA RUTA ENTERA. `C:\Users\eleue\Documents\
+    /// proyectos\cliente-x` en una píldora de la cabecera no se lee y además
+    /// empuja al selector de modelo; `cliente-x` se lee de un vistazo, que es
+    /// para lo que sirve mirar ahí. La ruta completa está al pasar por encima y
+    /// dentro del desplegable.
+    fn workdir_picker(&mut self, ui: &mut egui::Ui, max_w: f32) {
+        let dir = lucy_core::workdir::actual();
+        let completo = dir.display().to_string();
+        // El último tramo. Una unidad pelada —`D:\`— no tiene `file_name`, y ahí
+        // lo que se quiere ver es justamente `D:\`.
+        let corto = dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| completo.clone());
+
+        let pill = model_pill(ui, "▤", &corto, max_w);
+        let pill = pill.on_hover_text(i18n::trf(
+            "Directorio de trabajo: {ruta}",
+            &[("ruta", &completo)],
+        ));
+        let popup_id = ui.make_persistent_id("workdir-menu");
+        if pill.clicked() {
+            // Se rellena con lo que rige AHORA, no vacío: casi siempre lo que se
+            // quiere es una carpeta de al lado, y partir de la actual ahorra
+            // teclear la mitad que no cambia.
+            self.workdir_input = completo.clone();
+            self.workdir_msg.clear();
+            ui.memory_mut(|m| m.toggle_popup(popup_id));
+        }
+
+        egui::popup::popup_below_widget(
+            ui,
+            popup_id,
+            &pill,
+            egui::PopupCloseBehavior::CloseOnClickOutside,
+            |ui| {
+                let w = 380.0_f32;
+                ui.set_min_width(w);
+                ui.add(egui::Label::new(theme::instrument_label(
+                    &i18n::tr("Directorio de trabajo"),
+                    theme::faint(),
+                )));
+                ui.add_space(4.0);
+                // QUÉ SIGNIFICA, en una línea. Sin esto es una ruta suelta en un
+                // menú, y nadie toca un ajuste cuyo efecto no sabe.
+                ui.label(
+                    egui::RichText::new(i18n::tr(
+                        "Donde Lucy crea ficheros, resuelve nombres sin ruta y ejecuta \
+                         los comandos que propone.",
+                    ))
+                    .color(theme::txt3())
+                    .size(11.0),
+                );
+                ui.add_space(8.0);
+
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.workdir_input)
+                        .hint_text(i18n::tr("C:\\ruta\\a\\tu\\carpeta"))
+                        .desired_width(w),
+                );
+                ui.add_space(6.0);
+
+                let mut pedida: Option<std::path::PathBuf> = None;
+                let mut olvidar = false;
+                ui.horizontal(|ui| {
+                    if ui.button(i18n::tr("Elegir carpeta…")).clicked() {
+                        // El diálogo NATIVO, en este mismo hilo. Es lo que hace
+                        // el instalador de skills y el de la copia de seguridad:
+                        // bloquea la ventana mientras está abierto, que es lo
+                        // que uno espera de un diálogo modal del sistema.
+                        if let Some(d) = rfd::FileDialog::new()
+                            .set_title(i18n::tr("Carpeta de trabajo de Lucy"))
+                            .set_directory(&dir)
+                            .pick_folder()
+                        {
+                            pedida = Some(d);
+                        }
+                    }
+                    if ui.button(i18n::tr("Aplicar")).clicked() {
+                        pedida = Some(std::path::PathBuf::from(self.workdir_input.trim()));
+                    }
+                    if lucy_core::workdir::configurado().is_some()
+                        && ui.button(i18n::tr("Usar mi carpeta personal")).clicked()
+                    {
+                        olvidar = true;
+                    }
+                });
+
+                if let Some(p) = pedida {
+                    match lucy_core::workdir::pon(&p) {
+                        Ok(limpia) => {
+                            self.workdir_input = limpia.display().to_string();
+                            self.workdir_msg.clear();
+                            // AL CARRIL DE TRACE, porque cambia dónde acaban los
+                            // ficheros de todo lo que venga después. Un cambio
+                            // así sin rastro convierte «¿dónde dejó esto?» en
+                            // una arqueología.
+                            self.tabs[self.tab].ws.trace_push(lucy_core::agent::TraceEntry {
+                                phase: "info".into(),
+                                label: i18n::tr("Directorio de trabajo").into(),
+                                detail: limpia.display().to_string(),
+                                ..Default::default()
+                            });
+                        }
+                        Err(e) => self.workdir_msg = e,
+                    }
+                }
+                if olvidar {
+                    match lucy_core::workdir::olvida() {
+                        Ok(()) => {
+                            self.workdir_input =
+                                lucy_core::workdir::actual().display().to_string();
+                            self.workdir_msg.clear();
+                        }
+                        Err(e) => self.workdir_msg = e,
+                    }
+                }
+
+                if !self.workdir_msg.is_empty() {
+                    ui.add_space(6.0);
+                    ui.label(
+                        egui::RichText::new(&self.workdir_msg)
+                            .color(theme::red())
+                            .size(11.0),
+                    );
+                }
+            },
+        );
     }
 
     /// El selector de modelo: píldora con el icono del proveedor + desplegable
@@ -8959,9 +9150,14 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                 .and_then(|p| lucy_core::skills::find(&self.skills, p))
                 .map(lucy_core::skills::preset_block)
                 .unwrap_or_default(),
-            // El directorio desde el que se lanzó Lucy, para que un fichero
-            // nombrado sin ruta se resuelva contra algo en vez de contra nada.
-            cwd: std::env::current_dir().map(|p| p.display().to_string()).unwrap_or_default(),
+            // EL QUE ELIGIÓ EL OPERADOR, no el del proceso. Aquí ponía
+            // `std::env::current_dir()` con el comentario «el directorio desde el
+            // que se lanzó Lucy, para que un fichero nombrado sin ruta se
+            // resuelva contra algo en vez de contra nada» — y ese «algo» era la
+            // carpeta de instalación, o la del repositorio en desarrollo. El
+            // prompt le ORDENABA al modelo resolver contra ella, así que los
+            // ficheros de Lucy acababan dentro del proyecto.
+            cwd: lucy_core::workdir::actual().display().to_string(),
             // El nombre que el operador puso en Configuración, o su cuenta de
             // Windows si no lo ha puesto. Que Lucy sepa a quién le habla no es
             // cortesía: cambia a quién atribuye lo que se hizo en esta máquina.
@@ -19703,9 +19899,13 @@ fn cargar_skills() -> Vec<lucy_core::skills::Skill> {
     if let Some(d) = dirs::config_dir() {
         dirs.push(d.join("lucy-egui").join("skills"));
     }
-    if let Ok(d) = std::env::current_dir() {
-        dirs.push(d.join("skills"));
-    }
+    // EL DIRECTORIO DE TRABAJO Y NO EL DEL PROCESO. Aquí ponía
+    // `std::env::current_dir()`, con la idea de que probar un skill fuera
+    // dejarlo en la carpeta desde la que lanzas. Instalada, esa carpeta es la de
+    // instalación, donde nadie deja nada; en desarrollo, el repositorio. El
+    // directorio de trabajo es lo que el operador entiende por «donde estoy
+    // trabajando», que es lo que aquella idea quería decir.
+    dirs.push(lucy_core::workdir::actual().join("skills"));
     let mut out: Vec<lucy_core::skills::Skill> = Vec::new();
     for d in dirs {
         for k in lucy_core::skills::discover(&d) {
