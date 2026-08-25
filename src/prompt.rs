@@ -430,10 +430,11 @@ impl Section for Actions {
              · <TOOL>fork_task:nombre-corto|qué tiene que averiguar</TOOL>\n\
              · <TOOL>wait_task:nombre-corto</TOOL> — o <TOOL>wait_task:*</TOOL> para todas\n\
              Lanza las que necesites en un mismo turno y recógelas después; el nombre lo \
-             pones tú y es por el que las pides. Una tarea auxiliar SOLO LEE ficheros y \
-             carpetas: no ejecuta comandos ni toca equipos remotos, así que lo que haya \
-             que ejecutar lo propones TÚ con lo que ella te cuente. Y no la uses para lo \
-             que puedes hacer de un tirón: una sola lectura sale más barata leyéndola.\n\
+             pones tú y es por el que las pides. Una tarea auxiliar SOLO LEE: ficheros, \
+             carpetas y los manuales ingeridos —tiene tu mismo `pdf_search`—, pero no \
+             ejecuta comandos ni toca equipos remotos, así que lo que haya que ejecutar \
+             lo propones TÚ con lo que ella te cuente. Y no la uses para lo que puedes \
+             hacer de un tirón: una sola lectura sale más barata leyéndola.\n\
              Esas y ninguna más: lo que pidas con otro nombre no lo va a cumplir \
              nadie, y te quedarás esperando un resultado que no llega.\n\
              Cuando el operador te enseñe un PROCEDIMIENTO —cómo se hace algo aquí, en \
