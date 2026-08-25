@@ -120,7 +120,25 @@ static EVASION_CMD: Lazy<Regex> = Lazy::new(|| {
           | \\system32\\cmd\.exe
           | \\system32\\format\.com
           | [\x{ff01}-\x{ff5e}]
-          | [\t\r] .* (?: format | del | rmdir )
+          # ESPACIO EN BLANCO RARO ENTRE EL VERBO Y SU MODIFICADOR. `del /s` con
+          # un TABULADOR en medio hace lo mismo y no lo reconoce un filtro de
+          # subcadenas que busque «del /s».
+          #
+          # ESTABA AL REVÉS: `[\t\r] .* (?:format|del|rmdir)` pedía el tabulador
+          # ANTES de la palabra, y sin `\b` ni delimitador por la derecha. Con
+          # eso pasaban las dos cosas malas a la vez.
+          #
+          # No cazaba el ataque: en `del<TAB>/s` el tabulador va DETRÁS, así que
+          # el patrón no casaba. Hay test.
+          #
+          # Y bloqueaba lo normal: en cualquier texto con saltos de línea de
+          # Windows, el `\r` de la línea anterior más `.*` más las letras «del»
+          # en medio de una palabra bastaba. Un XML con `<delete>` quedaba
+          # bloqueado, y también «el modelo», «delimiter», «formato». El
+          # operador lo vio al pedirle a Lucy que corrigiera un proyecto de
+          # GoAnywhere: el artefacto salía bloqueado y no había forma de
+          # escribirlo.
+          | \b (?: format | del | rmdir | rd ) [\t\r]+ /? \w
           | & \s* (?: del | format | rmdir | rd ) \s+ /[sSqQ]
         )
         "#,
@@ -147,6 +165,35 @@ static ELEVACION: Lazy<Regex> = Lazy::new(|| {
     )
     .expect("regex de elevación")
 });
+
+/// Un verbo de borrado, como palabra suelta.
+///
+/// Se usa SOLO para la comprobación del circunflejo de abajo, nunca a secas:
+/// «del» es una palabra corriente en español —«del proyecto»— y bloquear por
+/// verla suelta convertiría el guardrail en algo que hay que apagar.
+static VERBO_BORRADO: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)\b(?:format|del|rmdir|rd|erase)\b").expect("regex de verbo"));
+
+/// ¿El texto esconde un verbo detrás de circunflejos?
+///
+/// EN CÓDIGO Y NO EN LA EXPRESIÓN REGULAR. En `cmd`, un circunflejo dentro de
+/// una palabra se ignora al ejecutar: `d^el`, `de^l` y `fo^rma^t` hacen lo
+/// mismo que sin él, y no los reconoce un filtro que busque «del». Cazarlos con
+/// una regex obliga a enumerar cada hueco de cada verbo —cinco posiciones solo
+/// para `format`— y el crate `regex` no tiene anticipación para hacerlo de otra
+/// forma.
+///
+/// Quitarlos y volver a mirar es exacto: si sin circunflejos aparece un verbo
+/// que con ellos no estaba, la única razón de ponerlos era esconderlo. Un
+/// circunflejo que no destapa nada —un `^` de PowerShell, uno dentro de una
+/// expresión regular en un fichero— no dispara nada.
+fn esconde_verbo(text: &str) -> bool {
+    if !text.contains('^') {
+        return false;
+    }
+    let limpio = text.replace('^', "");
+    VERBO_BORRADO.is_match(&limpio) && !VERBO_BORRADO.is_match(text)
+}
 
 /// Direcciones internas y de metadatos de nube.
 ///
@@ -227,7 +274,7 @@ pub fn scan(text: &str, role: Role) -> Scan {
             }
         }
         Role::Assistant => {
-            if EVASION_CMD.is_match(text) {
+            if EVASION_CMD.is_match(text) || esconde_verbo(text) {
                 return Scan::hit(
                     Decision::Block,
                     "El comando usa una forma conocida de esquivar filtros, no una \
