@@ -298,11 +298,24 @@ impl Section for Identity {
                 c.user_profile
             );
         }
+        // ANTES ERA UN ACCIDENTE Y AHORA ES UNA ELECCIÓN, y por eso cambia el
+        // texto. Aquí se emitía `std::env::current_dir()` —la carpeta desde la
+        // que se lanzó el ejecutable— y se le ordenaba al modelo resolver contra
+        // ella. Instalada, eso era `C:\Program Files\Lucy`; en desarrollo, la
+        // carpeta del repositorio. De ahí salían los ficheros que aparecían
+        // dentro del proyecto.
+        //
+        // Se le dice que NO PREGUNTE, que es lo que se pidió: sin esa frase, un
+        // modelo prudente gasta un turno preguntando dónde dejar cada cosa, y
+        // uno menos prudente se inventa una ruta.
         if !c.working_dir.is_empty() {
             let _ = write!(
                 s,
-                "\nDirectorio de trabajo: {}. Cuando el operador nombre un fichero sin \
-                 ruta completa, resuélvelo respecto a este directorio.",
+                "\nDIRECTORIO DE TRABAJO: {}. Lo eligió el operador. Cuando nombre un \
+                 fichero sin ruta completa, es ahí; ahí se crean los que haya que crear, \
+                 y ahí se ejecutan los comandos que propongas. No preguntes dónde dejar \
+                 un fichero: ya está dicho. Si hace falta otro sitio, escribe la ruta \
+                 completa y di por qué.",
                 c.working_dir
             );
         }
