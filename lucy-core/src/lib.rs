@@ -147,6 +147,9 @@ pub mod system;
 pub mod tools;
 /// La conversación que viaja al modelo, y su recorte.
 pub mod turns;
+/// Dónde trabaja Lucy cuando no se le dice dónde. Antes eran cuatro sitios que
+/// no coincidían, y el que ganaba era la carpeta de instalación.
+pub mod workdir;
 /// Las etiquetas de acción de una respuesta de Lucy. Detecta, no ejecuta.
 pub mod tags;
 /// Ranking semántico: blobs, coseno y los filtros que deciden qué fila puede

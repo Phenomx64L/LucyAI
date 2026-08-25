@@ -49,11 +49,20 @@ pub const MAX_ENTRIES: usize = 300;
 /// acceso denegado o —con Lucy elevada— escribía dentro de Archivos de programa,
 /// que es peor: sale bien y el fichero no aparece donde se esperaba.
 ///
-/// LO QUE SE HACE EN SU LUGAR. Una relativa se busca en la carpeta del operador
-/// y en las tres donde de verdad están sus ficheros. Gana la primera que exista;
-/// si no existe en ninguna, se crea en su carpeta personal. Y la ruta que sale
-/// de aquí es la que se le enseña al modelo y la que va al artefacto, así que la
-/// elección se ve en el carril de Trace y en el diff — no se decide a escondidas.
+/// LO QUE SE HACE EN SU LUGAR. Una relativa se busca PRIMERO en el directorio de
+/// trabajo —el que el operador eligió; ver `crate::workdir`— y después en las
+/// tres carpetas donde de verdad están sus ficheros. Gana la primera que exista;
+/// si no existe en ninguna, se crea en el directorio de trabajo. Y la ruta que
+/// sale de aquí es la que se le enseña al modelo y la que va al artefacto, así
+/// que la elección se ve en el carril de Trace y en el diff — no se decide a
+/// escondidas.
+///
+/// EL DIRECTORIO DE TRABAJO VA PRIMERO Y TAMBIÉN ES EL RESPALDO, y las dos cosas
+/// importan. Primero, porque es lo que el operador dijo que quería. Y respaldo,
+/// porque es la mitad que hace que esto sirva de algo: un fichero NUEVO no está
+/// en ninguna parte, así que sin respaldo la elección solo contaría para los que
+/// ya existen — justo al revés de lo que se pidió, que era no tener que sondear
+/// la ruta cada vez que hay que escribir algo.
 ///
 /// Las carpetas van en inglés porque Windows traduce el NOMBRE QUE SE MUESTRA y
 /// no el del disco: en un Windows en español, «Escritorio» sigue siendo
@@ -74,18 +83,21 @@ pub fn resuelve(path: &str) -> std::path::PathBuf {
     if p.is_absolute() || p.has_root() {
         return p.to_path_buf();
     }
-    let Some(c) = casa() else {
-        // Sin carpeta personal no hay nada mejor que devolverlo tal cual. Pasa
-        // en un servicio sin perfil, no en la máquina de un operador.
-        return p.to_path_buf();
-    };
-    for sub in ["", "Desktop", "Documents", "Downloads"] {
-        let cand = if sub.is_empty() { c.join(p) } else { c.join(sub).join(p) };
-        if cand.exists() {
-            return cand;
+    let trabajo = crate::workdir::actual();
+    if trabajo.join(p).exists() {
+        return trabajo.join(p);
+    }
+    if let Some(c) = casa() {
+        for sub in ["", "Desktop", "Documents", "Downloads"] {
+            let cand = if sub.is_empty() { c.join(p) } else { c.join(sub).join(p) };
+            if cand.exists() {
+                return cand;
+            }
         }
     }
-    c.join(p)
+    // No existe en ninguna parte: es un fichero nuevo, y va donde el operador
+    // dijo que trabaja.
+    trabajo.join(p)
 }
 
 /// La carpeta del operador.

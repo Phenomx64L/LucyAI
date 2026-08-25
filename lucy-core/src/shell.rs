@@ -137,6 +137,17 @@ pub fn run_powershell_utf8(script: &str) -> Result<(String, String, bool), Strin
 
     let out = Command::new("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", &ps_utf8(script)])
+        // EN EL DIRECTORIO DE TRABAJO, y ésta es la fuga grande de las cuatro.
+        // Sin esta línea el hijo hereda el directorio del proceso, que instalada
+        // es `C:\Program Files\Lucy`. Todo comando que Lucy propone y ejecuta
+        // corría ahí: un `New-Item informe.txt`, un `Export-Csv salida.csv`, un
+        // `>` a un fichero sin ruta. Eso es literalmente lo que el operador
+        // describió como «ciertos archivos se escriben en el proyecto» — lanzada
+        // con `cargo run`, el directorio del proceso es el del repositorio.
+        //
+        // Ni siquiera daba error: la escritura funciona o muere con acceso
+        // denegado, y en los dos casos el fichero no está donde se buscó.
+        .current_dir(crate::workdir::actual())
         .creation_flags(CREATE_NO_WINDOW)
         .output()
         .map_err(|e| format!("PowerShell spawn failed: {}", e))?;
