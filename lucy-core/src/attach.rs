@@ -68,6 +68,18 @@ fn media_type(path: &std::path::Path) -> Option<&'static str> {
 #[derive(Debug, Clone)]
 pub struct Attachment {
     pub name: String,
+    /// De dónde salió, entera.
+    ///
+    /// EL NOMBRE SOLO NO BASTA, y lo que faltaba era esto. Al modelo se le
+    /// anteponía «--- fichero adjunto: proyecto.xml ---» y el texto. Con eso
+    /// puede LEERLO, pero no puede tocarlo: para proponer un `writefile` o un
+    /// `editfile` necesita la ruta, y lo único que tenía era un nombre suelto.
+    /// Así que escribía el nombre a secas —una ruta relativa— y el cambio se
+    /// preparaba contra la carpeta de instalación.
+    ///
+    /// Vacía mientras el adjunto está pendiente y en los que no se pudieron
+    /// leer, que es cuando no hay nada que proponer sobre ellos.
+    pub path: String,
     pub kind: Kind,
     /// Lo que se antepone al prompt. El texto del fichero, o el del PDF ya
     /// extraído. Vacío para las imágenes.
@@ -96,6 +108,7 @@ impl Attachment {
     pub fn pending(name: impl Into<String>, kind: Kind) -> Self {
         Self {
             name: name.into(),
+            path: String::new(),
             kind,
             text: String::new(),
             image: None,
@@ -107,6 +120,43 @@ impl Attachment {
     /// Si puede viajar al modelo tal cual está.
     pub fn ready(&self) -> bool {
         self.blocked.is_empty() && !self.pending
+    }
+
+    /// El bloque que se antepone a la orden del operador.
+    ///
+    /// ESTÁ AQUÍ Y NO EN EL SHELL porque es lo que decide si el adjunto sirve, y
+    /// eso merece un test. Era un `format!` de una línea metido en el bucle de
+    /// enviar —«--- fichero adjunto: proyecto.xml ---» y el texto— y de esa
+    /// línea salieron los dos fallos que se vieron usando Lucy de verdad:
+    ///
+    ///  · Lucy tenía el contenido delante y aun así pedía
+    ///    `readfile:proyecto.xml` para comprobarlo. Con el nombre a secas, que
+    ///    es una ruta relativa; fallaba, y concluía que no había logrado
+    ///    procesar el fichero.
+    ///
+    ///  · Y al pedirle que lo corrigiera, el `writefile` salía con esa misma
+    ///    ruta relativa, así que el cambio se preparaba contra la carpeta de
+    ///    instalación en lugar de contra el fichero del operador.
+    ///
+    /// Las dos se cierran diciendo dos cosas que antes no se decían: dónde está,
+    /// y que ya está leído.
+    pub fn bloque_de_prompt(&self) -> String {
+        if self.image.is_some() {
+            // El modelo ve la imagen, pero no su nombre. Decírselo importa
+            // cuando van tres: «en captura-2» es una frase que el operador puede
+            // escribir y que, si no, no significa nada.
+            return format!("--- imagen adjunta: {} ---\n", self.name);
+        }
+        format!(
+            "--- fichero adjunto: {} ---\n\
+             Ruta completa: {}\n\
+             Su contenido va aquí debajo, ya leído: NO hace falta que lo pidas con readfile. \
+             Si hay que cambiarlo, usa esa ruta completa.\n\n\
+             {}\n\n",
+            self.name,
+            if self.path.is_empty() { "(desconocida)" } else { &self.path },
+            self.text
+        )
     }
 
     /// Lee un fichero del disco y decide qué se puede hacer con él.
@@ -123,6 +173,7 @@ impl Attachment {
         let kind = Kind::of(path);
         let bloqueado = |por_que: String| Self {
             name: name.clone(),
+            path: String::new(),
             kind,
             text: String::new(),
             image: None,
@@ -130,7 +181,11 @@ impl Attachment {
             pending: false,
         };
 
-        match kind {
+        // La ruta se pone AL FINAL y de una vez, y no en cada uno de los cinco
+        // sitios donde se arma un `Self`. Con cinco copias, el que se olvide es
+        // el que nadie prueba — y aquí el olvido no da error de compilación
+        // cuando el campo ya existe.
+        let mut leido = match kind {
             Kind::Image => {
                 let Some(mt) = media_type(path) else {
                     return bloqueado(
@@ -155,6 +210,8 @@ impl Attachment {
                 match std::fs::read(path) {
                     Ok(bytes) => Self {
                         name,
+                        // Se rellena al salir del `match`, en un solo sitio.
+                        path: String::new(),
                         kind,
                         text: String::new(),
                         image: Some(Image { media_type: mt.into(), b64: b64_encode(&bytes) }),
@@ -167,6 +224,7 @@ impl Attachment {
             Kind::Pdf => match crate::pdf::extract_text(path) {
                 Ok(t) => Self {
                     name,
+                    path: String::new(),
                     kind,
                     text: t.chars().take(MAX_CHARS).collect(),
                     image: None,
@@ -180,6 +238,7 @@ impl Attachment {
             Kind::Text => match std::fs::read_to_string(path) {
                 Ok(s) => Self {
                     name,
+                    path: String::new(),
                     kind,
                     text: s.chars().take(MAX_CHARS).collect(),
                     image: None,
@@ -190,7 +249,14 @@ impl Attachment {
                 // sensato que mandarle al modelo.
                 Err(e) => bloqueado(format!("no se pudo leer como texto: {e}")),
             },
+        };
+        // Solo si se pudo leer. Un adjunto bloqueado no tiene nada que se pueda
+        // proponer sobre él, y darle ruta invitaría al modelo a editar un
+        // fichero cuyo contenido no ha visto.
+        if leido.blocked.is_empty() {
+            leido.path = path.display().to_string();
         }
+        leido
     }
 }
 
@@ -220,6 +286,43 @@ pub fn b64_encode(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn un_adjunto_de_texto_llega_al_modelo_con_su_ruta_y_ya_leido() {
+        // DE UN USO REAL. El operador arrastró un XML y pidió corregirlo. La
+        // cabecera decía solo el nombre, así que Lucy pedía
+        // `readfile:proyecto.xml` para «comprobarlo» —el nombre suelto es una
+        // ruta relativa—, la lectura fallaba, y contestaba que no había logrado
+        // procesar el fichero. Habiéndolo tenido delante todo el rato.
+        let dir = std::env::temp_dir().join("lucy-adjunto-con-ruta");
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("proyecto.xml");
+        std::fs::write(&f, "<project/>").unwrap();
+
+        let a = Attachment::read(&f);
+        assert!(a.blocked.is_empty(), "no se pudo leer: {}", a.blocked);
+        assert_eq!(a.path, f.display().to_string(), "el adjunto perdió su ruta");
+
+        let b = a.bloque_de_prompt();
+        // DÓNDE ESTÁ. Sin esto no hay `writefile` posible sobre él: lo único que
+        // el modelo puede escribir es el nombre, que es relativo.
+        assert!(b.contains(&f.display().to_string()), "el bloque no lleva la ruta: {b}");
+        // Y QUE YA ESTÁ LEÍDO, para que no gaste un turno en ir a por él.
+        assert!(b.contains("readfile"), "no se le dice que no hace falta releerlo: {b}");
+        assert!(b.contains("<project/>"), "el bloque no lleva el contenido: {b}");
+
+        let _ = std::fs::remove_file(&f);
+    }
+
+    #[test]
+    fn uno_que_no_se_pudo_leer_no_lleva_ruta() {
+        // Dar ruta a un adjunto bloqueado invita al modelo a proponer un cambio
+        // sobre un fichero cuyo contenido no ha visto. El «antes» de ese diff
+        // saldría de leerlo otra vez, no de lo que se le enseñó.
+        let a = Attachment::read(Path::new("C:\\no-existe-esto-de-lucy.txt"));
+        assert!(!a.blocked.is_empty(), "debería estar bloqueado");
+        assert!(a.path.is_empty(), "un adjunto bloqueado llevó ruta: {}", a.path);
+    }
 
     #[test]
     fn el_base64_coincide_con_los_vectores_del_rfc_4648() {
