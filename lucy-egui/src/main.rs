@@ -7981,10 +7981,7 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
             }
             if let Some(img) = &a.image {
                 imagenes.push(img.clone());
-                // El modelo ve la imagen, pero no su nombre. Decírselo importa
-                // cuando van tres: "en captura-2" es una frase que el operador
-                // puede escribir y que si no, no significa nada.
-                prompt.push_str(&format!("--- imagen adjunta: {} ---\n", a.name));
+                prompt.push_str(&a.bloque_de_prompt());
             } else {
                 // EL TEXTO DE UN ADJUNTO SE REVISA COMO LO QUE ES: contenido de
                 // un fichero, aunque viaje pegado a la orden del operador. Sin
@@ -7996,7 +7993,10 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                     retenidos.push((a.name.clone(), g.reason.clone()));
                     continue;
                 }
-                prompt.push_str(&format!("--- fichero adjunto: {} ---\n{}\n\n", a.name, a.text));
+                // La cabecera la arma el núcleo: es lo que decide si el adjunto
+                // sirve —lleva la ruta y dice que ya está leído— y ahí tiene
+                // test. Ver `attach::bloque_de_prompt`.
+                prompt.push_str(&a.bloque_de_prompt());
             }
         }
         // El prompt de sistema va DELANTE en cada turno: quién es Lucy y en qué
