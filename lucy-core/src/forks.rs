@@ -44,21 +44,52 @@ pub const MAX_RESULTADO: usize = 4_000;
 /// que nadie va a ejecutar: gasta su turno y devuelve una intención en vez de un
 /// hallazgo. Decírselo de entrada convierte eso en lo que sí sirve — que mire y
 /// cuente.
+///
+/// LA LISTA NO SE ESCRIBE AQUÍ. Estaba escrita a mano y se quedó en tres cuando
+/// `run` pasó a cumplir cuatro, así que a `pdf_search` —que el sub-agente SÍ
+/// puede cumplir— se le decía que no existía. Ahora sale de `tools::DE_LECTURA`,
+/// que es la misma lista que mira `run` al despachar: no hay dos sitios que
+/// puedan discrepar.
 pub fn system_prompt(equipo: &str) -> String {
     format!(
         "Eres una tarea auxiliar de Lucy, la asistente de administración de sistemas de \
          este equipo ({equipo}). Te han encargado UNA cosa concreta; hazla y cuenta lo \
          que encuentres.\n\n\
          SOLO PUEDES LEER. Tienes estas herramientas y ninguna más:\n\
-         · <TOOL>readfile:C:\\ruta</TOOL>\n\
-         · <TOOL>listdir:C:\\ruta</TOOL>\n\
-         · <TOOL>readlines:C:\\ruta|desde|cuántas</TOOL>\n\
+         {}\n\
          NO ejecutas comandos, NO escribes ficheros y NO tocas equipos remotos. Si para \
          responder hiciera falta algo de eso, dilo y explica qué haría falta: quien \
          decide es la conversación principal, donde hay una persona mirando.\n\n\
          Responde en español, breve y con lo que hayas MEDIDO. Si no encontraste nada, \
          dilo — «no hay errores en ese log» es un resultado útil, y una suposición \
-         adornada no lo es."
+         adornada no lo es.",
+        catalogo()
+    )
+}
+
+/// Las herramientas de una tarea auxiliar, con su forma, una por línea.
+///
+/// La descripción sale de `tools::AVAILABLE` —el mismo texto que ve la
+/// conversación principal— filtrada por lo que `run` cumple de verdad.
+fn catalogo() -> String {
+    crate::tools::AVAILABLE
+        .iter()
+        .filter(|(n, _)| crate::tools::DE_LECTURA.contains(n))
+        .map(|(_, desc)| format!("· {desc}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Qué contestar cuando pide una herramienta que no alcanza.
+///
+/// CON LAS QUE SÍ TIENE, y sacadas de la lista de verdad. Decir solo «no
+/// existe» deja al sub-agente probando nombres, y cada intento le cuesta una de
+/// las tres vueltas que tiene.
+fn no_la_tienes(name: &str) -> String {
+    format!(
+        "«{name}» no existe para una tarea auxiliar. Solo tienes {}. Si hace falta \
+         ejecutar algo, dilo en tu respuesta y lo decide la conversación principal.",
+        crate::tools::DE_LECTURA.join(", ")
     )
 }
 
@@ -253,11 +284,7 @@ fn corre(
             // a los sub-agentes por olvido.
             let cuerpo = match crate::tools::run(&name, &args) {
                 Some(r) => r.body,
-                None => format!(
-                    "«{name}» no existe para una tarea auxiliar. Solo tienes readfile, \
-                     listdir y readlines. Si hace falta ejecutar algo, dilo en tu \
-                     respuesta y lo decide la conversación principal."
-                ),
+                None => no_la_tienes(&name),
             };
             // POR LA MISMA PUERTA QUE TODO LO DEMÁS. Aquí se armaba el sobre a
             // mano y sin revisar, que es el sitio MÁS goloso de los cuatro: un
@@ -469,6 +496,52 @@ mod tests {
             );
         }
         assert!(crate::tools::run("readfile", "C:\\no-existe").is_some());
+    }
+
+    #[test]
+    fn el_prompt_nombra_todo_lo_que_el_sub_agente_puede_cumplir() {
+        // EL FALLO AL REVÉS DEL DE ARRIBA, y el que llegó a un uso real. Aquél
+        // vigila que no se le REGALE una herramienta que escribe; éste, que no
+        // se le ESCONDA una que sí alcanza.
+        //
+        // `pdf_search` entró en `run` y el prompt siguió diciendo «readfile,
+        // listdir y readlines, y ninguna más». No dio error: el sub-agente
+        // contestaba «no puedo buscar en documentos» a lo que sí podía, y la
+        // conversación principal concluía que no logró procesar el manual.
+        //
+        // Nada de esto se ve desde fuera. Por eso hay test.
+        let p = system_prompt("EQUIPO");
+        for name in crate::tools::DE_LECTURA {
+            assert!(
+                p.contains(name),
+                "el sub-agente cumple «{name}» y su prompt no la nombra: se le esconde"
+            );
+        }
+        // Y por el otro lado: nombrar una que `run` no cumple es prometerle un
+        // camino que acaba en «no existe» después de gastarle una vuelta.
+        for (name, _) in crate::tools::AVAILABLE {
+            if crate::tools::DE_LECTURA.contains(name) {
+                continue;
+            }
+            assert!(
+                !p.contains(name),
+                "el prompt nombra «{name}», que una tarea auxiliar no puede cumplir"
+            );
+        }
+    }
+
+    #[test]
+    fn de_lectura_y_run_son_la_misma_lista() {
+        // `run` filtra por `DE_LECTURA` antes de despachar, así que un nombre de
+        // más en la constante no da error: da un `None` silencioso, y quien lo
+        // sufre es el prompt que lo prometió. Con argumentos vacíos las cuatro
+        // fallan de inmediato y ninguna toca disco ni base de datos.
+        for name in crate::tools::DE_LECTURA {
+            assert!(
+                crate::tools::run(name, "").is_some(),
+                "«{name}» está en DE_LECTURA y `run` no la despacha"
+            );
+        }
     }
 
     #[test]

@@ -37,6 +37,86 @@ pub const MAX_BYTES: u64 = 8 * 1024 * 1024;
 /// la pregunta que las motivó y no ayuda a contestarla.
 pub const MAX_ENTRIES: usize = 300;
 
+/// Convierte lo que diga el modelo en una ruta absoluta, SIN pasar por el
+/// directorio de trabajo del proceso.
+///
+/// POR QUÉ NO VALE DEJÁRSELO A `std::fs`. Una ruta relativa se resuelve contra
+/// el directorio de trabajo, y el de Lucy instalada es `C:\Program Files\Lucy`
+/// —de ahí arranca el acceso directo—. Nadie ha guardado nunca un informe ahí.
+/// Así que `readfile:informe.txt` fallaba con «no se encuentra el archivo» sin
+/// decir DÓNDE había mirado, y el modelo lo reintentaba igual; y
+/// `writefile:notas.txt` preparaba un artefacto que, al aplicarlo, o moría con
+/// acceso denegado o —con Lucy elevada— escribía dentro de Archivos de programa,
+/// que es peor: sale bien y el fichero no aparece donde se esperaba.
+///
+/// LO QUE SE HACE EN SU LUGAR. Una relativa se busca en la carpeta del operador
+/// y en las tres donde de verdad están sus ficheros. Gana la primera que exista;
+/// si no existe en ninguna, se crea en su carpeta personal. Y la ruta que sale
+/// de aquí es la que se le enseña al modelo y la que va al artefacto, así que la
+/// elección se ve en el carril de Trace y en el diff — no se decide a escondidas.
+///
+/// Las carpetas van en inglés porque Windows traduce el NOMBRE QUE SE MUESTRA y
+/// no el del disco: en un Windows en español, «Escritorio» sigue siendo
+/// `Desktop` para cualquier cosa que abra un fichero.
+pub fn resuelve(path: &str) -> std::path::PathBuf {
+    let bruto = path.trim();
+    // `~` y `~\algo`. No es sintaxis de Windows, pero el modelo la escribe.
+    if let Some(resto) = bruto.strip_prefix('~') {
+        let resto = resto.trim_start_matches(['\\', '/']);
+        if let Some(c) = casa() {
+            return if resto.is_empty() { c } else { c.join(resto) };
+        }
+    }
+    let p = std::path::Path::new(bruto);
+    // `has_root` además de `is_absolute` por `\Windows\System32`: no lleva
+    // unidad, así que no es absoluta, pero tampoco es relativa a una carpeta
+    // personal. Ésa la resuelve el sistema contra la unidad actual y hace bien.
+    if p.is_absolute() || p.has_root() {
+        return p.to_path_buf();
+    }
+    let Some(c) = casa() else {
+        // Sin carpeta personal no hay nada mejor que devolverlo tal cual. Pasa
+        // en un servicio sin perfil, no en la máquina de un operador.
+        return p.to_path_buf();
+    };
+    for sub in ["", "Desktop", "Documents", "Downloads"] {
+        let cand = if sub.is_empty() { c.join(p) } else { c.join(sub).join(p) };
+        if cand.exists() {
+            return cand;
+        }
+    }
+    c.join(p)
+}
+
+/// La carpeta del operador.
+fn casa() -> Option<std::path::PathBuf> {
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(std::path::PathBuf::from)
+        .filter(|p| !p.as_os_str().is_empty())
+}
+
+/// La ruta ya resuelta, y —si no es la que pidió— cómo decírselo al modelo.
+///
+/// El aviso va en el CUERPO de la respuesta y no solo en la etiqueta, porque la
+/// etiqueta es para el operador y el cuerpo es lo único que lee el modelo. Sin
+/// él, pide `informe.txt`, se le contesta con el contenido de otra carpeta, y en
+/// el turno siguiente vuelve a escribir la relativa.
+fn resuelto(pedido: &str) -> (std::path::PathBuf, String) {
+    let p = resuelve(pedido);
+    let mostrado = p.display().to_string();
+    let aviso = if mostrado.eq_ignore_ascii_case(pedido.trim()) {
+        String::new()
+    } else {
+        format!(
+            "\n\n[«{}» es una ruta relativa; se resolvió a {mostrado}. Usa la ruta \
+             completa para no depender de esto.]",
+            pedido.trim()
+        )
+    };
+    (p, aviso)
+}
+
 /// El resultado de una herramienta, ya listo para volver al modelo.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolResult {
@@ -71,6 +151,12 @@ pub fn prepare_write(args: &str) -> crate::agent::Artifact {
     if path.is_empty() {
         return bloqueado(crate::agent::ArtifactKind::Write, "", "No se dijo qué fichero.");
     }
+    // ABSOLUTA ANTES DE GUARDARLA EN EL ARTEFACTO, y no al aplicarlo. `apply`
+    // escribe en `a.path` sin volver a mirarlo, así que si aquí se guardara la
+    // relativa, el diff que aprueba el operador y el fichero que se escribe
+    // podrían no ser el mismo — y lo que se escribe se decidiría por dónde
+    // estuviera el proceso, que es `C:\Program Files\Lucy`.
+    let path = resuelve(&path).display().to_string();
     // Se lee lo que hay para poder enseñar el diff. Que no exista no es un
     // error —crear un fichero nuevo es escribir— y entonces el "antes" es vacío.
     let before = std::fs::read_to_string(&path).unwrap_or_default();
@@ -110,7 +196,9 @@ pub fn prepare_edit(args: &str) -> crate::agent::Artifact {
             "Faltan partes. El formato es editfile:RUTA|||TEXTO_VIEJO|||TEXTO_NUEVO.",
         );
     };
-    let path = path.trim().to_string();
+    // Igual que en `prepare_write`: absoluta antes de guardarla, para que el
+    // fichero del diff y el fichero que se escribe sean el mismo.
+    let path = resuelve(path).display().to_string();
     let before = match std::fs::read_to_string(&path) {
         Ok(s) => s,
         Err(e) => return bloqueado(kind, &path, &format!("No se pudo leer '{path}': {e}")),
@@ -202,23 +290,48 @@ pub fn apply(a: &crate::agent::Artifact) -> Result<(), String> {
 /// otra forma: si le contestas «error» a una herramienta que no existe, la
 /// vuelve a intentar con otros argumentos.
 pub fn run(name: &str, args: &str) -> Option<ToolResult> {
-    match name {
-        "readfile" => Some(readfile(args)),
-        "listdir" => Some(listdir(args)),
+    // EL CATÁLOGO SE MIRA ANTES DEL DESPACHO, para que `DE_LECTURA` sea la lista
+    // de verdad y no una copia que se parece. Quien quiera saber qué cumple esta
+    // función —el prompt de un sub-agente, un test— lee la constante y acierta.
+    if !DE_LECTURA.contains(&name) {
+        return None;
+    }
+    Some(match name {
+        "readfile" => readfile(args),
+        "listdir" => listdir(args),
         // `readlines` estaba ESCRITA, PROBADA, ANUNCIADA EN EL PROMPT Y NO
         // DESPACHADA: se añadió como la salida del callejón de `readfile`
         // —«recorté, sigue con readlines»— y esta línea no llegó a existir. El
         // efecto es el peor de los posibles: el propio aviso del recorte le
         // dice al modelo cómo continuar, lo intenta, `run` contesta `None`, y
         // el callejón que la herramienta venía a abrir seguía cerrado.
-        "readlines" => Some(readlines(args)),
+        "readlines" => readlines(args),
         // EL ESLABÓN QUE DECIDE SI LA INGESTA SIRVE. Un manual de trescientas
         // páginas ingerido y una herramienta que Lucy no sabe que existe son lo
         // mismo que no haberlo ingerido — y no da error, da silencio.
-        "pdf_search" => Some(pdf_search(args)),
-        _ => None,
-    }
+        "pdf_search" => pdf_search(args),
+        // Un nombre en `DE_LECTURA` sin brazo aquí. `None` y no `unreachable!`:
+        // un pánico dentro del bucle de un agente se lleva la aplicación por
+        // delante, y esto lo caza un test antes de llegar a nadie.
+        _ => return None,
+    })
 }
+
+/// Lo que `run` cumple por sí sola: leer, sin efectos y sin red.
+///
+/// ES EL CATÁLOGO DE UNA TAREA AUXILIAR, y vive aquí —al lado de la función que
+/// lo cumple— y no en `forks` a propósito. Estaba escrito a mano en el prompt de
+/// `forks::system_prompt`: «tienes estas herramientas y ninguna más», y las
+/// nombraba. Cuando `pdf_search` entró en `run`, el prompt siguió diciendo tres.
+///
+/// EL FALLO QUE ESO PRODUCE NO SE PARECE A UN FALLO. La herramienta ESTABA —el
+/// sub-agente podía cumplirla— y se le decía que no la tenía. Así que la
+/// conversación principal reparte «busca esto en el manual» entre varias tareas,
+/// cada una contesta «no puedo, solo leo ficheros», y Lucy concluye que no logró
+/// procesar el documento. Con el manual ingerido y la búsqueda funcionando.
+///
+/// Un catálogo escrito dos veces se desincroniza por el lado que nadie mira.
+pub const DE_LECTURA: &[&str] = &["readfile", "listdir", "readlines", "pdf_search"];
 
 /// Busca en los documentos ingeridos.
 fn pdf_search(args: &str) -> ToolResult {
@@ -354,21 +467,29 @@ pub const MAX_LINES: usize = 500;
 /// dice «mira la línea 342», y esa resta se olvida.
 fn readlines(args: &str) -> ToolResult {
     let mut p = args.split('|');
-    let path = p.next().unwrap_or("").trim();
+    let pedido = p.next().unwrap_or("").trim();
     let desde: usize = p.next().and_then(|x| x.trim().parse().ok()).unwrap_or(1).max(1);
     let cuantas: usize = p
         .next()
         .and_then(|x| x.trim().parse().ok())
         .unwrap_or(MAX_LINES)
         .clamp(1, MAX_LINES);
-    let label = format!("readlines {path} desde {desde}");
 
-    if path.is_empty() {
-        return ToolResult::err(label, "Falta la ruta: readlines:C:\\ruta|desde|cuántas");
+    if pedido.is_empty() {
+        return ToolResult::err(
+            "readlines".to_string(),
+            "Falta la ruta: readlines:C:\\ruta|desde|cuántas",
+        );
     }
+    // La resuelta, y no la que pidió, para que la continuación que se le sugiere
+    // abajo apunte al MISMO fichero que se acaba de leer. Con la relativa, el
+    // siguiente tramo vuelve a pasar por la búsqueda y puede caer en otro sitio
+    // si entretanto apareció uno con ese nombre en una carpeta anterior.
+    let path = resuelve(pedido).display().to_string();
+    let label = format!("readlines {path} desde {desde}");
     // Se reutiliza `readfile` para no tener dos lectores con dos criterios
     // distintos sobre qué es un binario y qué codificación tiene un log.
-    let entero = readfile(path);
+    let entero = readfile(&path);
     if !entero.ok {
         return ToolResult { label, ..entero };
     }
@@ -393,16 +514,22 @@ fn readlines(args: &str) -> ToolResult {
     ToolResult { label, body: format!("{tramo}{nota}"), ok: true }
 }
 
-fn readfile(path: &str) -> ToolResult {
-    let path = path.trim();
-    let p = std::path::Path::new(path);
+fn readfile(pedido: &str) -> ToolResult {
+    let (p, aviso) = resuelto(pedido);
+    // LA RESUELTA Y NO LA QUE PIDIÓ, en todas partes. El error tiene que decir
+    // dónde se miró de verdad: «no se encuentra 'informe.txt'» deja al modelo
+    // reintentando lo mismo, y «no se encuentra 'C:\Users\x\informe.txt'» le
+    // dice en una línea que se buscó donde él no quería.
+    let path = p.display().to_string();
     let label = format!("readfile {path}");
 
-    let meta = match std::fs::metadata(p) {
+    let meta = match std::fs::metadata(&p) {
         Ok(m) => m,
         // El mensaje lleva la ruta. Sin ella, con tres lecturas en el mismo
         // turno el modelo no sabe cuál de las tres falló.
-        Err(e) => return ToolResult::err(label, format!("No se pudo abrir '{path}': {e}")),
+        Err(e) => {
+            return ToolResult::err(label, format!("No se pudo abrir '{path}': {e}{aviso}"))
+        }
     };
     if meta.is_dir() {
         return ToolResult::err(
@@ -422,7 +549,7 @@ fn readfile(path: &str) -> ToolResult {
         );
     }
 
-    let bytes = match std::fs::read(p) {
+    let bytes = match std::fs::read(&p) {
         Ok(b) => b,
         Err(e) => return ToolResult::err(label, format!("No se pudo leer '{path}': {e}")),
     };
@@ -459,7 +586,7 @@ fn readfile(path: &str) -> ToolResult {
     } else {
         (texto, String::new())
     };
-    ToolResult { label, body: format!("{cuerpo}{nota}"), ok: true }
+    ToolResult { label, body: format!("{cuerpo}{nota}{aviso}"), ok: true }
 }
 
 /// Si unos bytes parecen un ejecutable o similar en vez de texto mal codificado.
@@ -471,12 +598,15 @@ fn pinta_binario(bytes: &[u8]) -> bool {
     bytes.iter().take(1024).any(|b| *b == 0)
 }
 
-fn listdir(path: &str) -> ToolResult {
-    let path = path.trim();
+fn listdir(pedido: &str) -> ToolResult {
+    let (p, aviso) = resuelto(pedido);
+    let path = p.display().to_string();
     let label = format!("listdir {path}");
-    let rd = match std::fs::read_dir(path) {
+    let rd = match std::fs::read_dir(&p) {
         Ok(r) => r,
-        Err(e) => return ToolResult::err(label, format!("No se pudo listar '{path}': {e}")),
+        Err(e) => {
+            return ToolResult::err(label, format!("No se pudo listar '{path}': {e}{aviso}"))
+        }
     };
 
     let mut dirs: Vec<String> = Vec::new();
@@ -518,7 +648,7 @@ fn listdir(path: &str) -> ToolResult {
     if body.is_empty() {
         body = "(carpeta vacía)".into();
     }
-    ToolResult { label, body, ok: true }
+    ToolResult { label, body: format!("{body}{aviso}"), ok: true }
 }
 
 fn tamano(bytes: u64) -> String {
