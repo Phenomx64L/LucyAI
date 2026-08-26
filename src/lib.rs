@@ -171,10 +171,26 @@ static POOL: OnceCell<DbPool> = OnceCell::new();
 /// El derive de ts-rs va tras la feature `ts` porque exportar TypeScript es un
 /// problema de la app Tauri (sus tipos cruzan el puente IPC). El shell nativo
 /// llama funciones Rust directamente y no debe compilar ts-rs por compartir un
-/// tipo. La ruta de exportación resuelve al mismo `src/lib/types/` desde
-/// cualquiera de los dos crates.
+/// tipo.
+///
+/// LA RUTA SE ARRASTRÓ AL SACAR EL CRATE DE `lucy-svelte`. Era `../src/lib/types/`
+/// con un comentario que decía que «resuelve al mismo sitio desde cualquiera de
+/// los dos crates» — cierto mientras este crate vivía DENTRO del repositorio de
+/// la V1. Fuera, el `..` ya no llega al frontend, y el fichero generado se puso a
+/// aterrizar aquí dentro, en un `src/lib/types/` que no pinta nada en un crate de
+/// Rust. Llegó a versionarse.
+///
+/// Y NO SE PUEDE APUNTAR AL OTRO REPOSITORIO: ts-rs se niega a escribir fuera de
+/// su propio crate y descarta los `..` que lo intenten, en silencio. Poner
+/// `../lucy-svelte/src/lib/types/` no da error — crea `lucy-core/lucy-svelte/…`,
+/// que es una carpeta con el nombre del otro proyecto dentro de éste. Probado.
+///
+/// Así que va a `bindings/`, que está ignorado por git. Hoy no lo consume nadie:
+/// el frontend de la V1 no importa este tipo en ninguna parte —se comprobó— y el
+/// shell nativo llama las funciones de Rust directamente. La maquinaria se queda
+/// por si la V1 vuelve a necesitarla, escribiendo donde no molesta.
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-#[cfg_attr(feature = "ts", ts(export, export_to = "../src/lib/types/"))]
+#[cfg_attr(feature = "ts", ts(export, export_to = "bindings/"))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentMemory {
     pub id: i64,
