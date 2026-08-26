@@ -118,9 +118,17 @@ fn scan<'a>(hay: &'a str, low: &str, name_lower: &str) -> Vec<Found<'a>> {
     let close = format!("</{name_lower}>");
     let mut out = Vec::new();
     let mut i = 0;
+    // LO QUE ESTÁ ENTRE COMILLAS INVERTIDAS NO ES UNA ORDEN, ES UN EJEMPLO.
+    // Ver `tramos_de_codigo`: sin esto, Lucy explicando qué es una etiqueta
+    // ejecuta la etiqueta que está explicando.
+    let codigo = tramos_de_codigo(hay);
 
     while let Some(rel) = low[i..].find(&open) {
         let start = i + rel;
+        if dentro(&codigo, start) {
+            i = start + 1;
+            continue;
+        }
         let after = start + open.len();
         // El carácter que sigue al nombre decide si es ESTA etiqueta u otra que
         // empieza igual: sin esta comprobación, `<EXECUTE` encontraría también
@@ -150,6 +158,86 @@ fn scan<'a>(hay: &'a str, low: &str, name_lower: &str) -> Vec<Found<'a>> {
         i = body_end + close.len();
     }
     out
+}
+
+/// Los tramos del texto que son CÓDIGO y no instrucciones.
+///
+/// DE UN USO REAL, Y ES EL PEOR DE LOS FALLOS DE ESTE MÓDULO. El operador le
+/// pidió a Lucy un skill; Lucy contestó explicando qué son los skills y escribió
+/// el nombre de la etiqueta entre comillas invertidas —«los skills (`<LEARN>`)
+/// son muy útiles para automatizar…»— y más abajo emitió una etiqueta de verdad.
+///
+/// `scan` encontró la PRIMERA apertura —la del ejemplo— y la casó con el cierre
+/// de la SEGUNDA. O sea que el cuerpo de la etiqueta pasó a ser toda la prosa
+/// intermedia, con dos consecuencias que se ven a la vez:
+///
+///   · El texto DESAPARECE de la respuesta. Las etiquetas se quitan de lo que se
+///     pinta, así que el párrafo se corta en seco —«Sin embargo, los skills (`»—
+///     y continúa dos párrafos más allá. Se lee como una respuesta truncada, que
+///     es lo que el operador reportó.
+///
+///   · Y SE CREA UN SKILL con la prosa como nombre. Lucy se dio cuenta sola:
+///     «mi sistema de registro interpretó parte del texto anterior como nombre
+///     de la tarea, generando un directorio extremadamente largo».
+///
+/// Explicar una herramienta es lo más natural del mundo cuando alguien pregunta
+/// por ella, así que esto no era un caso raro: era el caso.
+///
+/// SE CUBREN LAS DOS FORMAS de markdown —el bloque cercado por tres comillas y
+/// el tramo en línea— porque el modelo usa las dos y no avisa de cuál.
+fn tramos_de_codigo(hay: &str) -> Vec<(usize, usize)> {
+    let b = hay.as_bytes();
+    let mut fuera = Vec::new();
+    let mut i = 0;
+    let mut en_valla: Option<usize> = None;
+
+    while i < b.len() {
+        // ── bloque cercado ───────────────────────────────────────────────────
+        if b[i] == b'`' && b[i..].starts_with(b"```") {
+            match en_valla.take() {
+                // Cierra: el tramo va desde la valla de apertura hasta ésta.
+                Some(ini) => {
+                    fuera.push((ini, (i + 3).min(b.len())));
+                }
+                None => en_valla = Some(i),
+            }
+            i += 3;
+            continue;
+        }
+        if en_valla.is_some() {
+            i += 1;
+            continue;
+        }
+        // ── tramo en línea ───────────────────────────────────────────────────
+        if b[i] == b'`' {
+            // El cierre es la siguiente comilla invertida, y NO puede saltar de
+            // línea: un backtick suelto en un párrafo —que los hay— no debe
+            // volver código el resto del documento.
+            let mut j = i + 1;
+            while j < b.len() && b[j] != b'`' && b[j] != b'\n' {
+                j += 1;
+            }
+            if j < b.len() && b[j] == b'`' {
+                fuera.push((i, j + 1));
+                i = j + 1;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    // UNA VALLA SIN CERRAR TAPA HASTA EL FINAL, y eso es lo correcto durante el
+    // streaming: mientras llega el bloque de código, lo que hay dentro todavía
+    // no es una orden. Cerrarla al llegar el resto no cambia nada de lo ya
+    // decidido, porque `extract_tags` se vuelve a llamar sobre el texto entero.
+    if let Some(ini) = en_valla {
+        fuera.push((ini, b.len()));
+    }
+    fuera
+}
+
+/// Si una posición cae dentro de alguno de los tramos.
+fn dentro(tramos: &[(usize, usize)], pos: usize) -> bool {
+    tramos.iter().any(|(a, z)| pos >= *a && pos < *z)
 }
 
 /// Saca `clave="valor"` (o con comillas simples) de la parte de atributos.
@@ -344,6 +432,12 @@ pub fn clean_display_with(text: &str, code_gen: bool) -> Cleaned {
     // `(inicio, reemplazo)` — los trozos que no se borran sino que se cambian.
     let mut swaps: Vec<(usize, String)> = Vec::new();
     let mut commands = 0usize;
+    // EL MISMO FILTRO QUE `scan`, y esta función tiene su PROPIO bucle. Son dos
+    // recorridos distintos sobre el mismo texto —uno decide qué se ejecuta y el
+    // otro qué se pinta— y arreglar solo el primero deja la mitad visible del
+    // fallo intacta: las etiquetas se seguirían recortando desde el ejemplo, y
+    // el operador seguiría viendo su respuesta cortada en seco.
+    let codigo = tramos_de_codigo(text);
 
     for name in HIDDEN {
         let open = format!("<{name}");
@@ -351,6 +445,10 @@ pub fn clean_display_with(text: &str, code_gen: bool) -> Cleaned {
         let mut i = 0;
         while let Some(rel) = low[i..].find(&open) {
             let start = i + rel;
+            if dentro(&codigo, start) {
+                i = start + 1;
+                continue;
+            }
             let after = start + open.len();
             let next = low.as_bytes().get(after).copied();
             if !matches!(next, Some(b'>') | Some(b' ') | Some(b'\t') | Some(b'\n') | Some(b'\r')) {
@@ -439,6 +537,84 @@ pub fn has_tool_response(resp: &str) -> bool {
 pub fn is_multi_step(resp: &str) -> bool {
     resp.to_ascii_lowercase().contains("<thought>")
         || (resp.contains("<TOOL>") && resp.contains("<EXECUTE"))
+}
+
+#[cfg(test)]
+mod ejemplos {
+    use super::*;
+
+    /// Lo que Lucy contestó de verdad, recortado. El operador le pidió un skill
+    /// y ella explicó qué son antes de crear uno.
+    const REAL: &str = "Para usar Sysinternals no necesito que la «habilites».\n\n\
+         Sin embargo, los skills (`<LEARN>`) son muy útiles para automatizar \
+         lecturas que repites.\n\n\
+         <LEARN>busca quién bloquea un archivo|handle64.exe -a -u {ruta}|Dile qué \
+         proceso lo tiene</LEARN>\n\n\
+         Si te interesa automatizar alguna otra lectura, dímelo.";
+
+    #[test]
+    fn explicar_una_etiqueta_no_es_emitirla() {
+        // EL FALLO, REPRODUCIDO. `scan` encontraba la apertura del EJEMPLO
+        // —entre comillas invertidas— y la casaba con el cierre de la etiqueta
+        // de verdad, dos párrafos más abajo. El cuerpo pasaba a ser toda la
+        // prosa intermedia.
+        let tags = extract_tags(REAL);
+        let learns: Vec<&Tag> = tags.iter().filter(|t| t.kind == TagKind::Learn).collect();
+        assert_eq!(learns.len(), 1, "se detectó la del ejemplo además de la real");
+        assert!(
+            learns[0].content.starts_with("busca quién bloquea"),
+            "el cuerpo se comió la prosa: {:?}",
+            &learns[0].content[..learns[0].content.len().min(80)]
+        );
+        // Y NO PUEDE CONTENER LA PROSA. Es lo que acabó siendo el nombre del
+        // skill: un directorio que empezaba por «son-muy-utiles-para-automatizar».
+        assert!(
+            !learns[0].content.contains("útiles para automatizar"),
+            "la prosa entró en el cuerpo de la etiqueta"
+        );
+    }
+
+    #[test]
+    fn la_prosa_no_desaparece_de_lo_que_se_pinta() {
+        // La otra mitad del mismo fallo, y la que ve el operador: las etiquetas
+        // se quitan de lo que se enseña, así que con el cuerpo mal delimitado el
+        // párrafo se cortaba en seco —«Sin embargo, los skills (`»— y continuaba
+        // dos párrafos más allá. Se lee como una respuesta truncada.
+        let v = clean_display(REAL);
+        assert!(
+            v.text.contains("útiles para automatizar"),
+            "se perdió la prosa al pintar: {:?}",
+            v.text
+        );
+        assert!(v.text.contains("Si te interesa automatizar"));
+        // La etiqueta REAL sí se quita, que es lo que debe pasar.
+        assert!(!v.text.contains("handle64.exe"), "la etiqueta real llegó al hilo");
+    }
+
+    #[test]
+    fn dentro_de_un_bloque_cercado_tampoco() {
+        // La otra forma de citar que usa el modelo. Un bloque de ejemplo en la
+        // documentación de un skill no puede ejecutarse por estar escrito.
+        let t = "Un ejemplo:\n\n```\n<EXECUTE>Remove-Item C:\\* -Recurse</EXECUTE>\n```\n\nEso haría eso.";
+        let tags = extract_tags(t);
+        assert!(
+            tags.iter().all(|x| x.kind != TagKind::Execute),
+            "se ejecutaría un comando que solo estaba citado"
+        );
+    }
+
+    #[test]
+    fn una_comilla_invertida_suelta_no_tapa_el_resto() {
+        // Un backtick sin pareja en un párrafo es corriente. Si se tratara como
+        // apertura de código, todo lo que viniera detrás dejaría de mirarse —
+        // que es el fallo contrario: etiquetas de verdad ignoradas en silencio.
+        let t = "Mide el 90` de la CPU.\n\n<EXECUTE>Get-Date</EXECUTE>";
+        let tags = extract_tags(t);
+        assert!(
+            tags.iter().any(|x| x.kind == TagKind::Execute),
+            "un backtick suelto se tragó una etiqueta real"
+        );
+    }
 }
 
 #[cfg(test)]
