@@ -25,7 +25,20 @@ SetCompressor /SOLID lzma
 !include "FileFunc.nsh"
 
 !define NOMBRE      "Lucy"
-!define VERSION     "2.0.1"
+; LA VERSIÓN LA PASA `build-all.ps1` CON /DVERSION, leída de `Cargo.toml`.
+;
+; Estaba escrita a mano aquí, otra vez en `build-msi.ps1` y una tercera en
+; `Cargo.toml`. Tres copias del mismo número que hay que acordarse de subir a la
+; vez, y la que se olvide no da error: sale un instalador que dice una versión y
+; guarda otra, o —peor— un MSI con el mismo número que el instalado, que
+; Windows entonces NO sustituye. Ver `MajorUpgrade` en `lucy.wxs`.
+;
+; El respaldo es un número imposible y no la última versión conocida: si algún
+; día alguien llama a makensis a mano, tiene que verse en el título del
+; instalador que la versión no salió de donde debía.
+!ifndef VERSION
+    !define VERSION "0.0.0"
+!endif
 !define EDITOR      "Iván Eduardo Luna"
 !define EXE         "lucy-egui.exe"
 !define CLAVE_REG   "Software\Microsoft\Windows\CurrentVersion\Uninstall\LucyNative"
@@ -42,7 +55,9 @@ InstallDir    "$PROGRAMFILES64\Lucy"
 InstallDirRegKey HKLM "Software\Lucy" "InstallDir"
 RequestExecutionLevel admin
 
-VIProductVersion "2.0.1.0"
+; Windows exige CUATRO campos aquí, y `Cargo.toml` da tres. El cuarto es la
+; revisión y en Lucy no significa nada, así que va a cero siempre.
+VIProductVersion "${VERSION}.0"
 VIAddVersionKey "ProductName"     "${NOMBRE}"
 VIAddVersionKey "FileDescription" "Instalador de Lucy — asistente de administración de sistemas"
 VIAddVersionKey "FileVersion"     "${VERSION}"

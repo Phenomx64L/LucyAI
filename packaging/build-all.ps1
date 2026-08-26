@@ -19,6 +19,11 @@ $aqui = Split-Path -Parent $MyInvocation.MyCommand.Path
 $raiz = Split-Path -Parent $aqui
 $dist = Join-Path $raiz 'dist'
 
+# UNA SOLA VERSIÓN, y sale de `Cargo.toml` — la misma que compila dentro del
+# binario. Ver `version.ps1`: estaba escrita a mano en tres sitios.
+$version = & (Join-Path $aqui 'version.ps1')
+Write-Host "── Lucy $version ──" -ForegroundColor Cyan
+
 # `cargo` no está en el PATH de una sesión recién abierta en esta máquina.
 if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
     $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
@@ -68,13 +73,13 @@ if (-not (Test-Path $nsis)) {
     # escape y parte la cadena por la mitad.
     throw "falta makensis en $nsis - lo descarga 'npm run tauri build' en lucy-svelte"
 }
-& $nsis /V2 $nsi
+& $nsis /V2 "/DVERSION=$version" $nsi
 if ($LASTEXITCODE -ne 0) { throw 'makensis falló' }
 
 # ── 3. los cinco MSI ────────────────────────────────────────────────────────
 if (-not $SoloExe) {
     Write-Host '── MSI (uno por idioma) ──' -ForegroundColor Cyan
-    & (Join-Path $aqui 'build-msi.ps1')
+    & (Join-Path $aqui 'build-msi.ps1') -Version $version
 }
 
 Write-Host "`n── listo ──" -ForegroundColor Green

@@ -7,11 +7,16 @@
 # Usa el WiX que ya descargó Tauri en `%LOCALAPPDATA%\tauri\WixTools314`, para
 # no pedir una instalación aparte de una herramienta que la máquina ya tiene.
 
+# La versión la pasa `build-all.ps1`. Suelto, se lee de `Cargo.toml`, que es de
+# donde sale siempre: estaba escrita a mano aquí y en `lucy.nsi`, y tres copias
+# del mismo número son dos oportunidades de olvidarse.
+param([string]$Version)
+
 $ErrorActionPreference = 'Stop'
 $aqui    = Split-Path -Parent $MyInvocation.MyCommand.Path
 $raiz    = Split-Path -Parent $aqui
 $wix     = "$env:LOCALAPPDATA\tauri\WixTools314"
-$version = '2.0.1'
+$version = if ($Version) { $Version } else { & (Join-Path $aqui 'version.ps1') }
 
 $exe     = Join-Path $raiz 'target\release\lucy-egui.exe'
 $icono   = Join-Path (Split-Path -Parent $raiz) 'lucy-svelte\src-tauri\icons\icon.ico'
