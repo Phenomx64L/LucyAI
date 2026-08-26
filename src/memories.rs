@@ -109,10 +109,29 @@ pub enum Accion {
     },
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Guardado {
     pub id: i64,
     pub accion: Accion,
+    /// QUÉ se guardó, no solo dónde.
+    ///
+    /// El carril de Trace anotaba «Recordado — memoria 474» y ahí se acababa.
+    /// Un número no dice si Lucy aprendió lo que hacía falta o una frase suelta
+    /// de la conversación, que es justamente lo que uno quiere vigilar de algo
+    /// que va a volver en el prompt de todas las conversaciones siguientes.
+    ///
+    /// Vacío en las que vienen de la comprobación de duplicados: ahí lo que
+    /// interesa es el motivo, y el título es el de la fila VIEJA — enseñarlo
+    /// haría pensar que se guardó eso.
+    pub titulo: String,
+    /// Las etiquetas con las que quedó catalogada, ya legibles.
+    pub etiquetas: Vec<String>,
+}
+
+impl Default for Accion {
+    fn default() -> Self {
+        Accion::Guardada
+    }
 }
 
 impl Guardado {
@@ -350,7 +369,14 @@ pub fn save(n: &New) -> Result<Guardado, String> {
         .map_err(|e| format!("memories: insert: {e}"))?;
         let id = tx.last_insert_rowid();
         tx.commit().map_err(|e| format!("memories: commit: {e}"))?;
-        Ok(Guardado { id, accion: Accion::Guardada })
+        Ok(Guardado {
+            id,
+            accion: Accion::Guardada,
+            titulo: title.to_string(),
+            // Del JSON que se acaba de escribir, no de otra fuente: lo que se
+            // enseña tiene que ser lo que quedó catalogado.
+            etiquetas: serde_json::from_str::<Vec<String>>(&tags_json).unwrap_or_default(),
+        })
     })?;
 
     // Y SU VECTOR, o la fila nace medio invisible. Sin esto, nada de lo que
@@ -553,6 +579,8 @@ fn texto_dup_tx(
         );
         return Ok(Some(Guardado {
             id,
+            titulo: String::new(),
+            etiquetas: Vec::new(),
             accion: Accion::Duplicada {
                 motivo: format!("coincide por texto con la memoria {id} (parecido {cont_j:.2})"),
             },
@@ -604,6 +632,8 @@ fn cosine_dup(texto: &str) -> Option<Guardado> {
         }
         return Some(Guardado {
             id,
+            titulo: String::new(),
+            etiquetas: Vec::new(),
             accion: Accion::Duplicada {
                 motivo: format!("dice lo mismo que la memoria {id} (parecido {:.2})", m.score),
             },
