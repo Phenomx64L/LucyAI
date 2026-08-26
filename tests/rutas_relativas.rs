@@ -64,6 +64,28 @@ fn lo_que_se_prepara_para_escribir_ya_lleva_la_ruta_completa() {
 }
 
 #[test]
+fn una_virgulilla_pegada_a_otra_cosa_no_es_la_carpeta_personal() {
+    // `~$informe.docx` es el fichero de bloqueo que Word deja al lado de un
+    // documento abierto, y en la máquina de un administrador hay varios a la
+    // vista. Tratar la virgulilla como «carpeta personal» lo manda a otro sitio,
+    // y el error dice que no existe un fichero que sí está.
+    let Some(casa) = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")) else {
+        return;
+    };
+    let r = resuelta("~$informe.docx");
+    assert!(
+        !r.ends_with("$informe.docx") || r.ends_with("~$informe.docx"),
+        "se comió la virgulilla del nombre: {r}"
+    );
+    // Y `~` de verdad sí es la carpeta personal.
+    assert_eq!(resuelta("~"), Path::new(&casa).display().to_string());
+    assert_eq!(
+        resuelta("~\\notas.txt"),
+        Path::new(&casa).join("notas.txt").display().to_string()
+    );
+}
+
+#[test]
 fn una_absoluta_no_se_toca() {
     // Lo normal es que el modelo escriba la ruta entera, y ahí no hay nada que
     // decidir. Un resolutor que «mejore» una absoluta es un resolutor roto.
