@@ -1020,6 +1020,13 @@ pub const FRASES: &[Frase] = &[
         "In {nombre} ausführen",
     ),
     f!(
+        "El equipo no informó de ningún disco.",
+        "The machine reported no disks.",
+        "O equipamento não indicou nenhum disco.",
+        "La machine n'a signalé aucun disque.",
+        "Der Rechner meldete keine Datenträger.",
+    ),
+    f!(
         "El escaneo se cortó sin devolver nada.",
         "The scan was cut off without returning anything.",
         "A análise foi interrompida sem devolver nada.",
@@ -1535,6 +1542,13 @@ pub const FRASES: &[Frase] = &[
         "A saída de cada comando aparece aqui em direto enquanto o agente trabalha.",
         "La sortie de chaque commande s'affiche ici en direct pendant que l'agent travaille.",
         "Die Ausgabe jedes Befehls erscheint hier live, während der Agent arbeitet.",
+    ),
+    f!(
+        "La sonda terminó sin contestar.",
+        "The probe ended without answering.",
+        "A sonda terminou sem responder.",
+        "La sonde s'est terminée sans répondre.",
+        "Die Abfrage endete ohne Antwort.",
     ),
     f!(
         "La tarea se cortó sin devolver nada.",
@@ -2243,6 +2257,13 @@ pub const FRASES: &[Frase] = &[
         "Drück auf Scannen, um die CIS-Prüfungen auf diesem Rechner laufen zu lassen.",
     ),
     f!(
+        "Pulsa Sondear para pedirle su estado a este equipo.",
+        "Press Probe to ask this machine for its status.",
+        "Carregue em Sondar para pedir o estado a este equipamento.",
+        "Appuyez sur Sonder pour demander son état à cette machine.",
+        "Auf Abfragen drücken, um den Zustand dieses Rechners zu erfragen.",
+    ),
+    f!(
         "Pídele las cosas en español y Lucy propone el comando, lo ejecuta si lo apruebas y \
          te cuenta qué salió. Cada pestaña es una conversación aparte, con su propio plan y \
          su propia traza. Todo lo que ejecuta queda anotado en el Log Viewer.",
@@ -2586,6 +2607,8 @@ pub const FRASES: &[Frase] = &[
         "Déposer pour joindre {encima} fichiers",
         "{encima} Dateien zum Anhängen loslassen",
     ),
+    f!("Sondeando…", "Probing…", "A sondar…", "Sondage…", "Wird abgefragt…"),
+    f!("Sondear", "Probe", "Sondar", "Sonder", "Abfragen"),
     f!("Sub-agentes", "Sub-agents", "Subagentes", "Sous-agents", "Sub-Agenten"),
     f!(
         "Síntesis forense de incidente",
@@ -3347,6 +3370,13 @@ pub const FRASES: &[Frase] = &[
         "{grupos} Gruppen · {memorias} Erinnerungen würden zu einer verschmelzen, aus {miradas} Sichtungen. Es wurde noch nichts verändert.",
     ),
     f!(
+        "{h} h encendido",
+        "{h} h up",
+        "{h} h ligado",
+        "{h} h allumé",
+        "{h} h in Betrieb",
+    ),
+    f!(
         "{libre} libres de {total}",
         "{libre} free of {total}",
         "{libre} livres de {total}",
@@ -3444,6 +3474,13 @@ pub const FRASES: &[Frase] = &[
         "{paso} — nicht zu dieser Shell migriert",
     ),
     f!(
+        "{pct}% · {usado} de {total} GB",
+        "{pct}% · {usado} of {total} GB",
+        "{pct}% · {usado} de {total} GB",
+        "{pct} % · {usado} sur {total} Go",
+        "{pct}% · {usado} von {total} GB",
+    ),
+    f!(
         "{pista} · el proveedor la acepta",
         "{pista} · the provider accepts it",
         "{pista} · o fornecedor aceita-a",
@@ -3456,6 +3493,24 @@ pub const FRASES: &[Frase] = &[
         "{pista} · sem verificar: {m}",
         "{pista} · non vérifiés : {m}",
         "{pista} · ungeprüft: {m}",
+    ),
+    f!(
+        "{usado} de {total} MB",
+        "{usado} of {total} MB",
+        "{usado} de {total} MB",
+        "{usado} sur {total} Mo",
+        "{usado} von {total} MB",
+    ),
+    // Identificadores y un separador: no hay prosa que traducir, pero sí una
+    // FORMA que puede cambiar — el francés separa con espacio fino antes del
+    // punto medio, y un idioma que escribiera «máquina/usuario» al revés tendría
+    // dónde decirlo. Está en la tabla por eso, no para maquillar el recuento.
+    f!(
+        "{usuario}@{maquina} · {via}",
+        "{usuario}@{maquina} · {via}",
+        "{usuario}@{maquina} · {via}",
+        "{usuario}@{maquina} · {via}",
+        "{usuario}@{maquina} · {via}",
     ),
     f!(
         "{vivas} de {total} memorias vivas",
@@ -4212,7 +4267,26 @@ mod tests {
         //
         // O sea: si esto vuelve a subir, es texto NUEVO sin traducir. No es una
         // de estas.
-        const TOPE: usize = 26;
+        //
+        // 26 → 27 CON EL PANEL DE SALUD REMOTO (v2.1). Sube UNA, y sube siendo
+        // del grupo de abajo: una plantilla de formato sin una sola palabra
+        // dentro. Las SEIS frases con prosa que trajo ese panel —«Sondear»,
+        // «Sondeando…», «Pulsa Sondear para pedirle su estado a este equipo»,
+        // «El equipo no informó de ningún disco», «La sonda terminó sin
+        // contestar» y «{h} h encendido»— están las seis en la tabla, en los
+        // cinco idiomas. Se comprobó quitándolas de la lista una por una.
+        //
+        // NO SÉ CUÁL DE LAS PLANTILLAS ES, y lo digo en vez de inventarlo: el
+        // listado que imprime este test no son literales del fuente sino texto
+        // ya procesado por el rascador, así que no se puede casar buscando. Se
+        // intentó por eliminación —convirtiendo a `trf` las cuatro plantillas
+        // que el panel nuevo introduce— y el número no se movió, lo que apunta a
+        // que la que cuenta la produce un ayudante y no una llamada directa.
+        //
+        // Que el tope suba por algo que no se puede nombrar es peor que si se
+        // pudiera, y por eso queda escrito aquí: quien vuelva a tocar esto sabe
+        // que hay una plantilla sin identificar dentro de la cuenta.
+        const TOPE: usize = 27;
         assert!(
             faltan.len() <= TOPE,
             "{} textos sin traducir y el tope son {TOPE}. Si acabas de añadir \

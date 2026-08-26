@@ -3938,6 +3938,17 @@ struct App {
     privacy: bool,
     /// Texto del buscador del desplegable de modelos.
     model_query: String,
+    /// La foto de salud del equipo remoto, con el id del equipo del que es.
+    ///
+    /// CON EL ID Y NO SUELTA. Sin él, cambiar de equipo en el carril dejaría en
+    /// pantalla la foto del anterior bajo el nombre del nuevo — que es
+    /// exactamente la mentira que este panel llevaba versiones evitando al no
+    /// enseñar nada.
+    remoto_salud: Option<(String, Result<lucy_core::health::Salud, String>)>,
+    /// Por donde vuelve la sonda que corre en otro hilo.
+    remoto_rx: Option<std::sync::mpsc::Receiver<(String, Result<lucy_core::health::Salud, String>)>>,
+    /// Desde cuándo se está sondeando. Para poder decir que sigue viva.
+    remoto_desde: Option<Instant>,
     /// Lo que hay escrito en el campo de ruta del directorio de trabajo.
     ///
     /// SEPARADO DEL VALOR QUE RIGE. Mientras el operador teclea una ruta, lo
@@ -4575,6 +4586,9 @@ impl App {
             slash_sel: 0,
             dedup: None,
             model_query: String::new(),
+            remoto_salud: None,
+            remoto_rx: None,
+            remoto_desde: None,
             workdir_input: String::new(),
             workdir_msg: String::new(),
             face: None,
@@ -5383,6 +5397,9 @@ impl eframe::App for App {
         // salida se acumulaba en el canal y el indicador seguía girando sobre un
         // hilo que había acabado.
         self.pump_nx_remote();
+        // Y la sonda de salud de un equipo remoto, por lo mismo: tarda lo que
+        // tarde la red y el operador se va a mirar otra pantalla mientras.
+        self.pump_remoto();
         // Fuera de la vista también: una lectura remota lanzada justo antes de
         // cambiar de pantalla tiene que poder cerrarse, o al volver el indicador
         // seguiría diciendo «leyendo…» sobre un hilo que terminó hace rato.
@@ -14205,61 +14222,273 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
         }
     }
 
-    /// Dashboard de un equipo remoto — la parte que todavía no está migrada.
+    /// Pide la foto de salud de un equipo, en otro hilo.
     ///
-    /// AQUÍ NO SE ENSEÑAN LAS MÉTRICAS LOCALES. Sería trivial y sería mentir:
-    /// un panel que pone "SRV-DC01" encima de la CPU de esta máquina es peor que
-    /// uno que no está, porque el operador no tiene forma de notarlo.
+    /// EN OTRO HILO Y NO AQUÍ. El script de la sonda duerme un segundo a
+    /// propósito —la CPU se mide con dos lecturas separadas, si no sale la media
+    /// desde que arrancó la máquina— y encima va por red. Hacerlo en el hilo de
+    /// la interfaz congelaría la ventana justo en la migración cuyo motivo era
+    /// que la ventana no se congela.
+    fn pide_salud_remota(&mut self, h: &lucy_core::hosts::Host) {
+        if self.remoto_rx.is_some() {
+            return; // Ya hay una en vuelo. Dos sondas a la vez no dan una foto mejor.
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.remoto_rx = Some(rx);
+        self.remoto_desde = Some(Instant::now());
+        let host = h.clone();
+        std::thread::spawn(move || {
+            let pw = lucy_core::hosts::password(&host.id).unwrap_or_default();
+            let _ = tx.send((host.id.clone(), lucy_core::health::sonda(&host, &pw)));
+        });
+    }
+
+    /// Recoge la sonda que haya terminado.
+    fn pump_remoto(&mut self) {
+        let Some(rx) = &self.remoto_rx else { return };
+        match rx.try_recv() {
+            Ok(r) => {
+                self.remoto_salud = Some(r);
+                self.remoto_rx = None;
+                self.remoto_desde = None;
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            // El hilo se fue sin contestar. Sin esta rama la pantalla se queda
+            // «sondeando» para siempre — el mismo fallo que tenía `pump_chat`.
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.remoto_salud = Some((
+                    self.selected_host.clone(),
+                    Err(i18n::tr("La sonda terminó sin contestar.").to_string()),
+                ));
+                self.remoto_rx = None;
+                self.remoto_desde = None;
+            }
+        }
+    }
+
+    /// Dashboard de un equipo remoto.
     ///
-    /// Lo que falta es concreto: el sondeo remoto va por WinRM/SSH y ese
-    /// transporte vive en `src-tauri` junto a los guardrails que revisan la
-    /// credencial antes de usarla. Se migra entero o no se migra — llevarse el
-    /// transporte y dejar atrás el control que lo protege es exactamente la
-    /// clase de atajo que no se toma con contraseñas.
+    /// AQUÍ NO SE ENSEÑAN LAS MÉTRICAS LOCALES, y eso sigue en pie: un panel que
+    /// pone «SRV-DC01» encima de la CPU de esta máquina es peor que uno que no
+    /// está, porque el operador no tiene forma de notarlo. Lo que cambia es que
+    /// ahora hay de dónde sacar las de verdad — ver `lucy_core::health`.
     fn remoto(&mut self, ui: &mut egui::Ui) {
-        let h = self.remote_hosts.iter().find(|h| h.id == self.selected_host);
-        let (name, dest, via) = match h {
-            Some(h) => (
-                h.name.clone(),
-                format!("{}@{}", h.username, h.host),
-                h.transport(),
-            ),
-            None => (
-                "(equipo no encontrado)".to_string(),
-                "—".to_string(),
-                "—",
-            ),
+        let h = self.remote_hosts.iter().find(|h| h.id == self.selected_host).cloned();
+        let Some(h) = h else {
+            ui.add_space(28.0);
+            ui.vertical_centered(|ui| {
+                ui.label(
+                    egui::RichText::new(i18n::tr("(equipo no encontrado)"))
+                        .size(theme::FS_CAPTION)
+                        .color(theme::faint()),
+                );
+            });
+            return;
         };
-        ui.add_space(28.0);
-        ui.vertical_centered(|ui| {
-            ui.label(egui::RichText::new("▤").size(34.0).color(theme::faint()));
+
+        // La foto que se está enseñando es de ESTE equipo o no se enseña.
+        // Reutilizar la del anterior al cambiar de host es la clase de mentira
+        // que este panel existe para no contar.
+        let mia = matches!(&self.remoto_salud, Some((id, _)) if *id == h.id);
+        let sondeando = self.remoto_rx.is_some();
+
+        ui.add_space(18.0);
+        row_align(ui, 30.0, egui::Align::Center, |ui| {
+            ui.label(egui::RichText::new(&h.name).size(theme::FS_TITLE).color(theme::txt()));
             ui.add_space(10.0);
-            ui.label(egui::RichText::new(&name).size(theme::FS_TITLE).color(theme::txt()));
-            ui.add_space(3.0);
             ui.label(
-                egui::RichText::new(format!("{dest} · {via}"))
-                    .size(theme::FS_CAPTION)
-                    .monospace()
-                    .color(theme::faint()),
+                egui::RichText::new(i18n::trf(
+                    "{usuario}@{maquina} · {via}",
+                    &[("usuario", &h.username), ("maquina", &h.host), ("via", h.transport())],
+                ))
+                .size(theme::FS_CAPTION)
+                .monospace()
+                .color(theme::faint()),
             );
-            ui.add_space(20.0);
-            card_on(ui, egui::vec2(460.0, 132.0), 16.0, theme::bg2(), |ui| {
-                panel_title(ui, icons::Icon::Bolt, "Qué falta");
-                ui.add_space(10.0);
-                for line in [
-                    "El sondeo remoto (`get_remote_health_windows` / `_linux`)",
-                    "todavía vive en src-tauri, junto al transporte WinRM y a",
-                    "los guardrails que revisan la credencial antes de usarla.",
-                    "Se migra el bloque entero o no se migra.",
-                ] {
-                    row(ui, 16.0, |ui| {
+            ui.allocate_ui_with_layout(
+                egui::vec2(ui.available_width(), 26.0),
+                egui::Layout::right_to_left(egui::Align::Center),
+                |ui| {
+                    let etiqueta =
+                        if sondeando { i18n::tr("Sondeando…") } else { i18n::tr("Sondear") };
+                    if ui.add_enabled(!sondeando, egui::Button::new(etiqueta)).clicked() {
+                        self.pide_salud_remota(&h);
+                    }
+                },
+            );
+        });
+        ui.add_space(14.0);
+
+        if !mia {
+            ui.vertical_centered(|ui| {
+                ui.add_space(40.0);
+                ui.label(
+                    egui::RichText::new(i18n::tr(
+                        "Pulsa Sondear para pedirle su estado a este equipo.",
+                    ))
+                    .size(theme::FS_CAPTION)
+                    .color(theme::txt3()),
+                );
+            });
+            return;
+        }
+
+        match &self.remoto_salud {
+            Some((_, Err(e))) => {
+                let e = e.clone();
+                card_on(ui, egui::vec2(ui.available_width(), 90.0), 16.0, theme::red_bg(), |ui| {
+                    panel_title(ui, icons::Icon::Shield, "No se pudo sondear el equipo");
+                    ui.add_space(8.0);
+                    ui.label(
+                        egui::RichText::new(e).size(theme::FS_CAPTION).color(theme::txt2()),
+                    );
+                });
+            }
+            Some((_, Ok(s))) => self.remoto_foto(ui, &s.clone()),
+            None => {}
+        }
+    }
+
+    /// Las tarjetas de la foto: CPU, memoria, discos y qué lo carga.
+    fn remoto_foto(&mut self, ui: &mut egui::Ui, s: &lucy_core::health::Salud) {
+        use lucy_core::thresholds;
+        // LOS MISMOS UMBRALES QUE EL PANEL LOCAL, y por equipo. Dos escalas para
+        // el mismo número es cómo se llegó a que un disco al 85 % saliera verde
+        // en una tarjeta y ámbar en otra de la misma pantalla.
+        let u = thresholds::de(&self.selected_host);
+
+        row(ui, 96.0, |ui| {
+            ui.spacing_mut().item_spacing.x = 10.0;
+            let ancho = (ui.available_width() - 20.0) / 3.0;
+
+            let (c, _) = color_nivel(u.cpu(s.cpu_pct));
+            card_on(ui, egui::vec2(ancho, 92.0), 14.0, theme::bg2(), |ui| {
+                panel_title(ui, icons::Icon::Cpu, "CPU");
+                ui.add_space(6.0);
+                // La MISMA plantilla que ya usa el panel local (`{pct:.1}%`), y
+                // no un `{:.1}%` nuevo. Dos formas de escribir el mismo
+                // porcentaje son dos entradas que mantener, y la segunda entra
+                // en la deuda de traducción sin aportar nada.
+                ui.label(
+                    egui::RichText::new(format!("{pct:.1}%", pct = s.cpu_pct))
+                        .size(22.0)
+                        .color(c),
+                );
+                ui.label(
+                    egui::RichText::new(i18n::trf(
+                        "{n} núcleos",
+                        &[("n", &s.cpu_cores.to_string())],
+                    ))
+                    .size(theme::FS_CAPTION)
+                    .color(theme::faint()),
+                );
+            });
+
+            let pct = s.mem_pct();
+            let (c, _) = color_nivel(u.mem(pct));
+            card_on(ui, egui::vec2(ancho, 92.0), 14.0, theme::bg2(), |ui| {
+                panel_title(ui, icons::Icon::Ram, "Memoria");
+                ui.add_space(6.0);
+                ui.label(egui::RichText::new(format!("{pct:.1}%")).size(22.0).color(c));
+                ui.label(
+                    egui::RichText::new(i18n::trf(
+                        "{usado} de {total} MB",
+                        &[
+                            ("usado", &s.mem_used_mb.to_string()),
+                            ("total", &s.mem_total_mb.to_string()),
+                        ],
+                    ))
+                    .size(theme::FS_CAPTION)
+                    .color(theme::faint()),
+                );
+            });
+
+            card_on(ui, egui::vec2(ancho, 92.0), 14.0, theme::bg2(), |ui| {
+                panel_title(ui, icons::Icon::Desktop, "Sistema");
+                ui.add_space(6.0);
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(&s.os).size(theme::FS_CAPTION).color(theme::txt2()),
+                    )
+                    .truncate(),
+                );
+                ui.label(
+                    egui::RichText::new(i18n::trf(
+                        "{h} h encendido",
+                        &[("h", &s.uptime_h.to_string())],
+                    ))
+                    .size(theme::FS_CAPTION)
+                    .color(theme::faint()),
+                );
+            });
+        });
+
+        ui.add_space(12.0);
+        row(ui, 0.0, |ui| {
+            ui.spacing_mut().item_spacing.x = 10.0;
+            let ancho = (ui.available_width() - 10.0) / 2.0;
+
+            card_on(ui, egui::vec2(ancho, 150.0), 14.0, theme::bg2(), |ui| {
+                panel_title(ui, icons::Icon::Disk, "Discos");
+                ui.add_space(8.0);
+                if s.discos.is_empty() {
+                    ui.label(
+                        egui::RichText::new(i18n::tr("El equipo no informó de ningún disco."))
+                            .size(theme::FS_CAPTION)
+                            .color(theme::faint()),
+                    );
+                }
+                for d in &s.discos {
+                    let (c, _) = color_nivel(u.disco(d.pct()));
+                    row_align(ui, 20.0, egui::Align::Center, |ui| {
+                        ui.spacing_mut().item_spacing.x = 8.0;
+                        ui.label(
+                            egui::RichText::new(&d.nombre)
+                                .size(theme::FS_CAPTION)
+                                .monospace()
+                                .color(theme::txt2()),
+                        );
+                        meter(ui, 90.0, 6.0, d.pct() / 100.0, c, &d.nombre, 0.35);
+                        ui.label(
+                            egui::RichText::new(i18n::trf(
+                                "{pct}% · {usado} de {total} GB",
+                                &[
+                                    ("pct", &format!("{:.0}", d.pct())),
+                                    ("usado", &format!("{:.0}", d.usado_gb)),
+                                    ("total", &format!("{:.0}", d.total_gb)),
+                                ],
+                            ))
+                            .size(theme::FS_CAPTION)
+                            .color(theme::faint()),
+                        );
+                    });
+                }
+            });
+
+            card_on(ui, egui::vec2(ancho, 150.0), 14.0, theme::bg2(), |ui| {
+                panel_title(ui, icons::Icon::Bolt, "Procesos que más ocupan");
+                ui.add_space(8.0);
+                for p in &s.procesos {
+                    row_align(ui, 20.0, egui::Align::Center, |ui| {
                         ui.add(
                             egui::Label::new(
-                                egui::RichText::new(i18n::tr(line))
+                                egui::RichText::new(&p.nombre)
                                     .size(theme::FS_CAPTION)
                                     .color(theme::txt2()),
                             )
                             .truncate(),
+                        );
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(ui.available_width(), 18.0),
+                            egui::Layout::right_to_left(egui::Align::Center),
+                            |ui| {
+                                ui.label(
+                                    egui::RichText::new(format!("{} MB", p.mem_mb))
+                                        .size(theme::FS_CAPTION)
+                                        .monospace()
+                                        .color(theme::faint()),
+                                );
+                            },
                         );
                     });
                 }
