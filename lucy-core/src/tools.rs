@@ -69,10 +69,17 @@ pub const MAX_ENTRIES: usize = 300;
 /// `Desktop` para cualquier cosa que abra un fichero.
 pub fn resuelve(path: &str) -> std::path::PathBuf {
     let bruto = path.trim();
-    // `~` y `~\algo`. No es sintaxis de Windows, pero el modelo la escribe.
-    if let Some(resto) = bruto.strip_prefix('~') {
-        let resto = resto.trim_start_matches(['\\', '/']);
+    // `~` a secas o `~\algo`. No es sintaxis de Windows, pero el modelo la
+    // escribe.
+    //
+    // Y SOLO ESAS DOS FORMAS. Un `~` pegado a otra cosa NO es la carpeta
+    // personal: `~$informe.docx` es el fichero de bloqueo que Word deja al lado
+    // de un documento abierto, y en la máquina de un administrador hay varios a
+    // la vista. Tratarlo como «carpeta personal + $informe.docx» lo manda a otro
+    // sitio, y el error dice que no existe un fichero que sí está.
+    if bruto == "~" || bruto.starts_with("~/") || bruto.starts_with("~\\") {
         if let Some(c) = casa() {
+            let resto = bruto[1..].trim_start_matches(['\\', '/']);
             return if resto.is_empty() { c } else { c.join(resto) };
         }
     }

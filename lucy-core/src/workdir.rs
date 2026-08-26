@@ -85,14 +85,32 @@ pub fn configurado() -> Option<PathBuf> {
 /// Devuelve lo que hubiera guardado. Se llama sola en la primera lectura, así
 /// que el shell no tiene que acordarse — pero puede llamarla al arrancar para
 /// que el primer turno no pague la consulta.
+///
+/// SOLO SE CACHEA SI LA BASE CONTESTÓ, y esa distinción es la que quita un
+/// campo de minas entero. «No hay nada guardado» y «no pude preguntar» son
+/// respuestas distintas que valen lo mismo aquí —el de por defecto— pero que NO
+/// se pueden cachear igual: guardar la segunda como si fuera la primera deja el
+/// directorio del operador sin efecto para toda la sesión.
+///
+/// Y pasa de verdad. En el shell nativo, los campos de un literal de struct se
+/// evalúan en el orden escrito, y dos de ellos preguntaban por el directorio
+/// antes de que un tercero abriera la base. En la app Tauri, `GLOBAL_CWD` es un
+/// `Lazy` que hoy se lee después de `init_with_pool` y mañana quién sabe. Con
+/// esta comprobación, el orden deja de importar en los dos.
 pub fn carga() -> Option<PathBuf> {
-    let guardado = lee_de_la_base();
-    // SE CACHEA AUNQUE NO HAYA NADA. Si no, cada llamada sin directorio
-    // configurado —que es el caso por defecto— vuelve a preguntar a SQLite.
-    if let Ok(mut g) = ACTUAL.write() {
-        *g = Some(Estado { elegido: guardado.clone() });
+    match lee_de_la_base() {
+        Ok(guardado) => {
+            // La base contestó: lo que diga es la verdad, haya algo o no.
+            if let Ok(mut g) = ACTUAL.write() {
+                *g = Some(Estado { elegido: guardado.clone() });
+            }
+            guardado
+        }
+        // No se pudo preguntar. Rige el de por defecto, pero NO se apunta: la
+        // próxima llamada vuelve a intentarlo, y en cuanto la base esté abierta
+        // aparece lo que el operador eligió.
+        Err(()) => None,
     }
-    guardado
 }
 
 /// Elige el directorio de trabajo. Valida, guarda y lo deja rigiendo.
@@ -212,26 +230,27 @@ pub fn ensure_schema() -> Result<(), String> {
     })
 }
 
-/// NO DEVUELVE `Result`. Quien llama a esto está resolviendo una ruta o
-/// lanzando un comando, y un fallo de base de datos no puede impedirlo: sin
-/// directorio guardado rige el de por defecto, que es una respuesta correcta y
-/// es exactamente lo que había antes de que este módulo existiera.
-fn lee_de_la_base() -> Option<PathBuf> {
-    ensure_schema().ok()?;
-    crate::with_db(|c| {
+/// `Ok(None)` = la base contestó y no hay nada guardado.
+/// `Err(())`  = no se pudo preguntar. Ver `carga`: no es lo mismo.
+///
+/// El error no lleva mensaje a propósito. Quien llama está resolviendo una ruta
+/// o lanzando un comando, y no hay nada que pueda hacer con el texto de un fallo
+/// de SQLite: rige el de por defecto, que es una respuesta correcta y es
+/// exactamente lo que había antes de que este módulo existiera.
+fn lee_de_la_base() -> Result<Option<PathBuf>, ()> {
+    ensure_schema().map_err(|_| ())?;
+    let fila = crate::with_db(|c| {
         let mut st = c
             .prepare("SELECT ruta FROM work_dir WHERE id = 1")
             .map_err(|e| e.to_string())?;
         Ok(st.query_row([], |r| r.get::<_, String>(0)).ok())
     })
-    .ok()
-    .flatten()
-    .map(PathBuf::from)
+    .map_err(|_| ())?;
     // SE REVALIDA AL LEER. El operador pudo elegir una carpeta de un disco USB,
     // o borrarla, o la puso en una unidad de red que hoy no está montada. Un
     // directorio de trabajo que no existe convierte cada escritura en un error
     // raro; volver al de por defecto es peor de lo que eligió y mejor que nada.
-    .filter(|p| p.is_dir())
+    Ok(fila.map(PathBuf::from).filter(|p| p.is_dir()))
 }
 
 fn guarda_en_la_base(p: &Path) -> Result<(), String> {

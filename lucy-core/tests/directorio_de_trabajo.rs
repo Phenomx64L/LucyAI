@@ -169,3 +169,31 @@ fn una_carpeta_que_ya_no_esta_no_deja_a_lucy_trabajando_en_el_vacio() {
     assert_eq!(leido, None, "devolvió una carpeta que ya no existe");
     assert!(lucy_core::workdir::actual().is_dir(), "el de por defecto tampoco existe");
 }
+
+#[test]
+fn preguntar_antes_de_que_la_base_este_abierta_no_deja_el_ajuste_muerto() {
+    // EL CAMPO DE MINAS QUE ESTO DESACTIVA. «No hay nada guardado» y «no pude
+    // preguntar» valen lo mismo al contestar —el de por defecto— pero NO se
+    // pueden apuntar igual: cachear la segunda como si fuera la primera deja la
+    // carpeta del operador sin efecto para el resto de la sesión, sin error y
+    // sin aviso.
+    //
+    // Y pasa de verdad: en el shell nativo dos campos de un literal de struct
+    // preguntaban antes de que un tercero abriera la base, y en la app Tauri
+    // `GLOBAL_CWD` es un `Lazy` cuyo momento de lectura no controla nadie.
+    let _turno = turno();
+    con_base();
+    let trabajo = carpeta_nueva("wd-orden");
+    lucy_core::workdir::pon(&trabajo).unwrap();
+
+    // Se simula el arranque: alguien pregunta y luego se vuelve a cargar. Si la
+    // primera respuesta se hubiera apuntado como definitiva, la segunda no
+    // podría corregirla.
+    let _ = lucy_core::workdir::actual();
+    assert_eq!(
+        lucy_core::workdir::carga(),
+        Some(trabajo.clone()),
+        "una relectura no recupera lo que el operador eligió"
+    );
+    assert_eq!(lucy_core::workdir::actual(), trabajo);
+}

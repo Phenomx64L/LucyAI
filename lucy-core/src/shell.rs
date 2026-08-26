@@ -135,19 +135,32 @@ pub fn run_powershell_utf8(script: &str) -> Result<(String, String, bool), Strin
     use std::os::windows::process::CommandExt;
     use std::process::Command;
 
-    let out = Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", &ps_utf8(script)])
-        // EN EL DIRECTORIO DE TRABAJO, y ésta es la fuga grande de las cuatro.
-        // Sin esta línea el hijo hereda el directorio del proceso, que instalada
-        // es `C:\Program Files\Lucy`. Todo comando que Lucy propone y ejecuta
-        // corría ahí: un `New-Item informe.txt`, un `Export-Csv salida.csv`, un
-        // `>` a un fichero sin ruta. Eso es literalmente lo que el operador
-        // describió como «ciertos archivos se escriben en el proyecto» — lanzada
-        // con `cargo run`, el directorio del proceso es el del repositorio.
-        //
-        // Ni siquiera daba error: la escritura funciona o muere con acceso
-        // denegado, y en los dos casos el fichero no está donde se buscó.
-        .current_dir(crate::workdir::actual())
+    // SOLO SI SIGUE EXISTIENDO. `current_dir` con una carpeta que ya no está
+    // hace fallar el `spawn` ENTERO, no el comando: PowerShell no llega a
+    // arrancar y lo que vuelve es «The directory name is invalid», que no se
+    // parece a lo que pasó. El operador elige una carpeta de un USB, la
+    // desconecta, y de pronto Lucy no puede ejecutar NADA —ni un `Get-Date`— por
+    // algo que no tiene que ver con el comando que pidió.
+    let trabajo = crate::workdir::actual();
+    let trabajo = if trabajo.is_dir() { Some(trabajo) } else { None };
+
+    let mut cmd = Command::new("powershell");
+    cmd.args(["-NoProfile", "-NonInteractive", "-Command", &ps_utf8(script)]);
+    // EN EL DIRECTORIO DE TRABAJO, y ésta es la fuga grande de las cuatro. Sin
+    // esto el hijo hereda el directorio del proceso, que instalada es
+    // `C:\Program Files\Lucy`. Todo comando que Lucy propone y ejecuta corría
+    // ahí: un `New-Item informe.txt`, un `Export-Csv salida.csv`, un `>` a un
+    // fichero sin ruta. Eso es literalmente lo que el operador describió como
+    // «ciertos archivos se escriben en el proyecto» — lanzada con `cargo run`,
+    // el directorio del proceso es el del repositorio.
+    //
+    // Ni siquiera daba error: la escritura funciona o muere con acceso denegado,
+    // y en los dos casos el fichero no está donde se buscó.
+    if let Some(d) = trabajo {
+        cmd.current_dir(d);
+    }
+
+    let out = cmd
         .creation_flags(CREATE_NO_WINDOW)
         .output()
         .map_err(|e| format!("PowerShell spawn failed: {}", e))?;

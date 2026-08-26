@@ -103,11 +103,20 @@ pub fn purge_dead_stream_sessions() -> usize {
 /// until all readers release. Keep ALL lock holds under 1μs — clone immediately
 /// and drop the guard. Never do I/O while holding this lock. If write starvation
 /// becomes an issue, migrate to `tokio::sync::RwLock` with an async refactor.
+/// EL VALOR INICIAL SALE DE `lucy_core::workdir` Y NO DE `current_dir`. Aquí
+/// ponía `std::env::current_dir()`, que instalada es `C:\Program Files\Lucy` y
+/// en desarrollo la carpeta del repositorio. Ese valor va al prompt bajo
+/// `WORKING DIRECTORY:` con la instrucción «resolve them relative to this
+/// directory», así que los ficheros que Lucy nombraba sin ruta acababan ahí.
+/// Es el MISMO fallo que se arregló en el shell nativo, por su cuenta y en su
+/// sitio — que es como se tiene dos veces el mismo fallo.
+///
+/// El `cd` de la conversación sigue siendo de la SESIÓN y no se guarda: es un
+/// comando de shell, y persistir cada uno haría que abrir Lucy mañana te dejara
+/// en la última carpeta que miraste de pasada. Lo que se guarda es la elección
+/// deliberada del operador, y eso vive en `workdir`.
 pub static GLOBAL_CWD: Lazy<RwLock<String>> = Lazy::new(|| {
-    let cwd = std::env::current_dir()
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|_| "C:\\".to_string());
-    RwLock::new(cwd)
+    RwLock::new(lucy_core::workdir::actual().to_string_lossy().to_string())
 });
 
 /// Per-tab CWD overrides. Lets each chat tab maintain its own working directory
