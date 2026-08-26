@@ -399,9 +399,19 @@ mod tests {
         // siga llamándola. Volver a escribir el criterio allí daría dos
         // deduplicadores distintos sobre la MISMA base de datos, y el que
         // corriera segundo encontraría un corpus que ya no reconoce.
-        const APP: &str = include_str!("../../src-tauri/src/commands/memory.rs");
+        // EN EJECUCIÓN Y NO CON `include_str!`. Aunque esté dentro de un test,
+        // la macro se resuelve al compilar, así que la batería del núcleo no
+        // compilaba sin `src-tauri` delante. Ver `models.rs` y `schema.rs`.
+        let Ok(app) = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../src-tauri/src/commands/memory.rs"),
+        ) else {
+            // Sin la app Tauri al lado no hay a quién vigilar. Se salta.
+            return;
+        };
+        let app = app.as_str();
         assert!(
-            APP.contains("lucy_core::consolidate::run("),
+            app.contains("lucy_core::consolidate::run("),
             "src-tauri dejó de delegar: hay otra vez dos criterios de parecido"
         );
         // Se busca la DEFINICIÓN, no el nombre. `jaccard` y el tokenizador
@@ -409,7 +419,7 @@ mod tests {
         // otra función con sus propios umbrales. Lo que no puede volver es una
         // constante de consolidación redeclarada.
         assert!(
-            !APP.contains("const MIN_CONTENT_JACCARD"),
+            !app.contains("const MIN_CONTENT_JACCARD"),
             "el umbral volvió a declararse en la app — es una copia nueva"
         );
     }
