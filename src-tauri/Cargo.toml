@@ -86,7 +86,10 @@ r2d2_sqlite = "0.24"
 # una copia. Ya había derivado (tope de 50 filas aquí, 300 allí) antes de que
 # nada la usara. Ahora la app enlaza el crate y le presta SU pool, de modo que
 # hay un único pool, una única consulta y un único sitio donde equivocarse.
-lucy-core = { path = "../lucy-core", features = ["ts"] }
+# FUERA DE ESTE REPOSITORIO desde la 2.1.0. Estaba en `../lucy-core`, o sea
+# dentro de la V1, y eso significaba que retirar la V1 era retirar el nucleo.
+# Ahora es un hermano y ninguna de las dos caras es su dueña.
+lucy-core = { path = "../../lucy-core", features = ["ts"] }
 ropey = "1.6.1"
 aho-corasick = "1.1.4"
 similar = "3.0.0"

@@ -22,8 +22,11 @@ const config = {
     // colgado de él no llega a mirarse nunca. La build fallaba buscando el
     // fichero en la carpeta de la que se acababa de mover, y el mensaje —«no
     // such file or directory»— no dice que haya un alias siendo ignorado.
+    // FUERA DEL REPOSITORIO desde que `lucy-core` salió a ser hermano y no hijo.
+    // Los catálogos siguen siendo suyos: los ejecuta el motor de cumplimiento en
+    // Rust, y esta aplicación es uno de los dos consumidores, no el dueño.
     alias: {
-      $compliance: 'lucy-core/assets/compliance'
+      $compliance: '../lucy-core/assets/compliance'
     }
   },
   onwarn: (warning, handler) => {

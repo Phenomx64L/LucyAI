@@ -104,8 +104,22 @@ echo -e "${B}[1/4] Running Rust unit tests…${N}"
 # `cargo test` inside src-tauri does NOT run its tests. Logic is migrating
 # there for the native frontend, and the first batch already moved five tests
 # out of this gate without meaning to. Both crates, one condition.
+# v2.1 — `lucy-core` salió a su propio repositorio, hermano de éste. Sigue
+# corriéndose desde aquí a propósito: es una dependencia por ruta que este
+# backend enlaza, así que un cambio suyo que rompa `src-tauri` tiene que caer en
+# ESTE gancho, no en el `cargo tauri build` de tres commits después.
+#
+# Si no está al lado se avisa y se sigue: en una máquina que solo tenga la V1
+# clonada, bloquear cada commit por un repositorio ausente convierte el gancho
+# en algo que se salta con --no-verify, y entonces no vigila nada.
+if [ -d ../lucy-core ]; then
+  NUCLEO="../lucy-core"
+else
+  echo -e "${Y}      ! ../lucy-core no está — sus tests no entran en esta puerta${N}"
+  NUCLEO=""
+fi
 if ! ( cd src-tauri && cargo test --lib --quiet -- --test-threads=1 2>&1 ) \
-   || ! ( cd lucy-core && cargo test --quiet --all-features -- --test-threads=1 2>&1 ); then
+   || ! ( [ -z "$NUCLEO" ] || ( cd "$NUCLEO" && cargo test --quiet --all-features -- --test-threads=1 2>&1 ) ); then
     echo
     echo -e "${R}╔════════════════════════════════════════════════════════════════╗${N}"
     echo -e "${R}║  COMMIT BLOCKED — contract tests failed.                       ║${N}"
