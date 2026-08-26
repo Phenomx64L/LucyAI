@@ -89,21 +89,54 @@ impl Tendencia {
     }
 }
 
+/// LA TABLA ES LA DE LA V1, y esto es la corrección de un error mío.
+///
+/// Este módulo creó `metric_samples` —singular— sin mirar que la aplicación
+/// Tauri ya escribía `metrics_samples` —plural— en el MISMO fichero de base de
+/// datos, cada cinco minutos, desde hace versiones. Dos tablas para el mismo
+/// dato, en el mismo sitio, con un nombre que se diferencia en una letra.
+///
+/// LO QUE ESO PRODUCE ES PEOR QUE DUPLICAR FILAS. La V1 lleva meses de historial
+/// real y la V2 empezaba de cero al lado, así que el Dashboard nativo decía «no
+/// hay bastante para una tendencia» sobre un equipo del que sí había datos —los
+/// tenía la otra tabla—. Y al revés: lo que mide el shell nativo no aparecía en
+/// las proyecciones de capacidad de la V1. Cada mitad de Lucy sabía la mitad.
+///
+/// Gana la de la V1: tiene los datos. Lo único que le faltaba es el detalle POR
+/// PUNTO DE MONTAJE —guarda un solo porcentaje de disco, el principal— y eso
+/// entra como una columna más. Las filas que ya existen la tienen vacía, que es
+/// exactamente lo que eran: muestras sin ese detalle.
 pub fn ensure_schema() -> Result<(), String> {
     crate::with_db(|c| {
         c.execute_batch(
-            "CREATE TABLE IF NOT EXISTS metric_samples (
-                 id       INTEGER PRIMARY KEY AUTOINCREMENT,
-                 host_id  TEXT NOT NULL,
-                 ts       INTEGER NOT NULL,
-                 cpu      REAL NOT NULL,
-                 mem      REAL NOT NULL,
-                 discos   TEXT NOT NULL
+            "CREATE TABLE IF NOT EXISTS metrics_samples (
+                 id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                 host_id       TEXT    NOT NULL DEFAULT '',
+                 ts            INTEGER NOT NULL,
+                 cpu           REAL    NOT NULL DEFAULT 0.0,
+                 ram           REAL    NOT NULL DEFAULT 0.0,
+                 disk          REAL    NOT NULL DEFAULT 0.0,
+                 ram_mb        INTEGER NOT NULL DEFAULT 0,
+                 disk_gb       INTEGER NOT NULL DEFAULT 0,
+                 disk_total_gb INTEGER NOT NULL DEFAULT 0,
+                 ram_total_mb  INTEGER NOT NULL DEFAULT 0,
+                 is_hourly     INTEGER NOT NULL DEFAULT 0
              );
-             CREATE INDEX IF NOT EXISTS idx_metric_samples_host
-                 ON metric_samples(host_id, ts DESC);",
+             CREATE INDEX IF NOT EXISTS idx_metrics_samples_ts
+                 ON metrics_samples(host_id, ts DESC);
+             CREATE INDEX IF NOT EXISTS idx_metrics_samples_hourly
+                 ON metrics_samples(is_hourly, ts DESC);",
         )
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+        // La columna del detalle por punto de montaje. Sobre una base de la V1
+        // la tabla ya existe sin ella, así que un `CREATE TABLE IF NOT EXISTS`
+        // no la añade nunca: hace falta el ALTER, y hay que tragarse el error de
+        // «ya existe» porque es el caso normal a partir de la segunda vez.
+        let _ = c.execute(
+            "ALTER TABLE metrics_samples ADD COLUMN discos TEXT NOT NULL DEFAULT ''",
+            [],
+        );
+        Ok(())
     })
 }
 
@@ -138,14 +171,36 @@ fn lee_discos(s: &str) -> Vec<(String, f32)> {
 pub fn guarda(host_id: &str, m: &Muestra) -> Result<(), String> {
     ensure_schema()?;
     crate::with_db(|c| {
+        // `disk` SE RELLENA CON EL DISCO MÁS LLENO y no se deja en cero. Es la
+        // columna que lee la V1 para sus proyecciones de capacidad, así que
+        // escribir aquí sin ponerla metería filas que la otra mitad de Lucy lee
+        // como «disco al 0 %» — y una serie con ceros intercalados no da una
+        // tendencia mala, da una tendencia que baja.
+        //
+        // El más lleno y no el primero: es el que se va a llenar antes, que es
+        // la pregunta que la columna contesta.
+        let peor = m.discos.iter().map(|(_, p)| *p).fold(0.0_f32, f32::max);
         c.execute(
-            "INSERT INTO metric_samples (host_id, ts, cpu, mem, discos)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            rusqlite::params![host_id, m.ts, m.cpu as f64, m.mem as f64, escribe_discos(&m.discos)],
+            "INSERT INTO metrics_samples (host_id, ts, cpu, ram, disk, discos)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                host_id,
+                m.ts,
+                m.cpu as f64,
+                m.mem as f64,
+                peor as f64,
+                escribe_discos(&m.discos)
+            ],
         )
         .map_err(|e| e.to_string())?;
+        // LA PODA SOLO SE LLEVA LO SUYO. La V1 guarda medias horarias
+        // (`is_hourly = 1`) durante noventa días, y este módulo conserva treinta:
+        // sin el filtro, escribir una muestra desde el shell nativo borraría dos
+        // meses del historial resumido de la otra mitad. Un borrado que nadie
+        // pidió, disparado por una escritura de rutina.
         c.execute(
-            "DELETE FROM metric_samples WHERE host_id = ?1 AND ts < ?2",
+            "DELETE FROM metrics_samples
+             WHERE host_id = ?1 AND ts < ?2 AND is_hourly = 0",
             rusqlite::params![host_id, m.ts - DIAS * 86_400],
         )
         .map_err(|e| e.to_string())?;
@@ -157,19 +212,39 @@ pub fn guarda(host_id: &str, m: &Muestra) -> Result<(), String> {
 pub fn serie(host_id: &str, desde: i64) -> Result<Vec<Muestra>, String> {
     ensure_schema()?;
     crate::with_db(|c| {
+        // LAS HORARIAS FUERA. Una media de una hora y una muestra de un minuto
+        // pesan lo mismo en una regresión, así que mezclarlas le da a cada hora
+        // del historial largo de la V1 el peso de un minuto del reciente. La
+        // pendiente que sale de ahí no es de nada.
+        //
+        // `disk` COMO RESPALDO de `discos`: las filas que escribió la V1 no
+        // tienen el detalle por punto de montaje —esa columna es nueva— pero sí
+        // el porcentaje del disco principal. Descartarlas dejaría a la V2 sin la
+        // parte del historial que justamente venía a aprovechar.
         let mut st = c
             .prepare(
-                "SELECT ts, cpu, mem, discos FROM metric_samples
-                 WHERE host_id = ?1 AND ts >= ?2 ORDER BY ts ASC",
+                "SELECT ts, cpu, ram, discos, disk FROM metrics_samples
+                 WHERE host_id = ?1 AND ts >= ?2 AND is_hourly = 0
+                 ORDER BY ts ASC",
             )
             .map_err(|e| e.to_string())?;
         let filas = st
             .query_map(rusqlite::params![host_id, desde], |r| {
+                let detalle = lee_discos(&r.get::<_, String>(3)?);
+                let discos = if detalle.is_empty() {
+                    let pct = r.get::<_, f64>(4)? as f32;
+                    // Sin nombre de montaje: no se sabe cuál era. Se le pone uno
+                    // que lo diga en vez de inventarse `C:\`, que sería
+                    // afirmar algo que la fila no contiene.
+                    if pct > 0.0 { vec![("(principal)".to_string(), pct)] } else { Vec::new() }
+                } else {
+                    detalle
+                };
                 Ok(Muestra {
                     ts: r.get(0)?,
                     cpu: r.get::<_, f64>(1)? as f32,
                     mem: r.get::<_, f64>(2)? as f32,
-                    discos: lee_discos(&r.get::<_, String>(3)?),
+                    discos,
                 })
             })
             .map_err(|e| e.to_string())?
