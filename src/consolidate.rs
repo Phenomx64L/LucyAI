@@ -404,7 +404,7 @@ mod tests {
         // compilaba sin `src-tauri` delante. Ver `models.rs` y `schema.rs`.
         let Ok(app) = std::fs::read_to_string(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../src-tauri/src/commands/memory.rs"),
+                .join("../lucy-svelte/src-tauri/src/commands/memory.rs"),
         ) else {
             // Sin la app Tauri al lado no hay a quién vigilar. Se salta.
             return;

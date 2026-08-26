@@ -205,7 +205,7 @@ mod tests {
         // Se lee del fuente y no de una copia, por lo mismo: una copia es otro
         // sitio del que separarse.
         let ruta = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../src-tauri/src/utils/db.rs");
+            .join("../lucy-svelte/src-tauri/src/utils/db.rs");
         let Ok(fuente) = std::fs::read_to_string(&ruta) else {
             // En un consumidor de `lucy-core` que no tenga `src-tauri` al lado,
             // esto no aplica. No se falla: se salta.

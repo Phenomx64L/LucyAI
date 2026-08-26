@@ -100,7 +100,7 @@ mod tests {
     /// núcleo no compilaba sin el frontend de la V1 delante. Ver `models.rs`.
     fn js_fuente() -> Option<String> {
         std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/lib/model-pricing.ts"),
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../lucy-svelte/src/lib/model-pricing.ts"),
         )
         .ok()
     }

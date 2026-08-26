@@ -202,7 +202,7 @@ mod tests {
     /// de `src-tauri`.
     fn js_fuente() -> Option<String> {
         std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/lib/models.js"),
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../lucy-svelte/src/lib/models.js"),
         )
         .ok()
     }
