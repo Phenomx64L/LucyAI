@@ -702,11 +702,32 @@ pub const FRASES: &[Frase] = &[
         "Akzentfarbe",
     ),
     f!(
+        "Comando fallido",
+        "Command failed",
+        "Comando falhado",
+        "Commande échouée",
+        "Befehl fehlgeschlagen",
+    ),
+    f!(
+        "Comando lanzado",
+        "Command launched",
+        "Comando lançado",
+        "Commande lancée",
+        "Befehl gestartet",
+    ),
+    f!(
         "Comando o petición para {equipo}…",
         "Command or request for {equipo}…",
         "Comando ou pedido para {equipo}…",
         "Commande ou demande pour {equipo}…",
         "Befehl oder Anfrage für {equipo}…",
+    ),
+    f!(
+        "Comando terminado",
+        "Command finished",
+        "Comando terminado",
+        "Commande terminée",
+        "Befehl beendet",
     ),
     f!(
         "Comandos disponibles:",
@@ -3414,6 +3435,13 @@ pub const FRASES: &[Frase] = &[
         "{motivo}. Aprova o passo para continuar.",
         "{motivo}. Approuve l'étape pour continuer.",
         "{motivo}. Gib den Schritt frei, um weiterzumachen.",
+    ),
+    f!(
+        "{ms} ms · {n} caracteres de salida",
+        "{ms} ms · {n} characters of output",
+        "{ms} ms · {n} caracteres de saída",
+        "{ms} ms · {n} caractères de sortie",
+        "{ms} ms · {n} Zeichen Ausgabe",
     ),
     f!(
         "{n_claves} de {total}",

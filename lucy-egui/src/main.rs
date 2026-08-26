@@ -5172,9 +5172,28 @@ impl App {
         for (uid, r) in llegados {
             let Some(ti) = self.tabs.iter().position(|t| t.uid == uid) else { continue };
             let (label, detail) = match r {
-                Ok(g) if g.es_nueva() => {
-                    ("Recordado".to_string(), format!("memoria {}", g.id))
-                }
+                // QUÉ APRENDIÓ, no dónde lo puso. Esto decía «memoria 474» y ahí
+                // se acababa. Un número no dice si Lucy se quedó con lo que
+                // hacía falta o con una frase suelta de la conversación — y eso
+                // es lo único que uno quiere vigilar de algo que va a volver en
+                // el prompt de todas las conversaciones siguientes.
+                //
+                // Con las etiquetas, además, se ve cómo lo CATALOGÓ: una
+                // marcada `auto` es rutina y una `leccion` es Lucy sacando una
+                // conclusión, que no valen lo mismo.
+                Ok(g) if g.es_nueva() => (
+                    "Recordado".to_string(),
+                    format!(
+                        "#{} · {}{}",
+                        g.id,
+                        recorta_visual(&g.titulo, 90),
+                        if g.etiquetas.is_empty() {
+                            String::new()
+                        } else {
+                            format!("\n[{}]", g.etiquetas.join(", "))
+                        }
+                    ),
+                ),
                 // «Ya lo sabías» NO es un fallo y no se pinta como tal: es el
                 // dique funcionando, y verlo es la única forma de saber que
                 // funciona.
@@ -6484,7 +6503,31 @@ impl App {
                         theme::acc_bg()
                     };
                     avatar(ui, "✦", theme::acc(), bg);
-                    ui.vertical(|ui| {
+                    // EL ANCHO SE LIMITA AQUÍ, y no estaba. La burbuja del
+                    // operador lo hace treinta líneas más arriba —`set_max_width`
+                    // sobre `bubble_w`— y el mensaje de Lucy no lo hacía:
+                    // entraba en un `vertical` dentro de un `horizontal`, y ahí
+                    // egui no impone un tope, así que el markdown se maquetaba a
+                    // su aire y lo que sobraba lo recortaba el panel.
+                    //
+                    // El resultado es lo que se veía: la respuesta de Lucy
+                    // cortada a media palabra contra el borde del carril
+                    // derecho, sin barra de desplazamiento y sin forma de leer
+                    // el resto. Estrechar el carril tampoco servía, porque el
+                    // texto no volvía a fluir: seguía maquetado igual de ancho.
+                    //
+                    // 34 es el avatar (24) más la separación de la fila (10).
+                    //
+                    // Se reserva el hueco con `allocate_ui_with_layout` —igual
+                    // que la burbuja del operador— y no tocando el `max_width`
+                    // del `horizontal`, que ya lleva el avatar dentro y quedaría
+                    // a medio maquetar.
+                    let ancho_msg = (full - 34.0).max(200.0);
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(ancho_msg, 0.0),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| {
+                        ui.set_max_width(ancho_msg);
                         row_align(ui, 18.0, egui::Align::Max, |ui| {
                             ui.spacing_mut().item_spacing.x = 7.0;
                             ui.label(
@@ -6580,7 +6623,8 @@ impl App {
                                 a => accion = Some((i, a)),
                             }
                         }
-                    });
+                    },
+                    );
                 });
             }
             });
@@ -9385,6 +9429,29 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
             },
         };
 
+        // QUE SE LANZÓ, EN EL CARRIL. No estaba, y su ausencia es la que hace
+        // invisible el peor final: un paso aprobado que se queda en «▸ en curso»
+        // sin nada más. El operador ve el plan quieto y no tiene forma de saber
+        // si el comando salió, si murió al arrancar o si nadie lo recogió — el
+        // carril de Ejecución solo se rellena cuando VUELVE algo.
+        //
+        // Con la marca de tiempo delante, además, el que se cuelga se nota por
+        // la distancia entre esta línea y la que tenía que seguirla.
+        self.tabs[ti].ws.trace_push(lucy_core::agent::TraceEntry {
+            phase: "act".into(),
+            label: i18n::tr("Comando lanzado").into(),
+            detail: format!(
+                "{}{}\n{}",
+                if elevated { "elevado · " } else { "" },
+                match &remoto {
+                    Some(h) => h.name.clone(),
+                    None => i18n::tr("este equipo").to_string(),
+                },
+                recorta_visual(&cmd, 240)
+            ),
+            ..Default::default()
+        });
+
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let t0 = Instant::now();
@@ -9479,6 +9546,38 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
         // "sigo usando esta pestaña"— sobre un aviso falso.
         let g = lucy_core::guard::scan(&body, lucy_core::guard::Role::Tool);
         let retenido = g.decision == lucy_core::guard::Decision::Block;
+
+        // Y QUE VOLVIÓ, con qué y cuánto tardó. Es la línea que cierra la de
+        // «Comando lanzado»: sin ella, el carril no distingue un comando que
+        // sigue corriendo de uno cuyo resultado se perdió por el camino.
+        //
+        // El TAMAÑO de la salida y no la salida: el volcado crudo es del carril
+        // de Ejecución, y meterlo aquí también sería tenerlo dos veces. Lo que
+        // este carril contesta es «pasó algo y cuánto», no «qué dijo».
+        self.tabs[ti].ws.trace_push(lucy_core::agent::TraceEntry {
+            phase: if ok { "react".into() } else { "error".into() },
+            label: if ok {
+                i18n::tr("Comando terminado").into()
+            } else {
+                i18n::tr("Comando fallido").into()
+            },
+            detail: i18n::trf(
+                "{ms} ms · {n} caracteres de salida",
+                &[("ms", &ms.to_string()), ("n", &body.chars().count().to_string())],
+            ),
+            ..Default::default()
+        });
+        if retenido {
+            // EL GUARDRAIL, DICHO. Retener la salida y no anotarlo deja al
+            // operador viendo cómo Lucy contesta sobre un comando cuyo volcado
+            // no le llegó, sin nada que lo explique.
+            self.tabs[ti].ws.trace_push(lucy_core::agent::TraceEntry {
+                phase: "error".into(),
+                label: i18n::tr("Salida retenida por el guardrail").into(),
+                detail: g.reason.clone(),
+                ..Default::default()
+            });
+        }
 
         // DÓNDE CORRIÓ, no solo con qué. `engine` ponía "PS" a secas también para
         // los pasos remotos, así que el carril que sirve para auditar no permitía
