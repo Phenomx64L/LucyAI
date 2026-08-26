@@ -1782,7 +1782,14 @@ fn db_path() -> Option<PathBuf> {
 fn load_memories() -> Result<Vec<AgentMemory>, String> {
     let path = db_path().ok_or("no se pudo resolver %APPDATA%")?;
     lucy_core::schema::init_or_create(&path)?;
-    lucy_core::get_recent_memories(Some(300))
+    // `navegar_memorias` Y NO `get_recent_memories`. Aquélla es la ventana del
+    // PROMPT y se recorta a cincuenta pase lo que pase, así que el `Some(300)`
+    // que había aquí devolvía cincuenta sin decirlo, y la pestaña rotulaba
+    // «50 de 50 memorias vivas» habiendo 52. No es un recorte visible: es una
+    // cifra que afirma ser el total.
+    //
+    // Hoy esconde dos y por eso nadie lo había visto. Crece solo.
+    lucy_core::navegar_memorias(None)
 }
 
 fn rel_time(created_at: i64) -> String {
@@ -16955,6 +16962,23 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                             || m.title.to_lowercase().contains(&q)
                             || m.content.to_lowercase().contains(&q)
                             || m.tags.to_lowercase().contains(&q)
+                            // POR EL NÚMERO TAMBIÉN. Cada tarjeta pinta su id
+                            // abajo —«#468»— y el carril de Trace dice «memoria
+                            // 468» al guardarla. Con las dos cosas a la vista, lo
+                            // natural es escribir ese número aquí; y como el
+                            // filtro solo miraba texto, la respuesta era una
+                            // lista vacía. Que es indistinguible de «esa memoria
+                            // no existe», y llevó a pensar que Lucy mentía al
+                            // decir que la había guardado.
+                            //
+                            // Se acepta con y sin almohadilla: se copia de los
+                            // dos sitios y en uno la lleva.
+                            || {
+                                let n = q.trim_start_matches('#');
+                                !n.is_empty()
+                                    && n.chars().all(|c| c.is_ascii_digit())
+                                    && m.id.to_string() == n
+                            }
                     })
                     .collect();
                 ui.label(
