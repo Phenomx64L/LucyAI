@@ -10014,8 +10014,23 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
         }
     }
 
+    /// El carril de Ejecución: qué se corrió y qué contestó.
+    ///
+    /// EL COMANDO SE PARTE Y LA SALIDA NO, y son dos decisiones distintas sobre
+    /// el mismo problema. Los dos se salían del panel y se recortaban contra su
+    /// borde —el operador lo reportó como «se pierde texto»— pero no valen el
+    /// mismo arreglo:
+    ///
+    ///   · UN COMANDO se lee igual partido en tres líneas, y así se ve entero.
+    ///     Es lo que ya hace el carril de Plan.
+    ///
+    ///   · UNA SALIDA suele ser una TABLA. `Get-WinEvent` devuelve columnas
+    ///     alineadas con espacios, y partirlas por el ancho del panel destruye
+    ///     justo lo que las hace legibles: las columnas dejan de estar debajo de
+    ///     su cabecera. Se desplaza en horizontal, que conserva la forma.
     fn ws_exec(&mut self, ui: &mut egui::Ui) {
-        for e in &self.tabs[self.tab].ws.exec {
+        let ancho = ui.available_width();
+        for (i, e) in self.tabs[self.tab].ws.exec.iter().enumerate() {
             ui.add_space(6.0);
             egui::Frame::none()
                 .fill(theme::bg3())
@@ -10023,36 +10038,64 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                 .rounding(egui::Rounding::same(theme::R_SM))
                 .inner_margin(egui::Margin::same(10.0))
                 .show(ui, |ui| {
-                    ui.horizontal(|ui| {
+                    ui.set_max_width((ancho - 20.0).max(160.0));
+                    ui.horizontal_top(|ui| {
                         ui.label(
                             egui::RichText::new(if e.ok { "✓" } else { "✕" })
                                 .size(11.0)
                                 .color(if e.ok { theme::acc() } else { theme::red() }),
                         );
-                        ui.label(
-                            egui::RichText::new(&e.cmd)
-                                .size(theme::FS_CAPTION)
-                                .monospace()
-                                .color(theme::txt()),
+                        // `wrap()` explícito: en un `horizontal`, un `Label`
+                        // hereda «no partas» y crece hasta donde haga falta.
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(&e.cmd)
+                                    .size(theme::FS_CAPTION)
+                                    .monospace()
+                                    .color(theme::txt()),
+                            )
+                            .wrap(),
                         );
                     });
                     if !e.output.is_empty() {
                         ui.add_space(4.0);
-                        ui.label(
-                            egui::RichText::new(&e.output)
-                                .size(theme::FS_CAPTION)
-                                .monospace()
-                                .color(theme::txt3()),
-                        );
+                        egui::ScrollArea::horizontal()
+                            .id_salt(("exec-out", i))
+                            // Sin encogerse: si no, el área toma el ancho del
+                            // texto y volvemos a empujar el panel.
+                            .auto_shrink([false, true])
+                            .max_height(260.0)
+                            .show(ui, |ui| {
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(&e.output)
+                                            .size(theme::FS_CAPTION)
+                                            .monospace()
+                                            .color(theme::txt3()),
+                                    )
+                                    // NO se parte: es lo que conserva las
+                                    // columnas alineadas.
+                                    .wrap_mode(egui::TextWrapMode::Extend),
+                                );
+                            });
                     }
                 });
         }
     }
 
     fn ws_trace(&mut self, ui: &mut egui::Ui) {
+        // EL ANCHO, PORQUE AHORA ENTRAN COMANDOS. El detalle de una entrada era
+        // media línea —«578 caracteres en 9.1 s»— y con eso nada se salía. Desde
+        // que el carril anota «Comando lanzado» con el comando dentro, el detalle
+        // puede medir doscientos caracteres, y un `vertical` dentro de un
+        // `horizontal` no tiene tope: se recortaría contra el borde del panel,
+        // que es el mismo fallo que ya se arregló en la conversación.
+        //
+        // 46 es el chip de la fase más las dos separaciones.
+        let ancho = (ui.available_width() - 46.0).max(140.0);
         for t in &self.tabs[self.tab].ws.trace {
             ui.add_space(5.0);
-            ui.horizontal(|ui| {
+            ui.horizontal_top(|ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
                 // La fase va en su propio chip: en una lista larga es por lo
                 // que se busca, no por la etiqueta.
@@ -10068,20 +10111,31 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                                 .color(theme::txt3()),
                         );
                     });
-                ui.vertical(|ui| {
-                    ui.label(
-                        egui::RichText::new(&t.label)
-                            .size(theme::FS_CAPTION)
-                            .color(theme::txt2()),
-                    );
-                    if !t.detail.is_empty() {
-                        ui.label(
-                            egui::RichText::new(&t.detail)
-                                .size(theme::FS_CAPTION)
-                                .color(theme::faint()),
+                ui.allocate_ui_with_layout(
+                    egui::vec2(ancho, 0.0),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        ui.set_max_width(ancho);
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(&t.label)
+                                    .size(theme::FS_CAPTION)
+                                    .color(theme::txt2()),
+                            )
+                            .wrap(),
                         );
-                    }
-                });
+                        if !t.detail.is_empty() {
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(&t.detail)
+                                        .size(theme::FS_CAPTION)
+                                        .color(theme::faint()),
+                                )
+                                .wrap(),
+                            );
+                        }
+                    },
+                );
             });
         }
     }
