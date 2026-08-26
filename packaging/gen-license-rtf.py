@@ -2,11 +2,18 @@
 
 Se genera en vez de guardarse a mano: así no puede quedarse desincronizada del
 LICENSE de verdad, que es el que vale.
+
+RELATIVO Y NO ABSOLUTO, y del propio repositorio. Aquí había dos rutas absolutas
+con la unidad y la carpeta de proyectos dentro: solo funcionaban en esta máquina
+y en este disco, y una de ellas apuntaba al repositorio de la V1 —o sea que
+generar la licencia del instalador de la cara nueva necesitaba la cara vieja—.
 """
 import io
+import os
 
-FUENTE = r'C:\X\Rust_Projects\lucy-svelte\LICENSE'
-DESTINO = r'C:\X\Rust_Projects\lucy-native-proto\packaging\license.rtf'
+AQUI = os.path.dirname(os.path.abspath(__file__))
+FUENTE = os.path.join(AQUI, 'assets', 'LICENSE')
+DESTINO = os.path.join(AQUI, 'license.rtf')
 
 texto = io.open(FUENTE, encoding='utf-8', errors='replace').read()
 

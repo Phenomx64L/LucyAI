@@ -65,11 +65,11 @@ VIAddVersionKey "ProductVersion"  "${VERSION}"
 VIAddVersionKey "LegalCopyright"  "Copyright © 2026 ${EDITOR}. GPLv3."
 VIAddVersionKey "CompanyName"     "${EDITOR}"
 
-!define MUI_ICON   "..\..\lucy-svelte\src-tauri\icons\icon.ico"
-!define MUI_UNICON "..\..\lucy-svelte\src-tauri\icons\icon.ico"
+!define MUI_ICON   "assets\icon.ico"
+!define MUI_UNICON "assets\icon.ico"
 !define MUI_HEADERIMAGE
-!define MUI_HEADERIMAGE_BITMAP "..\..\lucy-svelte\src-tauri\icons\installer-header.bmp"
-!define MUI_WELCOMEFINISHPAGE_BITMAP "..\..\lucy-svelte\src-tauri\icons\installer-sidebar.bmp"
+!define MUI_HEADERIMAGE_BITMAP "assets\installer-header.bmp"
+!define MUI_WELCOMEFINISHPAGE_BITMAP "assets\installer-sidebar.bmp"
 !define MUI_ABORTWARNING
 
 ; EL SELECTOR SALE SIEMPRE, no solo cuando Windows está en un idioma que no
@@ -81,7 +81,7 @@ VIAddVersionKey "CompanyName"     "${EDITOR}"
 !define MUI_LANGDLL_REGISTRY_VALUENAME "Installer Language"
 
 !insertmacro MUI_PAGE_WELCOME
-!insertmacro MUI_PAGE_LICENSE "..\..\lucy-svelte\LICENSE"
+!insertmacro MUI_PAGE_LICENSE "assets\LICENSE"
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 !define MUI_FINISHPAGE_RUN "$INSTDIR\${EXE}"
@@ -111,7 +111,7 @@ Section "Lucy" SecPrincipal
     SectionIn RO
     SetOutPath "$INSTDIR"
     File "..\..\lucy-native-proto\target\release\${EXE}"
-    File "..\..\lucy-svelte\LICENSE"
+    File "assets\LICENSE"
 
     ; EL IDIOMA ELEGIDO SE LE PASA A LUCY. Sin esto, el selector solo cambiaría
     ; el idioma del instalador — cinco minutos de vida— y la aplicación

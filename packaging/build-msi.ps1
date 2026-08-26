@@ -19,8 +19,11 @@ $wix     = "$env:LOCALAPPDATA\tauri\WixTools314"
 $version = if ($Version) { $Version } else { & (Join-Path $aqui 'version.ps1') }
 
 $exe     = Join-Path $raiz 'target\release\lucy-egui.exe'
-$icono   = Join-Path (Split-Path -Parent $raiz) 'lucy-svelte\src-tauri\icons\icon.ico'
-$licencia= Join-Path (Split-Path -Parent $raiz) 'lucy-svelte\LICENSE'
+# DEL PROPIO REPOSITORIO. Salían de `lucy-svelte\src-tauri\icons`, así que no se
+# podía empaquetar Lucy sin tener el repositorio de la V1 al lado — el
+# instalador de la cara nueva dependía de la cara que se está retirando.
+$icono   = Join-Path $aqui 'assets\icon.ico'
+$licencia= Join-Path $aqui 'assets\LICENSE'
 $rtf     = Join-Path $aqui 'license.rtf'
 $dist    = Join-Path $raiz 'dist'
 $obj     = Join-Path $aqui 'obj'
