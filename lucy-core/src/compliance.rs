@@ -106,8 +106,24 @@ struct EsperaJson {
     exit_code: Option<i32>,
 }
 
-const CIS_WINDOWS: &str = include_str!("../../src/lib/compliance/cis-windows.json");
-const CIS_LINUX: &str = include_str!("../../src/lib/compliance/cis-linux.json");
+/// LOS CATÁLOGOS SON DEL NÚCLEO, y ahora viven aquí.
+///
+/// Estaban en `src/lib/compliance/` — la carpeta del frontend SvelteKit— y se
+/// traían con un `include_str!` que subía dos niveles y se metía en el otro
+/// proyecto. Eso hacía que `lucy-core` NO COMPILARA sin el repositorio de la V1
+/// al lado: no una dependencia de datos que se pudiera echar de menos en tiempo
+/// de ejecución, sino un error del compilador. El «corazón sin Tauri» no
+/// arrancaba sin la mitad Tauri.
+///
+/// Y el sitio era el equivocado por más de una razón. Una regla CIS no es
+/// presentación: dice qué comando se ejecuta en la máquina de alguien y qué
+/// salida se considera conforme. Que viviera en la carpeta de los componentes de
+/// interfaz significaba que quien reorganizara el frontend podía moverla sin
+/// enterarse de que estaba rompiendo el motor de cumplimiento.
+///
+/// El frontend de la V1 las sigue leyendo, ahora desde aquí.
+const CIS_WINDOWS: &str = include_str!("../assets/compliance/cis-windows.json");
+const CIS_LINUX: &str = include_str!("../assets/compliance/cis-linux.json");
 
 /// El catálogo que le toca a un equipo.
 pub fn catalogo(windows: bool) -> Vec<Check> {

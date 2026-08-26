@@ -12,8 +12,11 @@
     import Lightbulb from '@tabler/icons-svelte/icons/bulb';
     import { complianceReports } from '$lib/stores';
     import { exportCompliancePdf } from '$lib/reports/ReportGenerator';
-    import cisLinux from '$lib/compliance/cis-linux.json';
-    import cisWindows from '$lib/compliance/cis-windows.json';
+    // Los catálogos viven en `lucy-core/assets/compliance/`: los lee el motor de
+    // cumplimiento en Rust, y mientras estuvieron aquí ese crate no compilaba
+    // sin este repositorio al lado. Ver el alias en `svelte.config.js`.
+    import cisLinux from '$compliance/cis-linux.json';
+    import cisWindows from '$compliance/cis-windows.json';
 
     const dispatch = createEventDispatcher();
 

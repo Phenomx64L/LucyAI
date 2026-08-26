@@ -47,9 +47,28 @@ fn carpeta_nueva(que: &str) -> PathBuf {
 }
 
 /// Abre una base propia. Idempotente: el pool es global y solo se abre una vez.
+///
+/// UNA CARPETA Y NO SEIS. Esto creaba una nueva en cada llamada, y como el pool
+/// es un `OnceLock` solo servía la primera: las otras cinco quedaban en la
+/// temporal del sistema para siempre. Con seis tests y unas cuantas ejecuciones
+/// al día eso son cientos de carpetas huérfanas, que es como se llega a una
+/// temporal donde ya no se encuentra nada.
 fn con_base() {
-    let db = carpeta_nueva("wd-base").join("lucy.db");
-    let _ = lucy_core::schema::init_or_create(&db);
+    static UNA_VEZ: std::sync::Once = std::sync::Once::new();
+    UNA_VEZ.call_once(|| {
+        let db = carpeta_nueva("wd-base").join("lucy.db");
+        let _ = lucy_core::schema::init_or_create(&db);
+    });
+}
+
+/// Se lleva por delante lo que creó el test.
+///
+/// No es limpieza por gusto: cada test crea su carpeta de trabajo y `resuelve`
+/// mira si las cosas EXISTEN. Dejarlas puestas hace que una ejecución vea los
+/// restos de la anterior, que es la clase de test que pasa hasta el día que
+/// alguien limpia la temporal.
+fn borra(d: &std::path::Path) {
+    let _ = std::fs::remove_dir_all(d);
 }
 
 #[test]
@@ -84,6 +103,8 @@ fn elegir_una_carpeta_cambia_donde_acaban_los_ficheros() {
     let ya = trabajo.join("ya-estaba.log");
     std::fs::write(&ya, "x").unwrap();
     assert_eq!(lucy_core::tools::resuelve("ya-estaba.log"), ya);
+
+    borra(&trabajo);
 }
 
 #[test]
@@ -98,6 +119,8 @@ fn una_ruta_completa_sigue_mandando() {
     for p in [r"C:\Windows\System32\drivers\etc\hosts", r"\\servidor\recurso\log.txt"] {
         assert_eq!(lucy_core::tools::resuelve(p).display().to_string(), p);
     }
+
+    borra(&trabajo);
 }
 
 #[test]
@@ -127,6 +150,8 @@ fn el_prompt_dice_la_carpeta_elegida_y_le_pide_que_no_pregunte() {
             assert!(!s.contains(&p), "el prompt sigue nombrando el directorio del proceso");
         }
     }
+
+    borra(&trabajo);
 }
 
 #[test]
@@ -151,6 +176,8 @@ fn olvidarlo_vuelve_a_la_carpeta_personal_y_nunca_a_la_del_proceso() {
             assert_ne!(d, proceso, "se volvió al directorio del proceso");
         }
     }
+
+    borra(&trabajo);
 }
 
 #[test]
@@ -196,4 +223,6 @@ fn preguntar_antes_de_que_la_base_este_abierta_no_deja_el_ajuste_muerto() {
         "una relectura no recupera lo que el operador eligió"
     );
     assert_eq!(lucy_core::workdir::actual(), trabajo);
+
+    borra(&trabajo);
 }

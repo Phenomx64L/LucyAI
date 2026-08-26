@@ -186,23 +186,37 @@ pub fn filter(query: &str) -> Vec<(&'static ModelGroup, Vec<&'static ModelOption
 mod tests {
     use super::*;
 
-    /// El `models.js` de la app real, embebido SOLO en el test.
+    /// El `models.js` de la app real. `None` si no está al lado.
     ///
-    /// En el binario no entra: el catálogo de producción es el de arriba, y
-    /// hacer que la biblioteca dependiera en compilación de un fichero del
-    /// frontend haría que lucy-core no compilara fuera de este repo.
-    const JS: &str = include_str!("../../src/lib/models.js");
+    /// SE LEE EN EJECUCIÓN Y NO CON `include_str!`, y el comentario que había
+    /// aquí explicaba exactamente por qué hacía falta cambiarlo sin darse
+    /// cuenta de que no bastaba: decía que embeberlo «haría que lucy-core no
+    /// compilara fuera de este repo» y luego lo embebía con `include_str!`.
+    /// Estar dentro de `#[cfg(test)]` salva al binario, no a `cargo test`: la
+    /// macro se resuelve al compilar, así que la batería de pruebas del núcleo
+    /// tampoco compilaba sin el frontend de la V1 delante.
+    ///
+    /// Leyéndolo en ejecución, quien tenga la V1 al lado sigue teniendo el
+    /// guardián —que es lo que hace legítimo el catálogo duplicado— y quien no,
+    /// se lo salta. Es el mismo patrón que ya usaba `schema.rs` con el esquema
+    /// de `src-tauri`.
+    fn js_fuente() -> Option<String> {
+        std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/lib/models.js"),
+        )
+        .ok()
+    }
 
     /// Extrae las entradas de `LLM_GROUPS` en orden.
     ///
     /// Se recorta primero a ese array: `models.js` tiene otros dos literales de
     /// modelo fuera de él —el respaldo inicial del store y el que añade
     /// `refreshLocalModels`— y contarlos daría un desajuste que no existe.
-    fn js_entries() -> Vec<(String, String, String)> {
-        let start = JS
+    fn js_entries(js: &str) -> Vec<(String, String, String)> {
+        let start = js
             .find("export const LLM_GROUPS")
             .expect("LLM_GROUPS ya no está en models.js");
-        let body = &JS[start..];
+        let body = &js[start..];
         let end = body.find("\n];").expect("no se encontró el fin del array");
         let body = &body[..end];
 
@@ -233,7 +247,9 @@ mod tests {
         // aquí, o cambia un icono, o reordena un grupo, esto falla diciendo
         // exactamente qué no cuadra — en vez de que el shell nativo ofrezca en
         // silencio un catálogo de hace tres meses.
-        let js = js_entries();
+        // Sin la V1 al lado no hay con qué comparar. Se salta, no se falla.
+        let Some(fuente) = js_fuente() else { return };
+        let js = js_entries(&fuente);
         let rs: Vec<(String, String, String)> = GROUPS
             .iter()
             .flat_map(|g| g.options.iter())
@@ -254,7 +270,8 @@ mod tests {
 
     #[test]
     fn los_proveedores_son_los_mismos_y_en_el_mismo_orden() {
-        let js: Vec<&str> = JS
+        let Some(fuente) = js_fuente() else { return };
+        let js: Vec<&str> = fuente
             .lines()
             .filter_map(|l| {
                 let l = l.trim();

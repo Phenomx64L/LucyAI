@@ -41,7 +41,9 @@
   }
   import { invoke } from '@tauri-apps/api/core';
   import { copyToClipboard } from '$lib/lucy-api';
-  import cisWindows from '$lib/compliance/cis-windows.json';
+  // Ver el alias `$compliance` en `svelte.config.js`: el catálogo se mudó a
+  // `lucy-core`, que es quien lo ejecuta.
+  import cisWindows from '$compliance/cis-windows.json';
   import ShieldCheck from '@tabler/icons-svelte/icons/shield-check';
   import ScanSearch from '@tabler/icons-svelte/icons/scan';
   import CircleCheck from '@tabler/icons-svelte/icons/circle-check';
