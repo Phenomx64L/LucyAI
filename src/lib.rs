@@ -145,6 +145,9 @@ pub mod system;
 /// Las herramientas de LECTURA que Lucy puede pedir. Antes se anotaban y no se
 /// cumplían, que parece que funcionó.
 pub mod tools;
+/// La foto de salud de un equipo remoto. Era lo último que ataba una pantalla
+/// del shell nativo a la V1.
+pub mod health;
 /// La conversación que viaja al modelo, y su recorte.
 pub mod turns;
 /// Dónde trabaja Lucy cuando no se le dice dónde. Antes eran cuatro sitios que
