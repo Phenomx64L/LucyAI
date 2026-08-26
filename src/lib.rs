@@ -271,6 +271,12 @@ where
 ///
 /// El tope de 50 es el de la app: es lo que se ha enviado siempre, y la ventana
 /// que la inyección de contexto asume por turno.
+///
+/// ES PARA EL PROMPT, NO PARA NAVEGAR. Se recorta a 50 pase lo que pase —
+/// `limit.min(50)`—, así que pedirle 300 devuelve 50 sin decirlo. La pestaña de
+/// Memoria la usaba para llenar su lista y rotulaba «50 de 50 memorias vivas»
+/// cuando había 52: no un recorte visible, una cifra que afirma ser el total.
+/// Para navegar está `navegar_memorias`.
 pub fn get_recent_memories(limit: Option<i64>) -> Result<Vec<AgentMemory>, String> {
     with_db(|conn| {
         let lim = limit.unwrap_or(15).max(1).min(50);
@@ -297,6 +303,59 @@ pub fn get_recent_memories(limit: Option<i64>) -> Result<Vec<AgentMemory>, Strin
                 })
             })
             .map_err(|e| format!("get_recent query: {e}"))?;
+        Ok(rows.flatten().collect())
+    })
+}
+
+/// Las memorias vivas para NAVEGARLAS, no para meterlas en el prompt.
+///
+/// LA MISMA FUNCIÓN NO PUEDE SERVIR PARA LAS DOS COSAS, y servía. La ventana del
+/// prompt tiene que ser corta —cincuenta memorias son las que caben en un turno
+/// sin comerse el contexto— y la lista que mira una persona tiene que estar
+/// entera: si no, no se puede encontrar lo que se busca, y peor, no se sabe que
+/// falta. La pestaña de Memoria pedía 300 y recibía 50 por el recorte de la otra.
+///
+/// HOY ESCONDE DOS, Y ESE ES EL PROBLEMA. Con 52 memorias vivas el daño es
+/// invisible, y por eso lleva ahí sin que nadie lo note: la lista parece
+/// completa. El número crece solo —cada conversación deja alguna— y el día que
+/// haya doscientas seguirá diciendo «50 de 50». Un tope que miente poco hoy es
+/// el mismo tope que mentirá mucho, y no habrá nada nuevo que lo delate.
+///
+/// Y EL ORDEN TAMBIÉN CAMBIA. Aquélla ordena por importancia, que es lo correcto
+/// para elegir qué cabe en un turno. Para navegar es al revés: lo que uno viene
+/// a buscar suele ser lo último que pasó, y ordenar por importancia lo entierra
+/// bajo cuatrocientas más viejas. Aquí van las fijadas arriba —que es donde el
+/// operador las puso a propósito— y después por fecha.
+///
+/// El tope existe igual, pero es de cordura y no de diseño: veinte mil filas en
+/// una lista de la interfaz no las mira nadie, y son el aviso de que hace falta
+/// paginar de verdad.
+pub fn navegar_memorias(limit: Option<i64>) -> Result<Vec<AgentMemory>, String> {
+    with_db(|conn| {
+        let lim = limit.unwrap_or(2_000).max(1).min(20_000);
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, session_id, title, content, tags, files, importance, created_at \
+                 FROM agent_memories \
+                 WHERE (superseded_by IS NULL OR superseded_by = '') \
+                   AND session_id NOT LIKE 'pdf:%' \
+                 ORDER BY pinned DESC, created_at DESC LIMIT ?1",
+            )
+            .map_err(|e| format!("navegar prepare: {e}"))?;
+        let rows = stmt
+            .query_map([lim], |r| {
+                Ok(AgentMemory {
+                    id: r.get(0)?,
+                    session_id: r.get(1)?,
+                    title: r.get(2)?,
+                    content: r.get(3)?,
+                    tags: r.get(4)?,
+                    files: r.get(5)?,
+                    importance: r.get(6)?,
+                    created_at: r.get(7)?,
+                })
+            })
+            .map_err(|e| format!("navegar query: {e}"))?;
         Ok(rows.flatten().collect())
     })
 }
