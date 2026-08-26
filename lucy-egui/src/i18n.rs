@@ -1034,6 +1034,18 @@ pub const FRASES: &[Frase] = &[
         "Die Datei hat keine Zeilen.",
     ),
     f!(
+        "El hilo que traía la respuesta terminó sin decir nada. Es un fallo dentro de \
+         Lucy, no del proveedor: vuelve a mandar la orden.",
+        "The thread carrying the reply ended without a word. That's a fault inside Lucy, \
+         not the provider's: send the order again.",
+        "A tarefa que trazia a resposta terminou sem dizer nada. É uma falha dentro da \
+         Lucy, não do fornecedor: envie a ordem outra vez.",
+        "Le fil qui apportait la réponse s'est terminé sans rien dire. C'est une panne \
+         interne de Lucy, pas du fournisseur : renvoyez la commande.",
+        "Der Thread mit der Antwort endete wortlos. Das ist ein Fehler in Lucy, nicht \
+         beim Anbieter: Schick den Befehl noch einmal.",
+    ),
+    f!(
         "El modelo se queda corto",
         "The model isn't up to it",
         "O modelo fica aquém",

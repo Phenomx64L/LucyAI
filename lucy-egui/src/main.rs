@@ -4766,7 +4766,36 @@ impl App {
             let mut done = false;
             let mut fallo: Option<String> = None;
             if let Some(rx) = &t.rx {
-                while let Ok(ev) = rx.try_recv() {
+                loop {
+                    // `while let Ok(..)` TRATABA IGUAL DOS COSAS QUE NO LO SON:
+                    // «todavía no hay nada» y «el hilo se murió». La primera es
+                    // lo normal sesenta veces por segundo; la segunda es que el
+                    // hilo que trae la respuesta terminó SIN mandar `Done` ni
+                    // `Error`, que solo pasa si entró en pánico.
+                    //
+                    // Salían las dos por la misma puerta, así que `done` se
+                    // quedaba en `false`, `t.rx` en `Some`, y `busy()` —que es
+                    // `rx.is_some()`— devolvía `true` PARA SIEMPRE. La pestaña se
+                    // queda escribiendo, con su cursor parpadeando, sin admitir
+                    // otra orden y sin nada que la desbloquee salvo cerrarla. Y
+                    // el proveedor no tiene la culpa: el fallo está dentro.
+                    let ev = match rx.try_recv() {
+                        Ok(ev) => ev,
+                        Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                            // Los mensajes ya encolados se entregan ANTES que la
+                            // desconexión, así que llegar aquí significa de
+                            // verdad que no vino ningún cierre — no es una
+                            // carrera con un `Done` que venía de camino.
+                            fallo = Some(i18n::tr(
+                                "El hilo que traía la respuesta terminó sin decir nada. Es \
+                                 un fallo dentro de Lucy, no del proveedor: vuelve a mandar \
+                                 la orden.",
+                            ).to_string());
+                            done = true;
+                            break;
+                        }
+                    };
                     match ev {
                         // NO va directo al mensaje: entra en la cola y se
                         // revela a ritmo. Pintarlo en cuanto llega es lo que
@@ -4791,6 +4820,17 @@ impl App {
                             done = true;
                             break;
                         }
+                    }
+                }
+            }
+            // Y EL AVISO TAMBIÉN AL MENSAJE, no solo al carril de Trace. Un
+            // turno que muere en silencio deja media respuesta en pantalla sin
+            // ninguna marca de que está cortada, y eso se lee como si Lucy
+            // hubiera terminado ahí.
+            if let Some(e) = &fallo {
+                if matches!(t.log.last(), Some(m) if !m.text.contains(e.as_str())) {
+                    if let Some(last) = t.log.last_mut() {
+                        last.text.push_str(&format!("\n\n⚠ {e}"));
                     }
                 }
             }
@@ -5334,6 +5374,15 @@ impl eframe::App for App {
         self.pump_pending();
         self.pump_nx_test();
         self.pump_nx_conn();
+        // Y EL DE LA EJECUCIÓN REMOTA, que estaba dentro de `nx_remote` — o sea,
+        // solo mientras se dibuja ese panel. Sus dos hermanos de arriba llevaban
+        // aquí desde el principio y éste se quedó fuera, con el mismo motivo
+        // escrito dos líneas más abajo para `pump_logs`: un comando remoto que
+        // termina mientras el operador está en el Dashboard tiene que quedar
+        // cerrado, no esperando a que alguien vuelva a mirar. Mientras tanto la
+        // salida se acumulaba en el canal y el indicador seguía girando sobre un
+        // hilo que había acabado.
+        self.pump_nx_remote();
         // Fuera de la vista también: una lectura remota lanzada justo antes de
         // cambiar de pantalla tiene que poder cerrarse, o al volver el indicador
         // seguiría diciendo «leyendo…» sobre un hilo que terminó hace rato.
@@ -5928,8 +5977,24 @@ impl App {
             self.tab = i;
         }
         if let Some(i) = cerrar {
+            // CERRAR TAMBIÉN TIENE QUE DEJAR DE PAGAR. Aquí solo estaba el
+            // `remove`, y quitar la pestaña del vector no para nada: el hilo del
+            // proveedor tiene su propia copia del `Arc`, así que sigue pidiendo
+            // tramas contra un canal que ya no escucha nadie, y los sub-agentes
+            // siguen sus hasta cuatro peticiones cada uno. Se paga entero.
+            //
+            // Es el mismo razonamiento que el botón Detener tiene escrito al
+            // lado de estas dos líneas —«el interruptor lo mira el hilo del
+            // proveedor entre trama y trama»— y cerrar es una forma más brusca
+            // de decir lo mismo. Lo que no hace falta es lo demás que hace
+            // Detener: caducar pasos, avisar en Trace, volcar la sesión. Eso es
+            // para una pestaña que se queda, y ésta se va.
+            if let Some(t) = self.tabs.get(i) {
+                t.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                t.fork_stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
             self.tabs.remove(i);
-            self.tab = self.tab.min(self.tabs.len() - 1);
+            self.tab = self.tab.min(self.tabs.len().saturating_sub(1));
         }
         if abrir {
             self.tabs.push(ChatTab::new(self.tabs_opened));
@@ -15485,7 +15550,8 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                 }
             }
         }
-        self.pump_nx_remote();
+        // El bombeo ya NO se hace aquí: subió a `update`, para que un comando
+        // remoto pueda terminar con el operador mirando otra pantalla.
     }
 
     /// Llama a la puerta de un equipo y deja el resultado a la vista.
