@@ -547,6 +547,105 @@ pub fn list(limite: usize) -> Result<Vec<Insight>, String> {
     })
 }
 
+/// Cuántos insights entran en el prompt como mucho.
+///
+/// Pocos y los mejores. Son frases largas —un patrón observado, no una etiqueta—
+/// y meterle veinte al modelo en cada turno es enseñarle a saltarse el
+/// encabezado, que es justo el fallo que este fichero de prompt evita por
+/// diseño. Con el orden de `list` (confianza y luego refuerzos), los tres
+/// primeros son los que más veces se han vuelto a observar.
+pub const MAX_EN_PROMPT: usize = 3;
+
+/// Y cuántos caracteres, pase lo que pase.
+///
+/// El modelo local escribe la frase y no hay nada que le impida devolver un
+/// párrafo. Un tope duro evita que una mala destilación de hace tres semanas se
+/// coma el prompt de todos los turnos desde entonces.
+pub const MAX_CHARS_PROMPT: usize = 700;
+
+/// El listón para que un patrón valga la pena mandarlo.
+///
+/// Un insight nace con la confianza que le puso el modelo y solo sube con los
+/// refuerzos. Por debajo de esto es una corazonada de una sola observación, y
+/// mandarle corazonadas al modelo como si fueran conocimiento es la forma más
+/// rápida de que generalice de una casualidad.
+pub const MIN_CONFIANZA_PROMPT: f64 = 0.60;
+
+/// Los patrones que Lucy ha sacado de su propio historial, para el prompt.
+///
+/// LO QUE ESTO ARREGLA. La pasada de mantenimiento destila insights cada 24 h
+/// gastando hasta cuatro llamadas al modelo local, con toda la maquinaria de
+/// huella, refuerzo y confianza asintótica funcionando — para producir filas que
+/// solo se veían si el operador abría una pestaña concreta. Es el ÚNICO sitio
+/// donde Lucy generaliza, y lo generalizado no volvía nunca a la conversación:
+/// se quedaba en un «ya lo sabía» que no servía para el trabajo siguiente.
+///
+/// SEPARADO DE LAS MEMORIAS Y DE LOS PRINCIPIOS, porque no es ninguna de las dos
+/// cosas:
+///
+/// ```text
+///   principio  una instrucción que dictó el operador   manda
+///   memoria    un hecho concreto de esta instalación   entra si viene al caso
+///   insight    un patrón que Lucy dedujo ella sola     orienta, y puede fallar
+/// ```
+///
+/// De ahí el aviso del final: un insight es una observación de Lucy sobre su
+/// propio historial, no un hecho comprobado. Sin esa línea el modelo los cita
+/// con la misma autoridad que una medición, y un patrón sacado de cuatro
+/// conversaciones puede ser perfectamente una casualidad.
+pub fn render() -> String {
+    let elegidos = seleccion();
+    let mut s = String::new();
+    for (_, linea) in &elegidos {
+        s.push_str(&format!("- {linea}\n"));
+    }
+    if s.is_empty() {
+        return String::new();
+    }
+    s.push_str(
+        "(Son observaciones TUYAS sobre tu propio historial, no hechos comprobados: orientan, \
+         no mandan. Si lo que ves ahora los contradice, gana lo que ves. No los cites ni digas \
+         que los estás usando.)",
+    );
+    s
+}
+
+/// Cuáles entran y con qué redacción: `(id, línea)`.
+///
+/// UNA SOLA FUENTE PARA LOS DOS SITIOS. `render` monta el bloque del prompt y el
+/// panel de Memoria marca qué patrones están dirigiendo a Lucy; si cada uno
+/// aplicara los topes por su cuenta, el día que alguien cambiara `MAX_EN_PROMPT`
+/// el panel estaría señalando filas distintas de las que se mandan — y el
+/// operador borraría la que no era.
+///
+/// Que eso importe es nuevo: mientras los insights no llegaban al prompt, cuál
+/// de ellos era «el que manda» no significaba nada.
+pub fn seleccion() -> Vec<(i64, String)> {
+    let Ok(todos) = list(MAX_EN_PROMPT * 4) else { return Vec::new() };
+    let mut v: Vec<(i64, String)> = Vec::new();
+    let mut usados = 0usize;
+    for i in todos.iter().filter(|i| i.confianza >= MIN_CONFIANZA_PROMPT) {
+        // En una línea: los saltos romperían la lista del prompt, igual que en
+        // `memories::una_linea`.
+        let linea = i.contenido.split_whitespace().collect::<Vec<_>>().join(" ");
+        if linea.is_empty() {
+            continue;
+        }
+        // El tope de caracteres se comprueba ANTES de añadir, no después: cortar
+        // una frase por la mitad deja al modelo leyendo media conclusión, que es
+        // peor que no leer ninguna.
+        if usados + linea.chars().count() + 3 > MAX_CHARS_PROMPT {
+            break;
+        }
+        usados += linea.chars().count() + 3;
+        v.push((i.id, linea));
+        if v.len() >= MAX_EN_PROMPT {
+            break;
+        }
+    }
+    v
+}
+
 pub fn delete(id: i64) -> Result<(), String> {
     crate::with_db(|c| {
         c.execute("DELETE FROM agent_insights WHERE id = ?1", rusqlite::params![id])

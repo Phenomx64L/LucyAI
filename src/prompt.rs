@@ -74,6 +74,20 @@ pub struct Ctx<'a> {
     /// haría que el modelo leyera «en producción avisa antes» con el mismo peso
     /// que «el servidor de impresión es SRV-04».
     pub principles: &'a str,
+    /// Los patrones que Lucy sacó de su propio historial, ya formateados.
+    /// Vacío = ninguno, que es lo normal en una instalación nueva.
+    ///
+    /// EL TERCER TIPO DE CONOCIMIENTO, y no se puede mezclar con los otros dos.
+    /// Un principio es una instrucción del operador y manda; una memoria es un
+    /// hecho de esta instalación y entra cuando viene al caso; un insight es
+    /// algo que Lucy DEDUJO ella sola de sus propias conversaciones, y por eso
+    /// orienta pero puede estar equivocado.
+    ///
+    /// Se destilan a diario con el modelo local —hasta cuatro llamadas por
+    /// pasada— y hasta ahora no llegaban aquí: acababan en filas que solo se
+    /// veían abriendo una pestaña. Era el único sitio donde Lucy generalizaba y
+    /// lo generalizado no volvía nunca a la conversación.
+    pub insights: &'a str,
     /// Cuánto se extiende al contestar.
     pub tono: Tono,
     /// En qué idioma contesta. El mismo que la interfaz.
@@ -106,6 +120,7 @@ impl Default for Ctx<'_> {
             preset: "",
             memories: "",
             principles: "",
+            insights: "",
             tono: Tono::Equilibrado,
             idioma: Idioma::Es,
             weak_model: false,
@@ -557,6 +572,31 @@ impl Section for Principles {
     }
 }
 
+struct Insights;
+impl Section for Insights {
+    fn name(&self) -> &'static str {
+        "Insights"
+    }
+    fn relevant(&self, c: &Ctx) -> bool {
+        !c.insights.is_empty()
+    }
+    /// DETRÁS DE TODO LO QUE MANDA Y DELANTE DE LO QUE SE MIDE. Un patrón que
+    /// Lucy dedujo cede ante una regla del operador, ante su preset y ante el
+    /// catálogo de skills; pero tiene que leerse ANTES del estado de la máquina,
+    /// porque su trabajo es enmarcar lo que se va a ver, no comentarlo después.
+    ///
+    /// Y ESTABLE: no dependen de la pregunta —cambian una vez al día, cuando
+    /// corre el mantenimiento— así que se cobran como caché en vez de reenviarse
+    /// enteros en cada turno. Por eso va por debajo de 40, que es donde cae la
+    /// primera sección inestable y con ella la marca de caché.
+    fn priority(&self) -> u32 {
+        38
+    }
+    fn render(&self, c: &Ctx) -> String {
+        format!("LO QUE HAS IDO APRENDIENDO DE ESTE SITIO\n{}", c.insights.trim_end())
+    }
+}
+
 struct Estilo;
 impl Section for Estilo {
     fn name(&self) -> &'static str {
@@ -794,6 +834,7 @@ fn secciones() -> Vec<Box<dyn Section>> {
         Box::new(Actions),
         Box::new(Elevation),
         Box::new(Principles),
+        Box::new(Insights),
         Box::new(Estilo),
         Box::new(Preset),
         Box::new(Skills),
@@ -1319,6 +1360,82 @@ mod tests {
         assert!(p[..corte].contains("Eres Lucy"), "la identidad es estable");
         assert!(p[corte..].contains("WORKSTATION-16"), "el equipo cambia");
         assert!(!p[..corte].contains("WORKSTATION-16"));
+    }
+
+    #[test]
+    fn ninguna_seccion_estable_cae_por_debajo_de_una_que_cambia() {
+        let _s = serie();
+        // EL INVARIANTE DEL QUE DEPENDE LA MARCA. Se coloca justo antes de la
+        // primera sección inestable, y las secciones salen ordenadas por
+        // prioridad — así que una estable con prioridad MAYOR que alguna
+        // inestable acabaría al otro lado del corte y se reenviaría entera en
+        // cada turno, callando, sin que ningún test se quejara.
+        //
+        // Existe porque acabo de meter una sección nueva (`Insights`) y elegí su
+        // prioridad —38— precisamente para que cayera de este lado. Esa decisión
+        // vivía en un comentario; ahora la sujeta el test.
+        let mut secs = secciones();
+        secs.sort_by_key(|s| s.priority());
+        let primera_inestable = secs.iter().position(|s| !s.stable());
+        if let Some(i) = primera_inestable {
+            for s in &secs[i..] {
+                assert!(
+                    !s.stable(),
+                    "«{}» dice ser estable con prioridad {} pero va detrás de «{}», que cambia \
+                     en cada turno: quedaría fuera de la caché y se cobraría entera cada vez",
+                    s.name(),
+                    s.priority(),
+                    secs[i].name(),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn los_patrones_aprendidos_se_leen_antes_del_estado_de_la_maquina() {
+        let _s = serie();
+        // Su trabajo es ENMARCAR lo que se va a ver, no comentarlo después. Un
+        // patrón leído detrás de la medición llega tarde: el modelo ya ha
+        // decidido qué significa la cifra.
+        let m = snap();
+        let p = build(&Ctx {
+            machine: Some(&m),
+            insights: "- Los reinicios de este equipo se concentran los lunes.",
+            ..Default::default()
+        });
+        let i = p.find("HAS IDO APRENDIENDO").expect("la sección no salió");
+        let j = p.find("WORKSTATION-16").expect("falta el equipo");
+        assert!(i < j, "los patrones se leen después del estado de la máquina");
+        // Y del lado cacheado de la marca: cambian una vez al día, no por turno.
+        let corte = p.find(CACHE_BOUNDARY).expect("falta la marca");
+        assert!(i < corte, "los patrones caen fuera de la caché y se cobran en cada turno");
+    }
+
+    #[test]
+    fn una_regla_del_operador_manda_sobre_un_patron_que_lucy_dedujo() {
+        let _s = serie();
+        // Los tres tipos de conocimiento no valen lo mismo, y el orden de
+        // lectura es lo que se lo dice al modelo: un principio lo dictó una
+        // persona, un insight lo dedujo Lucy sola de cuatro conversaciones y
+        // puede ser una casualidad.
+        let p = build(&Ctx {
+            principles: "[P1] En producción se avisa antes de reiniciar nada.",
+            insights: "- Los reinicios de este equipo se concentran los lunes.",
+            ..Default::default()
+        });
+        let reglas = p.find("REGLAS QUE TE DIO EL OPERADOR").expect("faltan las reglas");
+        let patrones = p.find("HAS IDO APRENDIENDO").expect("faltan los patrones");
+        assert!(reglas < patrones, "un patrón deducido se lee antes que una regla dictada");
+    }
+
+    #[test]
+    fn sin_patrones_no_hay_encabezado() {
+        let _s = serie();
+        // La regla del fichero: un bloque vacío enseña al modelo a saltarse ese
+        // encabezado, así que el día que sí trae algo tampoco lo mira. En una
+        // instalación nueva no hay ni un insight.
+        let p = build(&Ctx::default());
+        assert!(!p.contains("HAS IDO APRENDIENDO"), "se mandó el encabezado sin nada debajo");
     }
 
     #[test]
