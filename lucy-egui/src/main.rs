@@ -8537,7 +8537,30 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
         // han terminado. Si al final queda alguno, el lote entero se retiene.
         let mut pendientes: Vec<String> = Vec::new();
 
-        for t in tags::extract_tags(reply) {
+        // EL CUERPO QUE VIENE APARTE, EN SU PROPIA ETIQUETA.
+        //
+        // HAY DOS CONVENCIONES PARA ESCRIBIR UN FICHERO Y ESTE SHELL SOLO
+        // ENTENDÍA UNA. La suya es `writefile:RUTA|||CONTENIDO`, todo en la misma
+        // etiqueta. La de la V1 —que es la que su prompt enseña, con ejemplos y
+        // en mayúsculas— es `<TOOL>writefile:RUTA</TOOL>` seguido de
+        // `<FILECONTENT>cuerpo</FILECONTENT>`.
+        //
+        // `tags.rs` DETECTA `FILECONTENT` y hasta tiene una regla especial para
+        // no recortarlo, pero aquí no lo consumía nadie: se parseaba y se tiraba.
+        // Así que un modelo que escriba a la manera de la V1 —y estos modelos
+        // han visto mucho más de esa que de la otra— produce un `writefile` sin
+        // separador, que contesta «Falta el separador `|||`», y el contenido
+        // desaparece sin dejar rastro.
+        //
+        // Se acepta la forma de la V1 como RESPALDO, no como preferida: si la
+        // etiqueta ya trae su `|||`, manda ella.
+        let etiquetas = tags::extract_tags(reply);
+        let cuerpo_aparte: Option<String> = etiquetas
+            .iter()
+            .find(|t| t.kind == TagKind::FileContent)
+            .map(|t| t.content.clone());
+
+        for t in etiquetas {
             match t.kind {
                 TagKind::Thought => self.tabs[ti].ws.trace_push(TraceEntry {
                     phase: "think".into(),
@@ -8712,6 +8735,16 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                     // que ejecutar un comando: se ve el cambio entero y decide
                     // una persona.
                     if matches!(name.as_str(), "writefile" | "editfile") {
+                        // El respaldo de `<FILECONTENT>`, solo si falta el
+                        // separador. `editfile` no entra: necesita DOS partes
+                        // —el texto viejo y el nuevo— y una etiqueta suelta no
+                        // puede decir cuál es cuál.
+                        let args = match (&cuerpo_aparte, name.as_str()) {
+                            (Some(c), "writefile") if !args.contains("|||") => {
+                                format!("{}|||{c}", args.trim())
+                            }
+                            _ => args.clone(),
+                        };
                         let mut a = if name == "editfile" {
                             lucy_core::tools::prepare_edit(&args)
                         } else {
@@ -18121,6 +18154,145 @@ mod layout {
             });
         }
         out
+    }
+
+    /// Un comando de los que salen de verdad: largo y sin sitios donde partir.
+    ///
+    /// Los tres recortes de texto de esta noche los produjo texto así. Un
+    /// `Get-WinEvent` con su tabla hash, o una descarga con su ruta completa, no
+    /// tiene espacios cada veinte caracteres — y donde no hay espacio, egui no
+    /// parte salvo que se le diga.
+    const COMANDO_LARGO: &str =
+        "Invoke-WebRequest -Uri 'https://download.sysinternals.com/files/SysinternalsSuite.zip' \
+         -OutFile 'C:\\Users\\eleue\\Documents\\SysinternalsSuite.zip' -UseBasicParsing; \
+         Expand-Archive -Path 'C:\\Users\\eleue\\Documents\\SysinternalsSuite.zip' \
+         -DestinationPath 'C:\\Users\\eleue\\Documents\\Sysinternals' -Force";
+
+    #[test]
+    fn el_texto_de_los_carriles_no_se_sale_del_carril() {
+        // LO QUE ESTO MIDE, y por qué existe. El operador reportó tres veces la
+        // misma cosa con tres nombres: «el panel derecho rompe el texto», «en
+        // Ejecución se pierde texto», «el skill imprimió a medias». Las tres
+        // primeras eran el MISMO fallo de maquetación en tres sitios: un
+        // `vertical` dentro de un `horizontal` no tiene tope de ancho, así que
+        // el contenido crece y lo recorta el borde del panel. Sin barra de
+        // desplazamiento y sin nada que avise.
+        //
+        // Una captura no lo pilla a tiempo y el compilador no lo ve. `measure`
+        // sí: egui resuelve la geometría sin ventana, así que «¿cabe?» pasa a
+        // ser una pregunta que un test contesta.
+        //
+        // El carril más estrecho que permite la aplicación. Si cabe aquí, cabe.
+        let w = WS_MIN - 28.0; // menos el margen interior del panel
+
+        // Una fila del carril de Ejecución, con el comando y su salida.
+        let r = measure(w, |ui| {
+            ui.set_max_width(w);
+            egui::Frame::none().inner_margin(egui::Margin::same(10.0)).show(ui, |ui| {
+                ui.set_max_width(w - 20.0);
+                ui.horizontal_top(|ui| {
+                    ui.label(egui::RichText::new("✓").size(11.0));
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(COMANDO_LARGO)
+                                .size(theme::FS_CAPTION)
+                                .monospace(),
+                        )
+                        .wrap(),
+                    );
+                });
+            });
+        });
+        assert!(
+            r.width() <= w + 1.0,
+            "una fila de Ejecución mide {:.0} px en un carril de {w:.0}: se sale por el borde",
+            r.width()
+        );
+
+        // Y una del carril de Trace, que desde que anota «Comando lanzado» lleva
+        // el comando dentro del detalle.
+        let ancho = (w - 46.0).max(140.0);
+        let t = measure(w, |ui| {
+            ui.set_max_width(w);
+            ui.horizontal_top(|ui| {
+                ui.label(egui::RichText::new("act").size(theme::FS_CAPTION).monospace());
+                ui.allocate_ui_with_layout(
+                    egui::vec2(ancho, 0.0),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        ui.set_max_width(ancho);
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(COMANDO_LARGO).size(theme::FS_CAPTION),
+                            )
+                            .wrap(),
+                        );
+                    },
+                );
+            });
+        });
+        assert!(
+            t.width() <= w + 1.0,
+            "una fila de Trace mide {:.0} px en un carril de {w:.0}: se sale por el borde",
+            t.width()
+        );
+
+        // LO QUE ESTE TEST NO PRUEBA, Y HAY QUE DECIRLO.
+        //
+        // Se intentó darle dientes: reconstruir la forma DE ANTES —el `vertical`
+        // dentro del `horizontal` sin tope— y exigir que desbordara, para que las
+        // dos comprobaciones de arriba distinguieran el fallo de su arreglo.
+        //
+        // NO DESBORDA. Medido: 247 px en un carril de 252. En este banco, con un
+        // `CentralPanel` y un `set_max_width` en la raíz, egui parte el texto
+        // igual sin el tope explícito.
+        //
+        // O sea que el recorte que reportó el operador NO lo reproduce esta
+        // forma, y por tanto este test NO demuestra que los topes que se
+        // añadieron sean la causa de aquello. Lo que sí demuestra es la
+        // propiedad que interesa —que la forma ACTUAL cabe en el carril más
+        // estrecho— y eso vale como guarda contra una regresión futura.
+        //
+        // La diferencia con la pantalla real está en el `SidePanel`, que se
+        // dimensiona contra su contenido en vez de imponerle un ancho. Medirlo
+        // aquí necesitaría montar el panel de verdad, y eso arrastra la
+        // aplicación entera. Queda dicho para que nadie lea este test como una
+        // prueba de algo que no prueba.
+    }
+
+    #[test]
+    fn la_respuesta_de_lucy_cabe_en_lo_que_queda_de_conversacion() {
+        // LA MITAD QUE VE EL OPERADOR. La burbuja del operador limitaba su ancho
+        // y el mensaje de Lucy no, así que su respuesta crecía hasta donde
+        // quisiera y el carril derecho la recortaba a media palabra. Y estrechar
+        // el carril no servía: el texto no volvía a fluir.
+        //
+        // Se mide con la conversación ESTRECHA —ventana mínima y carril ancho—,
+        // que es cuando el hueco aprieta de verdad.
+        let w = VENTANA_MIN[0] - WS_MAX - 120.0; // menos el rail izquierdo y márgenes
+        let ancho_msg = (w - 34.0).max(200.0);
+        let r = measure(w, |ui| {
+            ui.set_max_width(w);
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("✦").size(13.0));
+                ui.allocate_ui_with_layout(
+                    egui::vec2(ancho_msg, 0.0),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        ui.set_max_width(ancho_msg);
+                        ui.add(
+                            egui::Label::new(egui::RichText::new(COMANDO_LARGO).size(13.5))
+                                .wrap(),
+                        );
+                    },
+                );
+            });
+        });
+        assert!(
+            r.width() <= w + 1.0,
+            "el mensaje de Lucy mide {:.0} px en {w:.0} de conversación: se recorta",
+            r.width()
+        );
     }
 
     #[test]
