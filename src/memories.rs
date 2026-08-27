@@ -680,6 +680,31 @@ fn frase_confianza(mov: Option<(f64, f64)>) -> String {
     }
 }
 
+/// Los ids que se han ganado el listón bajo. Vacío si algo falla.
+///
+/// UNA CONSULTA Y NO UNA POR ACIERTO. El recuerdo mira cinco memorias por turno
+/// y esto son setenta filas vivas: traer la lista entera es una consulta con un
+/// índice, y preguntarlo fila por fila serían cinco viajes en el camino crítico
+/// de cada pregunta.
+fn ids_confirmadas() -> std::collections::HashSet<i64> {
+    crate::with_db(|c| {
+        let mut st = c
+            .prepare(
+                "SELECT id FROM agent_memories
+                 WHERE confidence >= ?1
+                   AND (superseded_by IS NULL OR superseded_by = '')",
+            )
+            .map_err(|e| e.to_string())?;
+        let v = st
+            .query_map(rusqlite::params![UMBRAL_CONFIRMADA], |r| r.get::<_, i64>(0))
+            .map_err(|e| e.to_string())?
+            .filter_map(Result::ok)
+            .collect();
+        Ok(v)
+    })
+    .unwrap_or_default()
+}
+
 /// ¿La memoria sigue contando? Viva = no supersedida y no caducada.
 ///
 /// EXISTE PORQUE LOS VECTORES NO LO SABEN. La tabla `embeddings` no tiene
@@ -906,6 +931,34 @@ pub const MIN_MEMORIA: f32 = 0.65;
 /// ```
 pub const MIN_DOCUMENTO: f32 = 0.70;
 
+/// Confianza a partir de la cual una memoria entra con el listón bajo.
+///
+/// Cuatro confirmaciones desde el valor por defecto, con el paso de
+/// `PASO_CONFIRMACION`. O sea: Lucy ha vuelto a deducir ese hecho por su cuenta
+/// cuatro veces, en cuatro conversaciones distintas.
+pub const UMBRAL_CONFIRMADA: f64 = 0.80;
+
+/// Y el listón que se le rebaja.
+///
+/// LO QUE ESTO CONTESTA. Un hecho confirmado seguía teniendo que ganarse el
+/// sitio en cada turno igual que uno escrito una tarde: si la pregunta de hoy no
+/// se parecía bastante a la de aquel día, no entraba. Eso es lo que hacía que
+/// «ya lo sabía» no sirviera para nada — el saber estaba, y seguía dependiendo
+/// del azar de cómo se hubiera redactado la pregunta.
+///
+/// ES EL MISMO RAZONAMIENTO QUE LA CHINCHETA, con otra fuente de evidencia. Una
+/// memoria fijada entra sin preguntarle al parecido porque lo dijo una persona;
+/// una confirmada entra con menos parecido porque lo dijo la repetición. Lo que
+/// no hace es entrar SIEMPRE: cuatro confirmaciones son buena señal, no una
+/// orden del operador, y por eso se le baja el listón en vez de quitárselo.
+///
+/// EL NÚMERO ES UNA ESTIMACIÓN Y HAY QUE MEDIRLO. `MIN_MEMORIA` (0,65) sí está
+/// medido, y en aquellas mediciones lo que no tenía nada que ver puntuaba entre
+/// 0,53 y 0,56. 0,58 deja un margen sobre ese suelo de ruido y abre de verdad la
+/// mano — pero no se ha medido sobre este corpus, y el día que alguien mire si
+/// entra basura por aquí, ésta es la constante que hay que mover.
+pub const MIN_CONFIRMADA: f32 = 0.58;
+
 /// Lo que se recordó, y de dónde.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Recuerdo {
@@ -920,6 +973,13 @@ pub struct Recuerdo {
     /// cero semánticas significa que la búsqueda no encontró nada, no que Lucy
     /// recordara bien.
     pub fijadas: usize,
+    /// Cuántas entraron por el listón rebajado de lo CONFIRMADO.
+    ///
+    /// Son un subconjunto de `memorias`, no un camino aparte: cruzaron el
+    /// coseno, solo que uno más bajo. Se cuentan para poder responder «¿está
+    /// sirviendo de algo la confirmación?» con un número en vez de con una
+    /// impresión — y para notar si un día empieza a entrar ruido por ahí.
+    pub confirmadas: usize,
     /// Se recurrió a la búsqueda por palabras porque no hubo vectores.
     ///
     /// Se dice en vez de callarlo: el recuerdo léxico encuentra menos y peor, y
@@ -994,8 +1054,15 @@ pub fn recall(query: &str, presupuesto: usize) -> Recuerdo {
     };
     if !mem_rows.is_empty() || !doc_rows.is_empty() {
         if let Ok((qvec, modelo)) = crate::vectors::embed_blocking(q) {
+            // SE RANKEA CON EL LISTÓN BAJO Y SE FILTRA DESPUÉS. `rank_by_cosine`
+            // toma UN umbral, y aquí hacen falta dos: el normal y el que se le
+            // rebaja a lo confirmado. Pedirle el bajo y descartar luego lo que no
+            // se lo haya ganado da el mismo resultado que dos pasadas y cuesta
+            // una — el coseno ya está calculado para todas las filas de todos
+            // modos.
+            let confirmadas = ids_confirmadas();
             let (mem, _) =
-                crate::vectors::rank_by_cosine(mem_rows, &qvec, &modelo, MIN_MEMORIA, n_mem);
+                crate::vectors::rank_by_cosine(mem_rows, &qvec, &modelo, MIN_CONFIRMADA, n_mem);
             for h in &mem {
                 // CONTRASTADO CONTRA LA TABLA DE MEMORIAS. Los vectores no saben
                 // de retiradas ni caducidades: sin esto, una memoria supersedida
@@ -1006,7 +1073,23 @@ pub fn recall(query: &str, presupuesto: usize) -> Recuerdo {
                 if !viva(id) {
                     continue;
                 }
-                lineas.push(format!("- {}", una_linea(&h.text)));
+                let confirmada = confirmadas.contains(&id);
+                // El listón normal lo cruza cualquiera; el rebajado, solo lo
+                // confirmado. Sin esta línea, bajar el umbral se lo habría
+                // bajado a TODAS, que es otra cosa y bastante peor.
+                if h.score < MIN_MEMORIA && !confirmada {
+                    continue;
+                }
+                // SE MARCA, igual que `[fijada]` y `[documento]`. Un hecho que
+                // entra con menos parecido que los demás tiene que decir por qué,
+                // o el modelo lo trata como si viniera igual de al caso que el
+                // resto — y no viene: viene porque está establecido.
+                if confirmada && h.score < MIN_MEMORIA {
+                    lineas.push(format!("- [confirmada] {}", una_linea(&h.text)));
+                    r.confirmadas += 1;
+                } else {
+                    lineas.push(format!("- {}", una_linea(&h.text)));
+                }
                 r.memorias += 1;
             }
 

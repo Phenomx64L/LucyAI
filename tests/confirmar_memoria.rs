@@ -156,6 +156,53 @@ fn lo_que_una_persona_marcó_no_se_baja_al_confirmarlo() {
 }
 
 #[test]
+fn el_liston_rebajado_esta_por_debajo_del_normal_y_por_encima_del_ruido() {
+    let _t = turno();
+    // LOS TRES NÚMEROS TIENEN QUE ESTAR EN ESTE ORDEN o la fase 2 no hace nada
+    // —o hace demasiado— y ninguna de las dos cosas daría error en ninguna
+    // parte: simplemente entraría lo que no debe, o no entraría nada.
+    //
+    // El suelo de ruido son las mediciones que documenta `MIN_DOCUMENTO`: lo que
+    // no tenía NADA que ver puntuaba entre 0,53 y 0,56.
+    const RUIDO: f32 = 0.56;
+    assert!(
+        lucy_core::memories::MIN_CONFIRMADA < lucy_core::memories::MIN_MEMORIA,
+        "el listón rebajado no rebaja nada"
+    );
+    assert!(
+        lucy_core::memories::MIN_CONFIRMADA > RUIDO,
+        "el listón rebajado cae en el suelo de ruido: entraría cualquier cosa"
+    );
+}
+
+#[test]
+fn el_umbral_de_confianza_es_alcanzable_desde_el_valor_por_defecto() {
+    let _t = turno();
+    con_base();
+    let id = siembra("el servidor de ficheros es FS-01");
+
+    // QUE LAS DOS CONSTANTES NO SE SEPAREN. `UMBRAL_CONFIRMADA` decide quién
+    // entra con el listón bajo y `PASO_CONFIRMACION` decide cuánto sube cada
+    // confirmación. Si alguien baja el paso o sube el umbral sin mirar al otro,
+    // el listón rebajado deja de alcanzarse y la fase 2 se apaga sola, en
+    // silencio, sin que ningún test hable — que es exactamente como estaba el
+    // sistema antes de todo esto.
+    //
+    // Ocho confirmaciones es holgado a propósito: lo que se fija es que sea
+    // ALCANZABLE, no cuántas hacen falta.
+    for _ in 0..8 {
+        lucy_core::memories::confirma(id).expect("confirmar");
+    }
+    let (_, conf) = lee(id);
+    assert!(
+        conf >= lucy_core::memories::UMBRAL_CONFIRMADA,
+        "ocho confirmaciones dejan la confianza en {conf} y el umbral pide {}: \
+         las dos constantes se han separado",
+        lucy_core::memories::UMBRAL_CONFIRMADA
+    );
+}
+
+#[test]
 fn confirmar_una_memoria_que_no_existe_no_revienta() {
     let _t = turno();
     con_base();
