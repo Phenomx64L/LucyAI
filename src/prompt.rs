@@ -438,6 +438,11 @@ impl Section for Actions {
              En `editfile`, el TEXTO_VIEJO tiene que aparecer UNA sola vez en el \
              fichero: si aparece varias, el cambio se rechaza y hay que darle más \
              contexto —la línea de antes y la de después— hasta que sea único.\n\
+             Si el contenido es largo y prefieres no meterlo en la etiqueta, vale \
+             también <TOOL>writefile:C:\\ruta\\fichero.txt</TOOL> seguido de \
+             <FILECONTENT>el contenido entero</FILECONTENT>. Las dos formas hacen lo \
+             mismo; elige la que te resulte natural y no las mezcles en el mismo \
+             fichero.\n\
              Y dos para repartirte el trabajo cuando tengas VARIAS averiguaciones que \
              no dependen unas de otras —cuatro logs, tres carpetas, dos equipos—:\n\
              · <TOOL>fork_task:nombre-corto|qué tiene que averiguar</TOOL>\n\
