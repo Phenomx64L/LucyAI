@@ -80,8 +80,29 @@ pub fn parse_fact(body: &str) -> Option<(String, String)> {
 }
 
 /// Guarda o actualiza un hecho.
+///
+/// SE LIMPIA DE SECRETOS ANTES DEL DISCO, y no lo hacía. Este era el único
+/// almacén que acaba en el prompt de sistema sin pasar por `scrub`.
+///
+/// El razonamiento está escrito en `memories`, que sí lo hace: «una memoria es
+/// lo ÚNICO que sobrevive a la conversación, así que un token que se cuele en
+/// una se queda para siempre y encima vuelve al prompt de todos los turnos
+/// siguientes». Aquí es MÁS cierto, no menos: una memoria vuelve cuando se
+/// parece a lo que se pregunta, y el perfil entra SIEMPRE — `block()` lo pega
+/// entero en cada turno de cada conversación.
+///
+/// Y LO ESCRIBE EL MODELO. Estas filas las pone la etiqueta `<REMEMBER>`, que
+/// Lucy emite por su cuenta con lo que tenga delante. Basta con que un volcado
+/// de comando traiga un `Authorization: Bearer …` y que Lucy decida que ese
+/// servidor es un dato del operador: la clave queda guardada, sin que nadie la
+/// apruebe, y vuelve en todos los prompts posteriores.
+///
+/// La clave se limpia también: el modelo la redacta igual que el valor, y un
+/// `api_key_de_produccion` como nombre de fila filtra tanto como el valor.
 pub fn set(key: &str, value: &str, category: &str) -> Result<(), String> {
     let cat = if category.trim().is_empty() { "general" } else { category.trim() };
+    let key = crate::memories::scrub(key);
+    let value = crate::memories::scrub(value);
     crate::with_db(|conn| {
         conn.execute(
             "INSERT INTO user_profile (key, value, category, updated_at) \
@@ -158,6 +179,27 @@ pub fn block() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn un_secreto_no_llega_al_prompt_de_todos_los_turnos() {
+        // ERA EL ÚNICO ALMACÉN que acaba en el prompt de sistema sin limpiar.
+        // Y aquí importa MÁS que en las memorias: una memoria vuelve cuando se
+        // parece a lo que se pregunta; el perfil entra SIEMPRE.
+        //
+        // No toca base de datos: se comprueba el filtro, que es lo que faltaba.
+        // Lo que `set` hace con el resultado ya lo prueba el resto del módulo.
+        let sucio = "Authorization: Bearer sk-abcdefghijklmnop1234";
+        let limpio = crate::memories::scrub(sucio);
+        assert!(!limpio.contains("sk-abcdefghijklmnop1234"), "pasó el token: {limpio}");
+
+        // Y la clave también, que la redacta el modelo igual que el valor.
+        let k = crate::memories::scrub("api_key=AKIAIOSFODNN7EXAMPLE");
+        assert!(!k.contains("AKIAIOSFODNN7EXAMPLE"), "pasó por la clave: {k}");
+
+        // Lo que NO es un secreto se queda intacto: un perfil que se come el
+        // nombre del dominio no sirve para nada.
+        assert_eq!(crate::memories::scrub("dominio ad: corp.local"), "dominio ad: corp.local");
+    }
 
     #[test]
     fn se_parte_por_el_primer_dos_puntos() {

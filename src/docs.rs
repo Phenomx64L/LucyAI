@@ -227,6 +227,16 @@ pub enum Paso {
     /// Se ingirió el texto pero no se pudo vectorizar. El documento EXISTE y no
     /// contesta a nada — hay que decirlo, no dejarlo en la lista como si nada.
     SinVectores(Documento, String),
+    /// Algo que el operador tiene que saber, pero que NO para la ingesta.
+    ///
+    /// Existe por el guardrail: un documento cuyo texto tiene forma de
+    /// instrucción se ingiere igual —un manual de este oficio cita ataques y
+    /// comandos destructivos, es de lo que trata— pero el operador merece
+    /// enterarse, porque el texto va a acabar en el prompt de sistema.
+    ///
+    /// SEPARADO DE `Error` a propósito: un error deja el documento fuera y esto
+    /// no. Pintarlos igual haría creer que la ingesta falló.
+    Aviso(String),
     Error(String),
 }
 
@@ -296,6 +306,32 @@ pub fn ingest(
     // patrón no casaría en ninguno. La huella se calcula ANTES, sobre el texto
     // tal cual está en disco, para que reingerir el mismo fichero se detecte.
     let texto = crate::memories::scrub(&texto);
+
+    // Y EL GUARDRAIL MIRA, PERO NO CIERRA LA PUERTA. Este texto acaba en el
+    // PROMPT DE SISTEMA por el recuerdo, que es donde el modelo lee sus propias
+    // reglas; el mismo fichero arrastrado al chat pasa por `guard::attachment` y
+    // se puede bloquear. Por aquí no pasaba por nada, y esa asimetría es real.
+    //
+    // NO SE RECHAZA, Y ES DELIBERADO. Un manual de cuatrocientas páginas de este
+    // oficio cita ataques, comandos destructivos y ejemplos de configuración
+    // peligrosa: es de lo que trata. Bloquear la ingesta entera por un párrafo
+    // sería el fallo contrario, y de ése ya se ha vivido uno esta semana —un
+    // guardrail que impedía escribir ficheros normales.
+    //
+    // Se avisa, que es lo que faltaba: el operador se entera de que ese
+    // documento lleva dentro algo con forma de instrucción y decide él. Y en el
+    // recuerdo, los trozos van rotulados como texto citado. Ver
+    // `memories::recall`.
+    let g = crate::guard::scan(&texto, crate::guard::Role::Tool);
+    if g.decision == crate::guard::Decision::Block {
+        let _ = tx.send(Paso::Aviso(format!(
+            "«{nombre}» lleva dentro algo con forma de instrucción: {}. Se ingiere igual \
+             —un manual técnico cita ataques— pero al recordarlo irá marcado como texto \
+             citado. Si no sabes de dónde salió este fichero, bórralo de Documentos.",
+            g.reason
+        )));
+    }
+
     let trozos = chunk(&texto);
     if trozos.is_empty() {
         let _ = tx.send(Paso::Error(format!("«{nombre}» no dio ningún trozo.")));

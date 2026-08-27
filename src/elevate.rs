@@ -51,17 +51,56 @@ pub fn build_script(cmd: &str, out: &std::path::Path) -> String {
     )
 }
 
+/// El script en base64 UTF-16LE, que es lo que come `-EncodedCommand`.
+///
+/// Es el MISMO envoltorio que usa `hosts::run_remote` para WinRM, y por la misma
+/// razón: dentro de base64 no hay comillas, ni llaves, ni nada que pueda cerrar
+/// lo que lo rodea.
+fn encoded(script: &str) -> String {
+    let mut bytes = Vec::with_capacity(script.len() * 2);
+    for u in script.encode_utf16() {
+        bytes.extend_from_slice(&u.to_le_bytes());
+    }
+    crate::attach::b64_encode(&bytes)
+}
+
 /// El comando que el padre lanza para pedir la elevación.
 ///
 /// `-Wait` es obligatorio: sin él, `Start-Process` vuelve en cuanto UAC acepta y
 /// el padre leería el fichero de salida antes de que el hijo escriba nada.
 /// `-PassThru` da el proceso para poder mirar su código de salida.
-pub fn build_launcher(script: &std::path::Path) -> String {
+///
+/// EL SCRIPT VA DENTRO Y NO EN UN FICHERO, y esto cierra una escalada de
+/// privilegios. Antes se escribía un `.ps1` en el temporal del usuario y se
+/// lanzaba con `-File`. Entre la escritura y el momento en que el hijo ELEVADO
+/// lo lee hay un hueco, y en ese hueco cabe el diálogo de UAC entero — los
+/// segundos que el operador tarda en leerlo y pulsar «Sí».
+///
+/// El temporal del usuario lo puede escribir cualquier proceso que corra COMO
+/// ESE USUARIO, y esos procesos NO son administradores: ahí está el ataque.
+/// Otro programa cambia el contenido del `.ps1` mientras el operador lee el
+/// aviso, el operador consiente para el comando que él pidió, y lo que se
+/// ejecuta con permisos de administrador es otra cosa. El diálogo de UAC dice
+/// «powershell.exe» en los dos casos, así que no hay nada que mirar.
+///
+/// Es la razón entera de que UAC exista, y se saltaba con un `fs::write`.
+///
+/// SE CONSERVA LO QUE MOTIVÓ EL FICHERO. La cabecera del módulo explica que el
+/// `.ps1` estaba para no escapar comillas dentro de comillas dentro de
+/// `-ArgumentList`, y un comando real las lleva de las tres clases. Base64 lo
+/// resuelve mejor: su alfabeto es `A-Za-z0-9+/=`, así que no hay nada que
+/// escapar y no hay fichero que cambiar.
+///
+/// El fichero de SALIDA se queda, porque ahí no hay elección: un proceso
+/// elevado corre en otra sesión y el padre no puede leer su stdout. Y no vale
+/// lo mismo: lo escribe el hijo, el padre lo lee cuando el hijo ya terminó, y
+/// cambiarlo solo le enseña al operador una salida falsa — no ejecuta nada.
+pub fn build_launcher(script: &str) -> String {
     format!(
         "$p = Start-Process powershell -Verb RunAs -Wait -PassThru -WindowStyle Hidden \
-         -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','{}'; \
+         -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand','{}'; \
          exit $p.ExitCode",
-        script.display()
+        encoded(script)
     )
 }
 
@@ -72,15 +111,14 @@ pub fn build_launcher(script: &std::path::Path) -> String {
 /// decisión suya.
 #[cfg(windows)]
 pub fn run_elevated(cmd: &str) -> Result<(String, bool), String> {
-    let (ps, out) = temp_pair();
-    std::fs::write(&ps, build_script(cmd, &out))
-        .map_err(|e| format!("No se pudo preparar el script elevado: {e}"))?;
-
-    let r = crate::shell::run_powershell_utf8(&build_launcher(&ps));
+    let (_ps, out) = temp_pair();
+    // YA NO SE ESCRIBE NINGÚN `.ps1`. El script viaja dentro del propio
+    // lanzador, en base64, para que no haya fichero que otro proceso pueda
+    // cambiar mientras el operador lee el aviso de UAC. Ver `build_launcher`.
+    let r = crate::shell::run_powershell_utf8(&build_launcher(&build_script(cmd, &out)));
     let salida = std::fs::read_to_string(&out).unwrap_or_default();
-    // Se limpian los dos SIEMPRE, incluso si algo falló: son ficheros con
-    // comandos del operador dentro y no tienen por qué quedarse en el temporal.
-    let _ = std::fs::remove_file(&ps);
+    // El de salida SÍ se limpia: lleva dentro lo que devolvió un comando del
+    // operador y no tiene por qué quedarse en el temporal.
     let _ = std::fs::remove_file(&out);
 
     match r {
@@ -231,10 +269,69 @@ mod tests {
         // Sin `-Wait`, `Start-Process` vuelve en cuanto UAC acepta y el padre
         // leería el fichero antes de que el hijo escriba nada — el fallo que
         // deja "se ejecutó pero no trajo nada".
-        let l = build_launcher(Path::new("C:/tmp/s.ps1"));
+        let l = build_launcher("Get-Date");
         assert!(l.contains("-Wait"), "sin -Wait se lee el fichero vacío");
         assert!(l.contains("-Verb RunAs"), "sin RunAs no hay elevación");
-        assert!(l.contains("C:/tmp/s.ps1"));
+    }
+
+    #[test]
+    fn el_script_no_viaja_por_un_fichero_que_otro_pueda_cambiar() {
+        // LA ESCALADA QUE ESTO CIERRA. El script se escribía en el temporal del
+        // usuario y se lanzaba con `-File`. Entre escribirlo y que el hijo
+        // ELEVADO lo leyera cabía el diálogo de UAC entero — los segundos que el
+        // operador tarda en leerlo. Y ese temporal lo puede escribir cualquier
+        // proceso que corra como ese usuario, que NO es administrador.
+        //
+        // Resultado: otro programa cambia el fichero mientras el operador lee el
+        // aviso, el operador consiente para SU comando, y con permisos de
+        // administrador corre otra cosa. El diálogo dice «powershell.exe» en los
+        // dos casos.
+        let l = build_launcher("Get-Date");
+        assert!(!l.contains("-File"), "el script vuelve a viajar por fichero");
+        assert!(l.contains("-EncodedCommand"), "el script no va dentro del lanzador");
+        assert!(!l.contains(".ps1"), "sigue nombrando un fichero de script");
+    }
+
+    #[test]
+    fn el_comando_sobrevive_al_ida_y_vuelta_de_base64() {
+        // Base64 sustituye al fichero, y el fichero estaba para no escapar
+        // comillas dentro de comillas. Si el envoltorio nuevo alterara el
+        // comando, habríamos cambiado un agujero por un fallo.
+        let cmd = "Get-Service | Where-Object { $_.Status -eq 'Stopped' -and $_.Name -ne \"x\" }";
+        let dentro = build_script(cmd, Path::new("C:/tmp/o.txt"));
+        let b64 = encoded(&dentro);
+        // El alfabeto de base64 no lleva comillas ni llaves: nada de lo que va
+        // dentro puede cerrar el `'…'` que lo envuelve en `-ArgumentList`.
+        assert!(
+            b64.chars().all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '='),
+            "el envoltorio dejó pasar un carácter que puede cerrar la cadena"
+        );
+        // Y se descodifica a lo mismo: UTF-16LE, dos bytes por unidad.
+        let bytes = b64_decode_prueba(&b64);
+        let u16s: Vec<u16> = bytes
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        assert_eq!(String::from_utf16(&u16s).unwrap(), dentro);
+    }
+
+    /// Descodificador de base64 SOLO PARA EL TEST. En producción nunca se
+    /// descodifica —los bytes salen hacia PowerShell y ya— así que tenerlo en el
+    /// binario sería código que nadie ejecuta.
+    fn b64_decode_prueba(s: &str) -> Vec<u8> {
+        const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let val = |c: u8| A.iter().position(|x| *x == c).map(|i| i as u32);
+        let mut out = Vec::new();
+        let limpio: Vec<u8> = s.bytes().filter(|b| *b != b'=').collect();
+        for trozo in limpio.chunks(4) {
+            let mut n = 0u32;
+            for (i, b) in trozo.iter().enumerate() {
+                n |= val(*b).expect("carácter fuera del alfabeto") << (18 - 6 * i);
+            }
+            let bytes = [(n >> 16) as u8, (n >> 8) as u8, n as u8];
+            out.extend_from_slice(&bytes[..trozo.len() - 1]);
+        }
+        out
     }
 
     #[test]
