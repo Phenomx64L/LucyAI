@@ -1320,6 +1320,13 @@ pub const FRASES: &[Frase] = &[
         "Dieser Schritt läuft auf «{equipo}», nicht auf diesem Rechner. Einen Befehl auf einem anderen Rechner gibst du selbst frei.",
     ),
     f!(
+        "Este patrón viaja en el prompt de cada turno. Bórralo si está equivocado.",
+        "This pattern travels in every turn's prompt. Delete it if it's wrong.",
+        "Este padrão viaja no prompt de cada turno. Apaga-o se estiver errado.",
+        "Ce motif voyage dans le prompt de chaque tour. Supprime-le s'il est faux.",
+        "Dieses Muster reist im Prompt jeder Runde mit. Lösche es, wenn es falsch ist.",
+    ),
+    f!(
         "Esto es lo que recordaría con «{consulta}»:{como}\n\n{bloque}",
         "This is what I'd recall for «{consulta}»:{como}\n\n{bloque}",
         "Isto é o que recordaria com «{consulta}»:{como}\n\n{bloque}",
@@ -3596,6 +3603,7 @@ pub const FRASES: &[Frase] = &[
         "· depuis {plazo}",
         "· seit {plazo}",
     ),
+    f!("· en uso", "· in use", "· em uso", "· utilisé", "· in Gebrauch"),
     f!(
         "· {n} dinámicos ignorados",
         "· {n} dynamic ones ignored",

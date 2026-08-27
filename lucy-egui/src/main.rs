@@ -443,6 +443,9 @@ struct PromptInput {
     /// microsegundos, frente a la petición HTTP del recuerdo que sí justificó
     /// el hilo aparte.
     principles: String,
+    /// Los patrones que Lucy sacó de su propio historial. Misma razón que los
+    /// principios para leerse aquí: es una consulta de una tabla pequeña.
+    insights: String,
     /// Cuánto se extiende Lucy al contestar. Viaja con el prompt porque es el
     /// prompt lo que cambia — no hay ninguna lógica del shell que dependa de él.
     tono: lucy_core::prompt::Tono,
@@ -484,6 +487,11 @@ impl PromptInput {
             // toda su razón de ser. Se leen en cada turno porque son una fila de
             // SQLite y cambian cuando el operador dicta una.
             principles: &self.principles,
+            // TAMPOCO dependen de la pregunta, y esa es la diferencia con las
+            // memorias: una memoria entra si se parece a lo que se acaba de
+            // preguntar, un patrón entra siempre porque su valor está justo en
+            // los turnos donde a nadie se le habría ocurrido buscarlo.
+            insights: &self.insights,
             tono: self.tono,
             // EL MISMO QUE LA INTERFAZ. Se lee del global —que es atómico, y
             // esto corre en el hilo del turno— en vez de viajar dentro de
@@ -9387,6 +9395,16 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
             hosts: prompt::hosts_block(&self.remote_hosts),
             skills_cat: lucy_core::skills::catalog(&self.skills),
             principles: lucy_core::principles::render(None),
+            // LO QUE LUCY GENERALIZÓ, DE VUELTA A LA CONVERSACIÓN. Se destilaban
+            // a diario con el modelo local y acababan en filas que solo se veían
+            // abriendo una pestaña: el único sitio donde Lucy saca conclusiones
+            // de su propio historial y no volvían nunca. `render` decide cuántos
+            // y con qué listón; con el modelo flojo la sección no se manda.
+            insights: if lucy_core::prompt::model_is_weak(&self.chat_model) {
+                String::new()
+            } else {
+                lucy_core::insights::render()
+            },
             tono: self.tono,
             preset_txt: self
                 .preset
@@ -17689,6 +17707,18 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                 );
             }
             Some(Ok(v)) => {
+                // CUÁLES ESTÁN DIRIGIENDO A LUCY AHORA MISMO. De los cien que
+                // lista el panel, solo los primeros que pasan el listón entran
+                // en el prompt de cada turno; el resto está guardado y callado.
+                // Sin la marca, el operador que ve un patrón equivocado no sabe
+                // si está corrigiendo algo que importa o borrando una fila que
+                // no se manda — y desde que los insights llegan al prompt, esa
+                // diferencia es la que hace útil el botón de borrar.
+                //
+                // Sale de `seleccion`, la misma función que monta el bloque, para
+                // que el panel no pueda señalar unos y el prompt llevar otros.
+                let en_prompt: std::collections::HashSet<i64> =
+                    lucy_core::insights::seleccion().into_iter().map(|(id, _)| id).collect();
                 egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                     for i in v {
                         egui::Frame::group(ui.style()).show(ui, |ui| {
@@ -17698,6 +17728,17 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                                         .strong()
                                         .color(theme::match_color(i.confianza as f32)),
                                 );
+                                if en_prompt.contains(&i.id) {
+                                    ui.label(
+                                        egui::RichText::new(i18n::tr("· en uso"))
+                                            .small()
+                                            .color(theme::acc()),
+                                    )
+                                    .on_hover_text(i18n::tr(
+                                        "Este patrón viaja en el prompt de cada turno. Bórralo si \
+                                         está equivocado.",
+                                    ));
+                                }
                                 ui.label(egui::RichText::new(&i.contenido).color(theme::txt2()));
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),
