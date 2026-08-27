@@ -1292,6 +1292,20 @@ pub const FRASES: &[Frase] = &[
         "Dieser Rechner hat noch keine Baseline.",
     ),
     f!(
+        "Este mismo comando ya falló aquí una vez",
+        "This same command already failed here once",
+        "Este mesmo comando já falhou aqui uma vez",
+        "Cette même commande a déjà échoué ici une fois",
+        "Derselbe Befehl ist hier schon einmal fehlgeschlagen",
+    ),
+    f!(
+        "Este mismo comando ya falló aquí {n} veces",
+        "This same command already failed here {n} times",
+        "Este mesmo comando já falhou aqui {n} vezes",
+        "Cette même commande a déjà échoué ici {n} fois",
+        "Derselbe Befehl ist hier schon {n} Mal fehlgeschlagen",
+    ),
+    f!(
         "Este modelo no tiene precio en el catálogo",
         "This model has no price in the catalog",
         "Este modelo não tem preço no catálogo",

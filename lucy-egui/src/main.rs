@@ -1555,12 +1555,32 @@ impl ChatTab {
     fn caducar_pendientes(&mut self, motivo: &str) -> usize {
         use lucy_core::agent::StepStatus;
         let mut n = 0;
+        let mut descartados: Vec<(String, String)> = Vec::new();
         for s in self.ws.plan.iter_mut() {
             if s.status == StepStatus::Pending {
                 s.status = StepStatus::Error;
                 s.label = motivo.to_string();
+                descartados.push((s.detail.clone(), s.host.clone()));
                 n += 1;
             }
+        }
+        // LO QUE NO SE EJECUTÓ TAMBIÉN ES UNA DECISIÓN, y es la más interesante
+        // de las dos: el operador leyó el comando, decidió que no, y hasta ahora
+        // eso desaparecía al cerrar la pestaña. Sin estas filas, «de lo que Lucy
+        // propone, cuánto se ejecuta» —la medida más barata y más directa de si
+        // lo que sugiere sirve— no se puede calcular ni a posteriori.
+        //
+        // `exit_code` se queda en `None` a propósito: no es que fallara, es que
+        // nunca corrió, y el visor ya pinta ese caso aparte.
+        for (cmd, host) in descartados {
+            let e = lucy_core::audit::Entry::nueva(&cmd, "descartado")
+                .en_equipo(&host, if host.is_empty() { "local" } else { &host })
+                .nota(motivo);
+            // En silencio: esto pasa mientras se cancela un turno o llega una
+            // orden nueva, y un aviso de auditoría ahí taparía el motivo real
+            // que el operador está leyendo en el plan.
+            let _ = lucy_core::audit::ensure_schema()
+                .and_then(|()| lucy_core::audit::record(&e));
         }
         n
     }
@@ -4321,6 +4341,33 @@ struct App {
     /// convierte un diagnóstico en una carrera, y no hay ninguna prisa que lo
     /// justifique cuando cada uno lo aprueba una persona.
     exec_rx: Option<(usize, String, std::sync::mpsc::Receiver<(String, String, bool, u64)>)>,
+    /// QUIÉN DECIDIÓ el comando que está en vuelo: `"ai"` si lo aprobó una
+    /// persona con el botón, `"auto"` si lo lanzó el bucle solo.
+    ///
+    /// Va en un campo aparte y no dentro de `exec_rx` porque no hay más que una
+    /// ranura —dos comandos a la vez se pisan, y `next_auto` lo comprueba— así
+    /// que este campo espeja exactamente lo que hay corriendo, y meterlo en la
+    /// tupla obligaba a tocar sus nueve sitios para transportar un dato que solo
+    /// leen dos.
+    ///
+    /// La distinción es media razón de ser del registro de auditoría: «esto lo
+    /// miró alguien» es la señal de supervisión más valiosa que existe aquí, se
+    /// conoce en el instante exacto en que se lanza, es gratis, y hasta ahora se
+    /// tiraba — las dos ramas escribían `"ai"`. Sin ella no se puede contestar
+    /// ni «cuánto de lo que corre en esta máquina lo aprobó una persona» ni
+    /// «¿está el automático haciendo cosas que yo no habría dejado pasar?».
+    exec_origen: &'static str,
+    /// Cuántas veces falló ya cada comando pendiente en su equipo, cacheado.
+    ///
+    /// La consulta es barata pero el panel se repinta sesenta veces por segundo,
+    /// y una consulta por paso y por fotograma es una barbaridad por un dato que
+    /// solo cambia cuando termina un comando. Se llena la primera vez que se ve
+    /// un paso y se vacía entero en `pump_exec`, que es el único momento en que
+    /// puede haber quedado obsoleto.
+    ///
+    /// La clave lleva el equipo delante porque un comando que falla en un
+    /// servidor y funciona en otro es información sobre el servidor.
+    fallos: std::collections::HashMap<String, usize>,
     /// Sonda de servicios en vuelo. `Some` = hay un hilo trabajando, que es lo
     /// que anima el botón de refresco y lo que impide lanzar una segunda.
     svc_rx: Option<std::sync::mpsc::Receiver<Option<Vec<lucy_core::system::DownService>>>>,
@@ -4752,6 +4799,8 @@ impl App {
             hist_last: Instant::now() - Duration::from_secs(3600),
             hist_guardado: 0,
             exec_rx: None,
+            exec_origen: "ai",
+            fallos: std::collections::HashMap::new(),
             svc_rx: None,
             cpu_hist: Vec::new(),
             ram_hist: Vec::new(),
@@ -9275,7 +9324,9 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
             NextAuto::Idle => {}
             NextAuto::Run(id, cmd) => {
                 self.tabs[ti].loops += 1;
-                self.run_step(ti, id, cmd, false);
+                // NADIE LO APROBÓ. Es el bucle automático quien lo lanza, y esa
+                // es justo la fila que un auditor querría poder separar.
+                self.run_step(ti, id, cmd, false, "auto");
             }
             NextAuto::Pause(motivo) => {
                 self.tabs[ti].ws.trace_push(lucy_core::agent::TraceEntry {
@@ -9450,8 +9501,12 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
     /// mientras el operador mira si su comando funcionó. Ya cometí ese error una
     /// vez con la sonda de servicios.
     #[cfg(windows)]
-    fn run_step(&mut self, ti: usize, id: String, cmd: String, elevated: bool) {
+    /// `origen` es quién decidió el comando: `"ai"` si lo aprobó una persona,
+    /// `"auto"` si lo lanzó el bucle. Se guarda ahora porque al recogerlo ya no
+    /// se sabe — ver `exec_origen`.
+    fn run_step(&mut self, ti: usize, id: String, cmd: String, elevated: bool, origen: &'static str) {
         use lucy_core::agent::StepStatus;
+        self.exec_origen = origen;
         self.tabs[ti].ws.plan_update(&id, StepStatus::Running, None);
         // El carril de salida se abre solo si el paso es de la pestaña que se
         // está mirando. Antes esto corría siempre sobre la activa; ahora que el
@@ -9538,7 +9593,15 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
     }
 
     #[cfg(not(windows))]
-    fn run_step(&mut self, _ti: usize, _id: String, _cmd: String, _elevated: bool) {}
+    fn run_step(
+        &mut self,
+        _ti: usize,
+        _id: String,
+        _cmd: String,
+        _elevated: bool,
+        _origen: &'static str,
+    ) {
+    }
 
     /// Recoge el resultado de un comando aprobado.
     fn pump_exec(&mut self) {
@@ -9653,10 +9716,12 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
             .unwrap_or_default();
         let motor =
             if destino.is_empty() { "PS".to_string() } else { format!("PS · {destino}") };
-        // `ai` y no `manual`: lo propuso Lucy. Que la fuente diga quién decidió
-        // el comando es la mitad de para qué sirve un registro de auditoría —
-        // con el automático encendido, además, nadie lo aprobó.
-        self.auditar(Some(ti), &cmd, &destino, "ai", ok, ms, &body);
+        // QUIÉN LO DECIDIÓ, no solo que lo propuso Lucy. Aquí se escribía `"ai"`
+        // en las dos ramas —con un comentario que ya decía que con el automático
+        // encendido nadie lo había aprobado— así que el registro no distinguía
+        // un comando sancionado por una persona de uno que corrió solo. El dato
+        // se conoce en `run_step` y viaja en `exec_origen`.
+        self.auditar(Some(ti), &cmd, &destino, self.exec_origen, ok, ms, &body);
         // El carril de Ejecución SÍ lleva el volcado crudo: es del operador, y
         // no viaja en ningún prompt. Es el único sitio donde debe vivir.
         self.tabs[ti].ws.exec_push(ExecEntry {
@@ -9675,6 +9740,10 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
             Some(ms),
         );
         self.exec_rx = None;
+        // Acaba de escribirse una fila de auditoría, así que el recuento de
+        // fallos cacheado puede estar viejo. Vaciarlo entero es más barato que
+        // afinar la clave y es el único momento en que hace falta.
+        self.fallos.clear();
 
         // La línea del comando entra en el hilo como EVENTO, plegada: el
         // comando, si fue bien, y su salida dentro. Con el motivo en lugar del
@@ -9893,6 +9962,29 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
             .filter(|e| !e.ok && lucy_core::elevate::looks_like_access_denied(&e.output))
             .map(|e| e.cmd.clone())
             .collect();
+        // LO QUE YA FALLÓ AQUÍ ANTES. Se resuelve fuera del bucle porque dentro
+        // `self` está prestado, y se cachea porque esto se repinta sesenta veces
+        // por segundo. Solo los pendientes: en uno que ya corrió, el resultado
+        // de verdad está a la vista y un historial al lado sobra.
+        let pendientes: Vec<(String, String)> = self.tabs[self.tab]
+            .ws
+            .plan
+            .iter()
+            .filter(|s| s.status == StepStatus::Pending)
+            .map(|s| (s.detail.clone(), s.host.clone()))
+            .collect();
+        for (cmd, host) in pendientes {
+            let clave = format!("{host}\u{1}{cmd}");
+            if !self.fallos.contains_key(&clave) {
+                let n = lucy_core::audit::fallos_recientes(
+                    &cmd,
+                    &host,
+                    lucy_core::audit::DIAS_FALLOS,
+                )
+                .unwrap_or(0);
+                self.fallos.insert(clave, n);
+            }
+        }
         // `(id, comando, elevado)`.
         let mut aprobado: Option<(String, String, bool)> = None;
 
@@ -9946,6 +10038,44 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                                     .color(theme::amber()),
                             );
                         });
+                    }
+                    // ESTO YA FALLÓ AQUÍ. La señal llevaba versiones en disco
+                    // —`exit_code` se escribe en cada fila, con índice por fecha
+                    // y por equipo— y no la agregaba nadie: el visor enseña una
+                    // lista cronológica, que contesta «qué pasó el martes» y no
+                    // «esto viene fallando». Así que Lucy podía proponer por
+                    // tercera vez un comando que ya había fallado dos, y el
+                    // operador aprobarlo sin más pista que su memoria.
+                    //
+                    // Va DELANTE del botón a propósito: un aviso que aparece
+                    // debajo de lo que hay que pulsar se lee después de pulsar.
+                    if s.status == StepStatus::Pending {
+                        let clave = format!("{}\u{1}{}", s.host, s.detail);
+                        if let Some(&n) = self.fallos.get(&clave).filter(|&&n| n > 0) {
+                            ui.add_space(3.0);
+                            row(ui, 15.0, |ui| {
+                                ui.spacing_mut().item_spacing.x = 5.0;
+                                // El mismo glifo con el que este panel marca un
+                                // paso fallido: es literalmente lo que dice.
+                                ui.label(
+                                    egui::RichText::new("✕")
+                                        .size(theme::FS_MICRO)
+                                        .color(theme::red()),
+                                );
+                                ui.label(
+                                    egui::RichText::new(if n == 1 {
+                                        i18n::tr("Este mismo comando ya falló aquí una vez").to_string()
+                                    } else {
+                                        i18n::trf(
+                                            "Este mismo comando ya falló aquí {n} veces",
+                                            &[("n", &n.to_string())],
+                                        )
+                                    })
+                                    .size(theme::FS_MICRO)
+                                    .color(theme::red()),
+                                );
+                            });
+                        }
                     }
                     // El botón SOLO existe en los pasos pendientes. Con el
                     // automático apagado —que es como viene— nada corre sin que
@@ -10042,7 +10172,8 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
             });
         }
         if let Some((id, cmd, elev)) = aprobado {
-            self.run_step(self.tab, id, cmd, elev);
+            // Lo propuso Lucy y lo sancionó una persona con el botón.
+            self.run_step(self.tab, id, cmd, elev, "ai");
         }
         // Los forks van DESPUÉS del plan y fuera de su estado vacío: con un
         // sub-agente corriendo el panel no está vacío, solo no tiene plan.
