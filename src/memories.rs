@@ -627,7 +627,7 @@ fn caduca(tags: &[String]) -> i64 {
     ahora() + VIDA_AUTO_DIAS * 86_400
 }
 
-fn ahora() -> i64 {
+pub fn ahora() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
@@ -1086,6 +1086,9 @@ pub fn recall(query: &str, presupuesto: usize) -> Recuerdo {
 
     let mut r = Recuerdo::default();
     let mut lineas: Vec<String> = Vec::new();
+    // Lo que de verdad ENTRÓ en el bloque. Ver `usadas` al final: que a una
+    // memoria la recuperen es usarla, y hasta ahora eso no lo anotaba nadie.
+    let mut entraron: Vec<i64> = Vec::new();
 
     // ── LAS FIJADAS, ANTES QUE NADA Y SIN PREGUNTARLE AL PARECIDO ────────────
     //
@@ -1155,6 +1158,7 @@ pub fn recall(query: &str, presupuesto: usize) -> Recuerdo {
                 } else {
                     lineas.push(format!("- {}", una_linea(&h.text)));
                 }
+                entraron.push(id);
                 r.memorias += 1;
             }
 
@@ -1203,8 +1207,66 @@ pub fn recall(query: &str, presupuesto: usize) -> Recuerdo {
         }
     }
 
+    // QUE TE RECUPEREN ES USARTE. Sin esta línea, la fase del olvido tenía un
+    // agujero por el medio: una memoria automática nace con sesenta días y solo
+    // los renueva al CONFIRMARSE, o sea cuando Lucy vuelve a deducirla por su
+    // cuenta. Una que entrara en el prompt todos los días sin volver a deducirse
+    // caducaba exactamente igual que una que no hubiese mirado nadie — y son dos
+    // cosas opuestas. El plazo estaba midiendo si Lucy REDESCUBRE, no si USA.
+    usadas(&entraron);
+
     r.bloque = lineas.join("\n");
     r
+}
+
+/// Anota que estas memorias entraron en el prompt: un acceso más y el plazo
+/// corrido desde hoy.
+///
+/// NO TOCA LA CONFIANZA, y la diferencia es el eje de todo el módulo:
+///
+/// ```text
+///   recordada  → se usó          → sigue viva          (esta función)
+///   confirmada → se volvió a deducir → además, se cree más   (`confirma`)
+/// ```
+///
+/// Que a una memoria la recupere el coseno no es corroborarla: la trajo el
+/// parecido con la pregunta, no una segunda observación del mundo. Si esto
+/// subiera `confidence`, bastaría con preguntar cuatro veces lo mismo para que
+/// cualquier cosa cruzase `UMBRAL_CONFIRMADA` y se volviera permanente — y
+/// «confirmada» dejaría de significar nada.
+///
+/// El plazo sí se renueva, y solo donde ya había uno: el `CASE` no le pone
+/// fecha a lo dictado por el operador, igual que en `confirma`.
+///
+/// Las del respaldo léxico no entran aquí porque `lexico` devuelve textos y no
+/// ids. Es el camino que solo corre cuando no hubo NADA por significado, así que
+/// pierde el acceso de un caso raro; arreglarlo pide cambiarle la firma.
+pub fn usadas(ids: &[i64]) {
+    if ids.is_empty() {
+        return;
+    }
+    let lista = ids
+        .iter()
+        .map(|i| i.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    // Un solo viaje para las ≤8. Los ids salen de `parse::<i64>`, no del texto
+    // de nadie, así que interpolarlos no abre una inyección — y con `IN (?)` no
+    // se puede pasar una lista de tamaño variable.
+    let _ = crate::with_db(|c| {
+        c.execute(
+            &format!(
+                "UPDATE agent_memories
+                 SET access_count = access_count + 1,
+                     last_accessed_at = strftime('%s','now'),
+                     expires_at = CASE WHEN expires_at = 0 THEN 0 ELSE ?1 END
+                 WHERE id IN ({lista})"
+            ),
+            rusqlite::params![ahora() + VIDA_AUTO_DIAS * 86_400],
+        )
+        .map_err(|e| format!("memories: uso: {e}"))?;
+        Ok(())
+    });
 }
 
 /// Una memoria en una línea. Los saltos romperían la lista del prompt.

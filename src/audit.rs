@@ -44,7 +44,22 @@ pub struct Entry {
     pub host_id: String,
     pub host_name: String,
     pub command: String,
-    /// `manual` | `ai` | `runbook` | `compliance` | `broadcast`.
+    /// QUIÉN DECIDIÓ ESTO, que es media razón de ser de la tabla:
+    ///
+    /// ```text
+    ///   manual      lo escribió el operador en la terminal
+    ///   ai          lo propuso Lucy y una persona le dio al botón
+    ///   auto        lo lanzó el bucle automático sin que nadie lo mirara
+    ///   descartado  Lucy lo propuso y NUNCA llegó a ejecutarse
+    ///   runbook · compliance · broadcast   lo disparó una rutina
+    /// ```
+    ///
+    /// `auto` y `descartado` son nuevos, y los dos existen por lo mismo: la
+    /// diferencia entre lo que una persona sancionó y lo que no. Antes `ai`
+    /// cubría el aprobado y el automático a la vez, y lo descartado no se
+    /// escribía en ninguna parte — o sea que el caso más interesante, el
+    /// operador que lee un comando y decide que no, desaparecía al cerrar la
+    /// pestaña.
     pub source: String,
     /// `None` = no se sabe. NO se pone 0, que significa «fue bien».
     pub exit_code: Option<i32>,
@@ -92,6 +107,18 @@ impl Entry {
         self.exit_code = Some(if ok { 0 } else { 1 });
         self.duration_ms = Some(ms as i64);
         self.output_preview = recorta(salida, MAX_PREVIEW);
+        self
+    }
+
+    /// POR QUÉ QUEDÓ ASÍ, sin afirmar cómo acabó.
+    ///
+    /// `resultado` es para lo que corrió: escribe `exit_code` y `duration_ms`.
+    /// Esto es para lo que NO corrió, donde el motivo es el único dato que hay y
+    /// el código de salida tiene que quedarse en `None` — ver la nota del campo:
+    /// `None` es «no se sabe», y un cero aquí sería afirmar que un comando que
+    /// nadie ejecutó terminó bien.
+    pub fn nota(mut self, texto: &str) -> Self {
+        self.output_preview = recorta(texto, MAX_PREVIEW);
         self
     }
 }
@@ -273,6 +300,51 @@ pub fn query(f: &Filter) -> Result<Vec<Entry>, String> {
         filas.collect::<Result<Vec<_>, _>>().map_err(|e| format!("audit: {e}"))
     })
 }
+
+/// Cuántas veces falló ESTE MISMO comando en ESTE MISMO equipo últimamente.
+///
+/// LA SEÑAL YA ESTABA EN DISCO. `exit_code` y `duration_ms` se escriben en cada
+/// fila desde hace versiones, con índice por fecha y por equipo, y no los
+/// agregaba nadie: el visor enseña una lista cronológica, que contesta «qué pasó
+/// el martes» y no «esto viene fallando». Así que Lucy podía proponer un comando
+/// que ya había fallado tres veces en esta máquina esta semana sin saberlo, y el
+/// operador tampoco tenía cómo enterarse salvo recordándolo.
+///
+/// COINCIDENCIA EXACTA, y es deliberado. Lo tentador es cortar por el cmdlet
+/// —contar todos los `Get-Service` que fallaron— pero eso mezcla `-Name spooler`
+/// con `-Name w3svc`, que son dos preguntas distintas sobre dos servicios
+/// distintos: el primero puede llevar semanas roto sin que eso diga nada del
+/// segundo. Un aviso que se dispara por parecido es un aviso que se aprende a
+/// ignorar. Esto acierta menos veces y no se equivoca ninguna.
+///
+/// El equipo entra en la clave por la misma razón: un comando que falla en un
+/// servidor y funciona en otro es información sobre el servidor.
+///
+/// `exit_code IS NOT NULL` deja fuera lo que no se sabe cómo acabó —la terminal
+/// local, los pasos descartados— que no es lo mismo que haber ido bien.
+pub fn fallos_recientes(command: &str, host_id: &str, days: i64) -> Result<usize, String> {
+    if command.trim().is_empty() || days <= 0 {
+        return Ok(0);
+    }
+    crate::with_db(|c| {
+        c.query_row(
+            "SELECT COUNT(*) FROM audit_trail
+             WHERE command = ?1 AND host_id = ?2 AND exit_code IS NOT NULL AND exit_code != 0
+               AND created_at > (strftime('%s','now') - ?3 * 86400)",
+            rusqlite::params![command, host_id, days],
+            |r| r.get::<_, i64>(0),
+        )
+        .map(|n| n as usize)
+        .map_err(|e| format!("audit: fallos: {e}"))
+    })
+}
+
+/// La ventana por defecto de `fallos_recientes`.
+///
+/// Dos semanas: lo bastante largo para que un problema que se arrastra se note,
+/// lo bastante corto para que lo que ya se arregló deje de avisar. No está
+/// medido — cuando haya meses de uso se decide con datos.
+pub const DIAS_FALLOS: i64 = 14;
 
 /// Borra lo anterior a `days` días. Devuelve cuántas filas se fueron.
 ///

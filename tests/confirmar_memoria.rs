@@ -303,3 +303,116 @@ fn confirmar_una_memoria_que_no_existe_no_revienta() {
         "una fila que no está tiene que devolver None, no fingir un movimiento"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// USAR NO ES CONFIRMAR
+//
+// La fase del olvido tenía un agujero por el medio, y este bloque es el que lo
+// cierra. Una memoria automática nacía con sesenta días y solo los renovaba al
+// CONFIRMARSE, o sea cuando Lucy volvía a deducirla por su cuenta. Una que
+// entrase en el prompt todos los días sin volver a deducirse caducaba
+// exactamente igual que una que no hubiese mirado nadie: el plazo estaba
+// midiendo si Lucy REDESCUBRE, no si USA.
+//
+// Pero las dos cosas no pueden valer lo mismo. Si recuperar subiera la
+// confianza, bastaría con preguntar cuatro veces lo mismo para que cualquier
+// cosa cruzase el umbral y se volviera permanente por repetición del operador.
+// Por eso son dos funciones y por eso hay tests: `usadas` mantiene viva,
+// `confirma` además da crédito.
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn recuperar_una_memoria_la_mantiene_viva_pero_no_la_hace_mas_creible() {
+    let _t = turno();
+    con_base();
+
+    let m = lucy_core::memories::save(
+        &lucy_core::memories::New::nueva(
+            "cuántos discos tiene el servidor de ficheros",
+            "Se ejecutó:\n- Get-Disk\n\nFS-01 tiene tres discos, dos de ellos en espejo.",
+        )
+        .con_tags(&["auto"]),
+    )
+    .expect("guardar");
+
+    let (accesos_antes, confianza_antes) = lee(m.id);
+
+    // Entra en el prompt cuatro veces: son cuatro turnos en los que la pregunta
+    // se parecía a esta memoria. Con `confirma` eso cruzaría el listón de
+    // promoción — lo prueba `cuatro_confirmaciones_cruzan_el_listón_de_la_promocion`.
+    for _ in 0..4 {
+        lucy_core::memories::usadas(&[m.id]);
+    }
+
+    let (accesos, confianza) = lee(m.id);
+    assert_eq!(accesos, accesos_antes + 4, "recuperarla cuatro veces no contó como cuatro usos");
+    assert_eq!(
+        confianza, confianza_antes,
+        "recuperar una memoria le subió la confianza: preguntar cuatro veces lo mismo no es \
+         corroborar nada, y si contase, «confirmada» dejaría de significar algo"
+    );
+}
+
+#[test]
+fn usar_una_memoria_le_corre_el_plazo_desde_hoy() {
+    let _t = turno();
+    con_base();
+
+    let m = lucy_core::memories::save(
+        &lucy_core::memories::New::nueva(
+            "qué versión de Windows corre el controlador",
+            "Se ejecutó:\n- Get-ComputerInfo\n\nDC-01 va con Windows Server 2019, 17763.5576.",
+        )
+        .con_tags(&["auto"]),
+    )
+    .expect("guardar");
+
+    // Se le envejece el plazo a mano hasta dejarlo a dos días de vencer: es una
+    // memoria escrita hace casi dos meses y no vuelta a deducir nunca.
+    let casi = lucy_core::memories::ahora() + 2 * 86_400;
+    lucy_core::with_db(|c| {
+        c.execute("UPDATE agent_memories SET expires_at = ?1 WHERE id = ?2", rusqlite::params![casi, m.id])
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    })
+    .expect("envejecer");
+
+    lucy_core::memories::usadas(&[m.id]);
+
+    assert!(
+        caducidad(m.id) > casi,
+        "una memoria que acaba de entrar en el prompt seguía a dos días de caducar: el olvido \
+         estaría borrando justo lo que se está usando"
+    );
+    assert!(lucy_core::memories::viva(m.id), "la dio por muerta después de usarla");
+}
+
+#[test]
+fn usar_no_le_pone_plazo_a_lo_que_no_caducaba() {
+    let _t = turno();
+    con_base();
+
+    // La misma puerta de atrás que ya se cerró en `confirma`. Lo que dictó el
+    // operador no caduca, y recuperarlo no puede ser la forma de que empiece a
+    // hacerlo.
+    let g = lucy_core::memories::save(&lucy_core::memories::New::nueva(
+        "la ventana de mantenimiento",
+        "Los parches se aplican los domingos de 02:00 a 05:00, nunca en horario de oficina.",
+    ))
+    .expect("guardar");
+
+    assert_eq!(caducidad(g.id), 0);
+    lucy_core::memories::usadas(&[g.id]);
+    assert_eq!(caducidad(g.id), 0, "usar una memoria dictada le puso fecha de caducidad");
+}
+
+#[test]
+fn no_recuperar_nada_no_toca_la_base() {
+    let _t = turno();
+    con_base();
+
+    // El caso de todos los turnos en los que la pregunta no se parece a nada.
+    // Sin esta salida temprana la lista vacía arma un `IN ()`, que es un error
+    // de sintaxis de SQLite.
+    lucy_core::memories::usadas(&[]);
+}
