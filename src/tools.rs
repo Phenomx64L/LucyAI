@@ -401,15 +401,38 @@ pub fn run_with_skills(
 ) -> Option<ToolResult> {
     if name == "skill" {
         return Some(match crate::skills::find(skills, args) {
-            Some(k) => ToolResult {
-                label: format!("skill {}", k.name),
-                body: format!(
-                    "Instrucciones del skill «{}». Síguelas para esta tarea; si algo no \
-                     encaja con lo que ves en la máquina, manda lo que ves.\n\n{}",
-                    k.name, k.body
-                ),
-                ok: true,
-            },
+            Some(k) => {
+                // QUÉ SE HA USADO ALGUNA VEZ. El operador instala skills, Lucy
+                // los anuncia en el catálogo de cada turno, y hasta ahora nadie
+                // —ni él ni ella— podía contestar cuáles se habían pedido nunca.
+                // Un skill que no usa nadie sigue costando su línea de catálogo
+                // en cada petición, para siempre, y no había dato con el que
+                // decidir apagarlo. Es la misma pregunta que la de las memorias:
+                // ¿sirvió lo que cargué?
+                //
+                // No rompe la regla del módulo de skills —«lo que Lucy aprende
+                // acaba siendo un fichero»— porque el skill sigue viviendo en
+                // disco: lo que se apunta es el USO, no el estado. Con esto,
+                // «qué skills se usan» es un GROUP BY sobre un índice que ya
+                // existe.
+                //
+                // En silencio y sin resultado: cargar un skill no puede fallar
+                // ni tarda, así que `exit_code` se queda en None —«no se sabe»,
+                // que aquí significa «no aplica»— y un error de auditoría no
+                // puede impedir que el skill se cargue.
+                let _ = crate::audit::ensure_schema().and_then(|()| {
+                    crate::audit::record(&crate::audit::Entry::nueva(&k.name, "skill"))
+                });
+                ToolResult {
+                    label: format!("skill {}", k.name),
+                    body: format!(
+                        "Instrucciones del skill «{}». Síguelas para esta tarea; si algo no \
+                         encaja con lo que ves en la máquina, manda lo que ves.\n\n{}",
+                        k.name, k.body
+                    ),
+                    ok: true,
+                }
+            }
             // Los que SÍ hay, en el error. Decir solo «no existe» deja al modelo
             // probando nombres, y cada intento cuesta un turno.
             None => ToolResult::err(

@@ -211,3 +211,54 @@ fn el_origen_distingue_lo_que_aprobo_una_persona_de_lo_que_corrio_solo() {
         "lo que corrió el automático no se puede separar de lo aprobado"
     );
 }
+
+#[test]
+fn cargar_un_skill_deja_constancia_de_que_se_uso() {
+    let _t = turno();
+    con_base();
+
+    // EL OPERADOR INSTALA SKILLS Y NADIE SABIA CUALES SE USABAN. Lucy los
+    // anuncia en el catálogo de cada turno, así que uno que no pide nadie sigue
+    // costando su línea en cada petición, para siempre, y no había dato con el
+    // que decidir apagarlo. Es la misma pregunta que la de las memorias:
+    // ¿sirvió lo que cargué?
+    let skills = vec![lucy_core::skills::Skill {
+        name: "inventario-red".into(),
+        description: "Levanta el inventario de la red".into(),
+        body: "Corre Get-NetAdapter y resume.".into(),
+        activo: true,
+        dir: std::path::PathBuf::from("inventario-red"),
+    }];
+
+    let r = lucy_core::tools::run_with_skills("skill", "inventario-red", &skills)
+        .expect("el skill no se resolvió");
+    assert!(r.ok);
+
+    let filas = lucy_core::audit::query(&lucy_core::audit::Filter {
+        source: Some("skill".into()),
+        ..Default::default()
+    })
+    .expect("consultar");
+
+    let f = filas
+        .iter()
+        .find(|f| f.command == "inventario-red")
+        .expect("cargar un skill no dejó rastro en ninguna parte");
+    assert_eq!(
+        f.exit_code, None,
+        "cargar un skill no puede fallar ni tarda: un código de salida aquí afirmaría algo que \
+         nadie ha comprobado"
+    );
+
+    // Y el que NO existe no deja fila: apuntar un nombre que el modelo se
+    // inventó ensuciaría el recuento de uso con skills que no están.
+    let antes = filas.len();
+    let _ = lucy_core::tools::run_with_skills("skill", "no-existe", &skills);
+    let despues = lucy_core::audit::query(&lucy_core::audit::Filter {
+        source: Some("skill".into()),
+        ..Default::default()
+    })
+    .expect("consultar")
+    .len();
+    assert_eq!(despues, antes, "se apuntó como usado un skill que no existe");
+}
