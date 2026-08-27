@@ -202,6 +202,97 @@ fn el_umbral_de_confianza_es_alcanzable_desde_el_valor_por_defecto() {
     );
 }
 
+fn caducidad(id: i64) -> i64 {
+    lucy_core::with_db(|c| {
+        c.query_row("SELECT expires_at FROM agent_memories WHERE id = ?1", [id], |r| r.get(0))
+            .map_err(|e| e.to_string())
+    })
+    .expect("leer caducidad")
+}
+
+#[test]
+fn lo_automatico_nace_con_plazo_y_lo_demas_no() {
+    let _t = turno();
+    con_base();
+
+    // SOLO LO AUTOMÁTICO CADUCA. Lo que guarda la escritura de turno es la
+    // pregunta y la respuesta entera, con sus cifras dentro: «CPU al 22 %» es
+    // cierto la noche que se mide y deja de serlo al día siguiente. Lo que dictó
+    // el operador no es una foto de la máquina y no lleva plazo.
+    let auto = lucy_core::memories::save(&
+        lucy_core::memories::New::nueva(
+            "una consulta automática",
+            "Se ejecutó:\n- Get-Service\n\nEl equipo está al 22 % de CPU y con 10 GB libres.",
+        )
+        .con_tags(&["auto"]),
+    )
+    .expect("guardar");
+
+    let dictada = lucy_core::memories::save(&lucy_core::memories::New::nueva(
+        "el dominio de la casa",
+        "El dominio de Active Directory de esta oficina es corp.local y el controlador es DC-01.",
+    ))
+    .expect("guardar");
+
+    assert!(caducidad(auto.id) > 0, "una memoria automática nació sin plazo");
+    assert_eq!(caducidad(dictada.id), 0, "se le puso plazo a algo que no es automático");
+}
+
+#[test]
+fn confirmar_renueva_el_plazo_y_al_final_lo_quita() {
+    let _t = turno();
+    con_base();
+    let g = lucy_core::memories::save(&
+        lucy_core::memories::New::nueva(
+            "el servicio de impresión se reinicia solo",
+            "Se ejecutó:\n- Get-Service Spooler\n\nEl Spooler estaba detenido y se reinició sin \
+             incidencias tras aplicar la acción de recuperación configurada.",
+        )
+        .con_tags(&["auto"]),
+    )
+    .expect("guardar");
+    let id = g.id;
+    let inicial = caducidad(id);
+    assert!(inicial > 0);
+
+    // LA PODA VA POR EL CRITERIO CORRECTO —lo que no vuelve, se va— y no por
+    // antigüedad a secas, que borraría igual lo que se escribió hace tiempo y
+    // sigue siendo cierto. Cada confirmación renueva el plazo desde hoy.
+    for _ in 0..3 {
+        lucy_core::memories::confirma(id).expect("confirmar");
+        assert!(caducidad(id) > 0, "el plazo se quitó antes de tiempo");
+    }
+
+    // Y EN CUANTO CRUZA EL UMBRAL, se le quita la fecha: ya no es la foto de una
+    // noche, es algo que ha resistido cuatro conversaciones distintas.
+    lucy_core::memories::confirma(id).expect("confirmar");
+    let (_, conf) = lee(id);
+    assert!(conf >= lucy_core::memories::UMBRAL_CONFIRMADA, "no cruzó el umbral: {conf}");
+    assert_eq!(
+        caducidad(id),
+        0,
+        "cruzó el umbral de confirmada y sigue con fecha de caducidad"
+    );
+}
+
+#[test]
+fn confirmar_no_le_pone_plazo_a_lo_que_no_lo_tenia() {
+    let _t = turno();
+    con_base();
+    // Una memoria dictada por el operador no caduca. Confirmarla no puede
+    // ponerle una fecha que nunca tuvo — seria el olvido entrando por la puerta
+    // de atras, y justo sobre lo unico que no se puede volver a medir.
+    let g = lucy_core::memories::save(&lucy_core::memories::New::nueva(
+        "en producción se avisa antes de reiniciar nada",
+        "Regla de la casa: cualquier reinicio en producción se anuncia antes en el canal del \
+         equipo, aunque sea fuera de horario.",
+    ))
+    .expect("guardar");
+    assert_eq!(caducidad(g.id), 0);
+    lucy_core::memories::confirma(g.id).expect("confirmar");
+    assert_eq!(caducidad(g.id), 0, "confirmar le puso plazo a una memoria que no caducaba");
+}
+
 #[test]
 fn confirmar_una_memoria_que_no_existe_no_revienta() {
     let _t = turno();

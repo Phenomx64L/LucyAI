@@ -362,9 +362,10 @@ pub fn save(n: &New) -> Result<Guardado, String> {
             return Ok(g);
         }
         tx.execute(
-            "INSERT INTO agent_memories (session_id, title, content, tags, files, importance)
-             VALUES (?1, ?2, ?3, ?4, '[]', ?5)",
-            rusqlite::params![sid, title, content, tags_json, imp],
+            "INSERT INTO agent_memories
+                 (session_id, title, content, tags, files, importance, expires_at)
+             VALUES (?1, ?2, ?3, ?4, '[]', ?5, ?6)",
+            rusqlite::params![sid, title, content, tags_json, imp, caduca(&tags)],
         )
         .map_err(|e| format!("memories: insert: {e}"))?;
         let id = tx.last_insert_rowid();
@@ -592,6 +593,47 @@ fn texto_dup_tx(
     Ok(None)
 }
 
+/// Cuánto vive una memoria automática que nadie vuelve a confirmar.
+///
+/// EL OLVIDO ESTABA CONSTRUIDO Y APAGADO. La columna `expires_at` existe, tiene
+/// su migración, y `viva()` ya la respeta — el camino de LECTURA está entero
+/// desde siempre. Lo que no existía era la línea que escribe el valor: se
+/// insertaba el 0 por defecto, que significa «nunca caduca». Otra pieza acabada
+/// a la que le faltaba el interruptor.
+///
+/// POR QUÉ HACE FALTA. Lo que la escritura automática guarda de un turno es la
+/// pregunta como título y la respuesta entera como cuerpo — con sus cifras
+/// dentro. «CPU al 22 %, 10,7 GB usados» es cierto la noche que se mide y deja
+/// de serlo al día siguiente. Recordarle eso a Lucy dentro de tres semanas no es
+/// que no ayude: es que la puede llevar a concluir sobre una foto vieja.
+///
+/// Sesenta días. ES UNA PRIMERA ESTIMACIÓN, no una medida: lo bastante largo
+/// para que una tarea que se repite cada mes llegue a confirmarse dos veces, y
+/// lo bastante corto para que el corpus no crezca para siempre. El día que haya
+/// meses de uso, este número se decide con datos.
+pub const VIDA_AUTO_DIAS: i64 = 60;
+
+/// Cuándo caduca una memoria recién escrita. `0` = nunca.
+///
+/// SOLO LO AUTOMÁTICO CADUCA. Lo que dictó el operador, lo que fijó a mano y los
+/// cristales de sesión no llevan plazo: no son una foto del estado de la máquina
+/// sino algo que alguien decidió que importaba, y ponerle fecha de caducidad a
+/// eso sería tirar lo único que no se puede volver a medir.
+fn caduca(tags: &[String]) -> i64 {
+    let automatica = tags.iter().any(|t| t.eq_ignore_ascii_case("auto"));
+    if !automatica {
+        return 0;
+    }
+    ahora() + VIDA_AUTO_DIAS * 86_400
+}
+
+fn ahora() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 /// Hasta dónde puede subir la confianza SOLA.
 ///
 /// El 1,0 no se alcanza por repetición y eso es a propósito: queda reservado a
@@ -644,6 +686,18 @@ fn confirma_en(c: &rusqlite::Connection, id: i64) -> Option<(f64, f64)> {
     let antes: f64 = c
         .query_row("SELECT confidence FROM agent_memories WHERE id = ?1", [id], |r| r.get(0))
         .ok()?;
+    // CONFIRMAR ES LO QUE DA VIDA, y esa es la otra mitad del olvido. Una
+    // memoria automática nace con sesenta días; cada vez que Lucy vuelve a
+    // deducirla, el plazo se renueva desde hoy. Y en cuanto cruza el umbral de
+    // confirmada, se le quita la fecha: ya no es la foto de una noche, es algo
+    // que ha resistido cuatro conversaciones distintas.
+    //
+    // Así el corpus se poda solo por el criterio correcto —lo que no vuelve, se
+    // va— en vez de por antigüedad a secas, que borraría igual lo que se escribió
+    // hace tiempo y sigue siendo cierto.
+    //
+    // El `expires_at = 0` de las que ya no caducan NO se toca: el `CASE` solo
+    // escribe cuando había un plazo puesto.
     c.execute(
         "UPDATE agent_memories
          SET access_count = access_count + 1,
@@ -651,9 +705,20 @@ fn confirma_en(c: &rusqlite::Connection, id: i64) -> Option<(f64, f64)> {
              confidence = CASE
                  WHEN confidence < ?2 THEN confidence + (?2 - confidence) * ?3
                  ELSE confidence
+             END,
+             expires_at = CASE
+                 WHEN expires_at = 0 THEN 0
+                 WHEN confidence + (?2 - confidence) * ?3 >= ?4 THEN 0
+                 ELSE ?5
              END
          WHERE id = ?1",
-        rusqlite::params![id, TECHO_CONFIRMACION, PASO_CONFIRMACION],
+        rusqlite::params![
+            id,
+            TECHO_CONFIRMACION,
+            PASO_CONFIRMACION,
+            UMBRAL_CONFIRMADA,
+            ahora() + VIDA_AUTO_DIAS * 86_400,
+        ],
     )
     .ok()?;
     let despues: f64 = c
