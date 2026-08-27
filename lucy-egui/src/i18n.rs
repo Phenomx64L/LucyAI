@@ -545,6 +545,13 @@ pub const FRASES: &[Frase] = &[
         "Bloqué par le guardrail",
         "Vom Guardrail blockiert",
     ),
+    f!(
+        "Bloqueado por el guardrail: {motivo}",
+        "Blocked by the guardrail: {motivo}",
+        "Bloqueado pelo guardrail: {motivo}",
+        "Bloqué par le guardrail : {motivo}",
+        "Vom Guardrail blockiert: {motivo}",
+    ),
     f!("Buen día", "Good day", "Boa tarde", "Bonne journée", "Guten Tag"),
     f!("Buenos días", "Good morning", "Bom dia", "Bonjour", "Guten Morgen"),
     f!("Buscando…", "Searching…", "A procurar…", "Recherche…", "Suche läuft…"),

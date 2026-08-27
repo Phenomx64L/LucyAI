@@ -8642,9 +8642,14 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                     // cosas.
                     if name == "fork_task" {
                         let r = self.fork_lanzar(ti, &args);
-                        herramientas.push(format!(
-                            "<TOOL_RESULT tool=\"fork_task\" arg=\"{args}\">\n{r}\n</TOOL_RESULT>"
-                        ));
+                        // POR LA PUERTA ÚNICA, y no con un `format!`. `args` lo
+                        // escribe el MODELO: un argumento con `"><TOOL_RESULT`
+                        // dentro cierra este sobre y abre otro que el modelo
+                        // rellena a su gusto — y lo que va dentro de un sobre lo
+                        // lee como si se lo dijera su propio arnés. `tool_result`
+                        // escapa los atributos y tiene un test que lo prueba.
+                        herramientas
+                            .push(lucy_core::guard::tool_result("fork_task", &args, &r).block);
                         continue;
                     }
                     if name == "wait_task" {
@@ -8729,11 +8734,17 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                         // existe, un formato mal puesto— y sin decírselo lo
                         // repite igual en el turno siguiente.
                         if !a.blocked.is_empty() {
-                            herramientas.push(format!(
-                                "<TOOL_RESULT tool=\"{name}\" arg=\"{}\">\nNO SE APLICÓ: {}\n\
-                                 </TOOL_RESULT>",
-                                a.path, a.blocked
-                            ));
+                            // `name` y `a.path` salen los dos del modelo — el
+                            // primero del nombre de la etiqueta, el segundo de
+                            // sus argumentos. Por la puerta única, que los escapa.
+                            herramientas.push(
+                                lucy_core::guard::tool_result(
+                                    &name,
+                                    &a.path,
+                                    &format!("NO SE APLICÓ: {}", a.blocked),
+                                )
+                                .block,
+                            );
                         }
                         self.tabs[ti].ws.artifact_push(a);
                     }
@@ -8942,10 +8953,15 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
             } else {
                 "ya las recogiste todas; lo que devolvieron lo tienes más arriba"
             };
-            listos.push(format!(
-                "<TOOL_RESULT tool=\"wait_task\" arg=\"{args}\">\nNo hay ninguna tarea que \
-                 recoger: {motivo}.\n</TOOL_RESULT>"
-            ));
+            // `args` lo escribe el modelo: por la puerta única, que lo escapa.
+            listos.push(
+                lucy_core::guard::tool_result(
+                    "wait_task",
+                    args,
+                    &format!("No hay ninguna tarea que recoger: {motivo}."),
+                )
+                .block,
+            );
             return (listos, faltan);
         }
         for id in pedidos {
@@ -8955,10 +8971,8 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                 // Un nombre que no se lanzó se dice AHORA. Meterlo en los que
                 // faltan lo dejaría esperando para siempre a una tarea que no
                 // existe, y la pestaña con el cursor puesto.
-                None => listos.push(format!(
-                    "<TOOL_RESULT tool=\"wait_task\" arg=\"{id}\">\nNo hay ninguna tarea \
-                     llamada «{id}». Las que lanzaste: {}.\n</TOOL_RESULT>",
-                    if self.tabs[ti].ws.forks.is_empty() {
+                None => {
+                    let lanzadas = if self.tabs[ti].ws.forks.is_empty() {
                         "ninguna".to_string()
                     } else {
                         self.tabs[ti]
@@ -8968,8 +8982,21 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                             .map(|f| f.id.as_str())
                             .collect::<Vec<_>>()
                             .join(", ")
-                    }
-                )),
+                    };
+                    // El `id` lo puso el modelo al lanzar la tarea, y aquí vuelve
+                    // a un atributo. Por la puerta única.
+                    listos.push(
+                        lucy_core::guard::tool_result(
+                            "wait_task",
+                            &id,
+                            &format!(
+                                "No hay ninguna tarea llamada «{id}». Las que lanzaste: \
+                                 {lanzadas}."
+                            ),
+                        )
+                        .block,
+                    );
+                }
             }
         }
         (listos, faltan)
@@ -16044,8 +16071,25 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
         }
     }
 
-    /// Comprueba si un comando remoto se deshace, y si no, pide confirmación.
+    /// La misma puerta que la local, para el camino remoto.
+    ///
+    /// LAS DOS COMPROBACIONES, Y AQUÍ IMPORTAN MÁS. En local, un comando que se
+    /// escapa corre en la máquina que el operador tiene delante y cuya pantalla
+    /// está mirando. En remoto corre en un servidor, con una credencial
+    /// guardada, y lo único que vuelve son unas líneas de salida. Tener MENOS
+    /// control en el camino que llega más lejos es exactamente al revés.
     fn nx_gate_remote(&mut self, h: &lucy_core::hosts::Host, cmd: String) {
+        let g = lucy_core::guard::scan(&cmd, lucy_core::guard::Role::Assistant);
+        if g.decision == lucy_core::guard::Decision::Block {
+            self.nx_aviso(
+                Some(h),
+                &i18n::trf(
+                    "Bloqueado por el guardrail: {motivo}",
+                    &[("motivo", &g.reason)],
+                ),
+            );
+            return;
+        }
         if lucy_core::destructive::is_destructive(&cmd) {
             self.nx_confirm = Some(Pendiente { host: Some(h.id.clone()), cmd });
         } else {
@@ -16753,11 +16797,33 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
 
     /// Corre el comando, o pide confirmación si no se deshace.
     ///
-    /// La comprobación es la MISMA que usa el bucle automático. Que un comando
-    /// escrito a mano y uno propuesto por Lucy pasen por el mismo filtro es lo
-    /// que hace que la respuesta sea previsible: si `format D:` pregunta en un
-    /// sitio, pregunta en los dos.
+    /// LAS DOS COMPROBACIONES, COMO EL BUCLE AUTOMÁTICO. Y hasta ahora era solo
+    /// una: este comentario decía «la comprobación es la MISMA que usa el bucle
+    /// automático» y el cuerpo llamaba únicamente a `destructive::is_destructive`.
+    /// El bucle hace DOS cosas y en este orden — primero `guard::scan`, que
+    /// decide si el texto tiene forma de ataque, y solo después `is_destructive`,
+    /// que decide si hace falta que alguien lo lea.
+    ///
+    /// Un comentario que afirma una equivalencia que no existe es peor que no
+    /// tenerlo: es lo que hace que nadie vuelva a mirar. Lo comprobé contando las
+    /// llamadas al guardrail en este fichero — cuatro, y las cuatro en el bucle
+    /// del agente.
+    ///
+    /// Y EL CAMINO NO ES EL DEL OPERADOR ESCRIBIENDO. Aquí llega lo que devolvió
+    /// el MODELO al traducir una frase (`nx_translate` → `pump_nx`), así que el
+    /// rol es `Assistant`, el mismo con el que se escanea un `<EXECUTE>`. Que el
+    /// operador escribiera la frase no hace suyo el comando: lo redactó el
+    /// modelo, con lo que hubiera en su contexto.
+    ///
+    /// Bloqueado NO ofrece botón, igual que en el bucle: ofrecer uno para
+    /// ejecutar una firma de ataque convierte el guardrail en un trámite.
     fn nx_maybe_run(&mut self, cmd: String) {
+        let g = lucy_core::guard::scan(&cmd, lucy_core::guard::Role::Assistant);
+        if g.decision == lucy_core::guard::Decision::Block {
+            self.nx_aviso(None, &i18n::trf("Bloqueado por el guardrail: {motivo}",
+                &[("motivo", &g.reason)]));
+            return;
+        }
         if lucy_core::destructive::is_destructive(&cmd) {
             self.nx_confirm = Some(Pendiente { host: None, cmd });
         } else {
@@ -17745,6 +17811,16 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                         false,
                     )
                 }
+                // NO CIERRA LA INGESTA, y por eso `fin` se queda como está. Es
+                // el guardrail diciendo que ese documento lleva dentro algo con
+                // forma de instrucción; el documento entra igual —un manual de
+                // este oficio cita ataques— pero el operador tiene que saberlo,
+                // porque ese texto va a acabar en el prompt de sistema.
+                //
+                // Se pinta como aviso y no como error: un error deja el
+                // documento fuera y esto no. Pintarlos igual haría creer que la
+                // ingesta falló.
+                Paso::Aviso(a) => (a, true),
                 Paso::Error(e) => {
                     fin = true;
                     (e, true)
