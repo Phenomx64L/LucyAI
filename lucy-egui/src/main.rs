@@ -18258,6 +18258,13 @@ mod layout {
         // aquí necesitaría montar el panel de verdad, y eso arrastra la
         // aplicación entera. Queda dicho para que nadie lea este test como una
         // prueba de algo que no prueba.
+        //
+        // CONFIRMADO EN USO, QUE NO ES LO MISMO QUE PROBADO. El operador verificó
+        // con el binario que el recorte desapareció y que estrechar el carril
+        // ahora reflowa el texto. O sea que los topes SÍ arreglan lo que se
+        // reportó — pero sigue sin haber un test que lo demuestre, y por tanto
+        // sigue sin haber nada que avise si alguien los quita. Este mide la
+        // forma; la causa exacta se quedó sin capturar.
     }
 
     #[test]
