@@ -569,24 +569,115 @@ fn texto_dup_tx(
                 continue;
             }
         }
-        // Se le sube el contador de accesos: que un hecho vuelva a aparecer es
-        // señal de que importa, y es lo que hace que suba en el recuerdo.
-        let _ = c.execute(
-            "UPDATE agent_memories
-             SET access_count = access_count + 1, last_accessed_at = strftime('%s','now')
-             WHERE id = ?1",
-            rusqlite::params![id],
-        );
+        // SE CONFIRMA, no solo se cuenta. El comentario que había aquí decía que
+        // subir el contador «es lo que hace que suba en el recuerdo», y era
+        // falso: nadie leía ese contador en todo el núcleo. Ver `confirma_en`.
+        //
+        // Se usa la conexión que ya se tiene y no `confirma`, que abre la suya:
+        // pedir una segunda al pool teniéndolo prestado es cómo se llega a un
+        // interbloqueo el día que el pool se quede en una sola.
+        let mov = confirma_en(c, id);
         return Ok(Some(Guardado {
             id,
             titulo: String::new(),
             etiquetas: Vec::new(),
             accion: Accion::Duplicada {
-                motivo: format!("coincide por texto con la memoria {id} (parecido {cont_j:.2})"),
+                motivo: format!(
+                    "coincide por texto con la memoria {id} (parecido {cont_j:.2}){}",
+                    frase_confianza(mov)
+                ),
             },
         }));
     }
     Ok(None)
+}
+
+/// Hasta dónde puede subir la confianza SOLA.
+///
+/// El 1,0 no se alcanza por repetición y eso es a propósito: queda reservado a
+/// que una persona lo diga, igual que la importancia 10. Lucy confirmándose a sí
+/// misma seis veces es una buena señal, no una certeza — puede estar leyendo el
+/// mismo dato equivocado seis veces.
+pub const TECHO_CONFIRMACION: f64 = 0.95;
+
+/// Cuánto del hueco que falta cierra cada confirmación.
+///
+/// RENDIMIENTOS DECRECIENTES, y por eso es una fracción del hueco y no una suma
+/// fija. De 0,5 a 0,62 la primera confirmación dice mucho: Lucy ha llegado dos
+/// veces por su cuenta al mismo sitio. De 0,93 a 0,94 no dice casi nada, porque
+/// ya lo sabíamos. Con 0,25, cuatro confirmaciones pasan de 0,5 a 0,83 — que es
+/// justo por encima del listón que la promoción a cristal exige.
+pub const PASO_CONFIRMACION: f64 = 0.25;
+
+/// Anota que un hecho se ha vuelto a deducir. Devuelve `(antes, después)`.
+///
+/// ESTO ES LO QUE CONVIERTE «YA LO SABÍA» EN ALGO. Antes solo subía un contador,
+/// y ese contador no lo leía NADIE en todo el núcleo — cero apariciones en un
+/// `WHERE` o un `ORDER BY`. O sea que cada vez que Lucy volvía a deducir un
+/// hecho por su cuenta, esa información se tiraba: el duplicado se descartaba,
+/// el contador subía, y ahí se acababa.
+///
+/// Y esa repetición es la mejor evidencia que hay. No es que el mismo texto haya
+/// llegado dos veces: es que en OTRA sesión, con OTRA pregunta, Lucy ha vuelto a
+/// concluir lo mismo. Eso es una confirmación independiente, y es exactamente lo
+/// que debe mover la confianza — que hasta ahora nacía en 0,5 y se quedaba ahí
+/// para siempre, porque la escribía el modelo de una vez y ninguna evidencia
+/// posterior la corregía.
+///
+/// EN UNA SOLA SENTENCIA para que el contador y la confianza no puedan quedar
+/// desparejados: son la misma observación contada de dos maneras, y una fila con
+/// seis accesos y confianza de recién nacida sería una contradicción que nadie
+/// sabría interpretar.
+///
+/// El `CASE` protege lo que ya esté por encima del techo — una memoria que el
+/// operador haya marcado a mano no se BAJA por confirmarse.
+pub fn confirma(id: i64) -> Option<(f64, f64)> {
+    crate::with_db(|c| Ok(confirma_en(c, id))).ok().flatten()
+}
+
+/// Igual, sobre una conexión que ya se tiene.
+///
+/// Existe porque los dos sitios que detectan un duplicado están DENTRO de un
+/// `with_db`, y pedir una segunda conexión al pool teniendo una prestada es cómo
+/// se llega a un interbloqueo el día que alguien baje el tamaño del pool.
+fn confirma_en(c: &rusqlite::Connection, id: i64) -> Option<(f64, f64)> {
+    let antes: f64 = c
+        .query_row("SELECT confidence FROM agent_memories WHERE id = ?1", [id], |r| r.get(0))
+        .ok()?;
+    c.execute(
+        "UPDATE agent_memories
+         SET access_count = access_count + 1,
+             last_accessed_at = strftime('%s','now'),
+             confidence = CASE
+                 WHEN confidence < ?2 THEN confidence + (?2 - confidence) * ?3
+                 ELSE confidence
+             END
+         WHERE id = ?1",
+        rusqlite::params![id, TECHO_CONFIRMACION, PASO_CONFIRMACION],
+    )
+    .ok()?;
+    let despues: f64 = c
+        .query_row("SELECT confidence FROM agent_memories WHERE id = ?1", [id], |r| r.get(0))
+        .unwrap_or(antes);
+    Some((antes, despues))
+}
+
+/// Cómo se cuenta el movimiento de la confianza en el motivo del duplicado.
+///
+/// VA EN EL MOTIVO Y NO EN UN SITIO APARTE porque el motivo es lo que acaba en
+/// el carril de Trace, y el operador tiene que poder ver que «ya lo sabía» ha
+/// dejado de ser un callejón: cada vez que sale, algo se mueve.
+///
+/// Vacío cuando no se movió —ya estaba en el techo—, que también dice algo: esa
+/// memoria ya está tan confirmada como puede estarlo sola.
+fn frase_confianza(mov: Option<(f64, f64)>) -> String {
+    match mov {
+        Some((a, d)) if (d - a).abs() > 0.001 => {
+            format!(" · confianza {a:.2} → {d:.2}")
+        }
+        Some((a, _)) => format!(" · confianza {a:.2}, ya en su techo"),
+        None => String::new(),
+    }
 }
 
 /// ¿La memoria sigue contando? Viva = no supersedida y no caducada.
@@ -630,12 +721,25 @@ fn cosine_dup(texto: &str) -> Option<Guardado> {
         if !viva(id) {
             continue;
         }
+        // ESTE CAMINO NO CONTABA NADA, y es el bueno de los dos. El de texto
+        // subía un contador —que nadie leía, pero al menos lo subía— y el
+        // vectorial, que reconoce el mismo hecho dicho con otras palabras, se
+        // limitaba a descartar el duplicado y seguir.
+        //
+        // O sea que la confirmación MÁS valiosa era justo la que se perdía
+        // entera: que Lucy llegue a lo mismo con otra redacción prueba que
+        // entendió el hecho, no que repitió una frase.
+        let mov = confirma(id);
         return Some(Guardado {
             id,
             titulo: String::new(),
             etiquetas: Vec::new(),
             accion: Accion::Duplicada {
-                motivo: format!("dice lo mismo que la memoria {id} (parecido {:.2})", m.score),
+                motivo: format!(
+                    "dice lo mismo que la memoria {id} (parecido {:.2}){}",
+                    m.score,
+                    frase_confianza(mov)
+                ),
             },
         });
     }
