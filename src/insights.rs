@@ -565,10 +565,28 @@ pub const MAX_CHARS_PROMPT: usize = 700;
 
 /// El listón para que un patrón valga la pena mandarlo.
 ///
-/// Un insight nace con la confianza que le puso el modelo y solo sube con los
-/// refuerzos. Por debajo de esto es una corazonada de una sola observación, y
-/// mandarle corazonadas al modelo como si fueran conocimiento es la forma más
-/// rápida de que generalice de una casualidad.
+/// LO QUE ESTE NÚMERO SIGNIFICA DE VERDAD, y conviene tenerlo escrito porque es
+/// aritmética y no intuición. Un insight nace en 0,50 y cada refuerzo lo sube
+/// asintóticamente con `c += 0,10 · (1 − c)`:
+///
+/// ```text
+///   nace            0,500
+///   1er refuerzo    0,550
+///   2º refuerzo     0,595
+///   3er refuerzo    0,635   ← cruza el listón
+/// ```
+///
+/// O sea que 0,60 quiere decir: «lo he vuelto a ver TRES veces después de la
+/// primera». Un patrón que solo se ha destilado una vez no entra, y eso es
+/// deliberado — mandarle al modelo la conclusión de una sola pasada como si
+/// fuera conocimiento es la forma más rápida de que generalice de una
+/// casualidad.
+///
+/// MEDIDO EN ESTA INSTALACIÓN: los cinco insights que hay hoy están todos en
+/// 0,50 con un refuerzo, así que la sección va a estar vacía hasta que alguno se
+/// vuelva a observar tres veces más. Es el comportamiento que se quiere —esos
+/// cinco son perogrulladas del tipo «los errores suelen venir de permisos»— pero
+/// queda dicho para que nadie lea la sección nueva y espere verla llena mañana.
 pub const MIN_CONFIANZA_PROMPT: f64 = 0.60;
 
 /// Los patrones que Lucy ha sacado de su propio historial, para el prompt.

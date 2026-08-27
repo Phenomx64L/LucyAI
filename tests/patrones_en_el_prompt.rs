@@ -12,7 +12,10 @@
 //! Aquí se prueban los tres frenos que hacen que la sección sirva en vez de
 //! estorbar: pocos, buenos, y cortos.
 //!
-//! Un solo `#[test]` con secciones, por el `OnceCell` del pool.
+//! UN SOLO `#[test]` PARA TODO LO QUE TOCA DISCO, por el `OnceCell` del pool: dos
+//! tests con base correrían en paralelo sobre la misma tabla y se pisarían el
+//! corpus. El segundo test del fichero es aritmética pura y no abre la base, por
+//! eso puede ir suelto.
 
 use lucy_core::insights;
 
@@ -169,4 +172,26 @@ fn los_patrones_que_llegan_al_prompt() {
         "el prompt lleva patrones que el panel no marca: el operador no puede saber cuál corregir"
     );
     assert!(!bloque.contains("corazonada"), "una corazonada llegó al prompt");
+}
+
+/// Que el listón sea alcanzable, y en cuántos refuerzos.
+///
+/// LA MISMA TRAMPA QUE YA COSTÓ UN NÚMERO EN ESTE PROYECTO: un umbral que suena
+/// razonable y que en la práctica no cruza nadie. Aquí se comprueba la
+/// aritmética que la constante documenta, para que bajar `REFUERZO` o subir el
+/// listón rompa el test en vez de dejar la sección callada para siempre.
+#[test]
+fn el_liston_se_cruza_al_tercer_refuerzo_y_no_antes() {
+    let mut c: f64 = 0.5; // con la que nace un insight
+    let mut n = 0;
+    while c < insights::MIN_CONFIANZA_PROMPT && n < 50 {
+        c += insights::REFUERZO * (1.0 - c);
+        n += 1;
+    }
+    assert_eq!(
+        n, 3,
+        "hacen falta {n} refuerzos para que un patrón llegue al prompt, no 3: o el listón se ha \
+         movido o lo ha hecho el paso, y la constante dice otra cosa"
+    );
+    assert!(c < 0.70, "cruzar el listón no puede dejarlo casi confirmado de golpe");
 }
