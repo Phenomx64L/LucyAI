@@ -7,14 +7,24 @@
 //! REFUERCE en vez de duplicarlo, y que el reloj del mantenimiento sobreviva a
 //! cerrar el programa — que es la razón entera por la que existe.
 //!
-//! Un solo `#[test]` con secciones, por el `OnceCell` del pool.
+//! DOS TESTS QUE NO SE PISAN. El pool es un `OnceCell`, así que `arranca` se
+//! protege con un `Once`: el segundo `init` reventaría. Se pueden separar porque
+//! tocan tablas distintas —uno el corpus de memorias e insights, otro solo el
+//! calendario, y con un nombre de trabajo propio— pero cualquier test nuevo que
+//! toque agent_memories tiene que ir dentro del primero, en su propia sección.
 
 use lucy_core::{insights, maintenance};
 
+/// UNA SOLA VEZ AUNQUE LO LLAMEN VARIOS TESTS. El pool es un `OnceCell`: el
+/// segundo `init` no es que sea redundante, es que revienta. Y borrar el fichero
+/// dos veces borraría la base por debajo de un test que ya está corriendo.
 fn arranca() {
-    let p = std::env::temp_dir().join("lucy_core_insights_test.db");
-    let _ = std::fs::remove_file(&p);
-    lucy_core::init(&p).expect("init");
+    static UNA_VEZ: std::sync::Once = std::sync::Once::new();
+    UNA_VEZ.call_once(|| {
+        let p = std::env::temp_dir().join("lucy_core_insights_test.db");
+        let _ = std::fs::remove_file(&p);
+        lucy_core::init(&p).expect("init");
+    });
 }
 
 fn ahora() -> i64 {
@@ -292,4 +302,70 @@ fn insights_y_el_reloj_del_mantenimiento() {
     })
     .expect("count");
     assert_eq!(quedan, 0, "borrar dejó la fila o el vector");
+}
+
+/// El histórico del mantenimiento: la serie, que la nota suelta no puede decir.
+///
+/// Va en su propio `#[test]` porque no comparte el corpus de memorias con el de
+/// arriba — solo escribe filas de mantenimiento— pero SÍ comparte el pool, así
+/// que usa un nombre de trabajo propio para no pisarse con nadie.
+#[test]
+fn el_historial_distingue_una_pasada_en_blanco_de_un_mes_en_blanco() {
+    arranca();
+    const JOB: &str = "prueba-historial";
+
+    // Sin pasadas, no hay racha que contar. Es el estado de una instalación
+    // nueva y no puede sacar un aviso.
+    assert_eq!(maintenance::racha_en_blanco(JOB), (0, 0));
+
+    // Tres en blanco seguidas.
+    for i in 0..3 {
+        maintenance::marca_con(JOB, &format!("0 elegibles · corpus pequeño ({i})"), false)
+            .expect("marcar");
+    }
+    let (veces, desde) = maintenance::racha_en_blanco(JOB);
+    assert_eq!(veces, 3, "no se cuentan las pasadas seguidas sin resultado");
+    assert!(desde > 0, "la racha no dice desde cuándo, y sin eso el número engaña");
+
+    // UNA QUE RINDE LA CORTA. Es lo que separa «esto viene fallando» de «esto
+    // falló»: si la racha no se reiniciara, un problema resuelto seguiría
+    // avisando para siempre y el aviso dejaría de leerse.
+    maintenance::marca_con(JOB, "4 elegibles, 1 grupo, 1 patrón nuevo", true).expect("marcar");
+    assert_eq!(
+        maintenance::racha_en_blanco(JOB),
+        (0, 0),
+        "una pasada que rindió no cortó la racha"
+    );
+
+    // Y vuelve a contar desde cero.
+    maintenance::marca_con(JOB, "0 elegibles", false).expect("marcar");
+    assert_eq!(maintenance::racha_en_blanco(JOB).0, 1);
+
+    // EL RESUMEN SIGUE SIENDO EL RESUMEN. Las dos tablas contestan preguntas
+    // distintas —«cuándo tocó» decide si vence, «qué viene saliendo» es la
+    // serie— y escribir en el histórico no puede haber roto el reloj.
+    let (_, nota) = maintenance::ultima(JOB).expect("el resumen se perdió");
+    assert_eq!(nota, "0 elegibles", "el resumen no lleva la última nota");
+
+    // El histórico entero, la más reciente primero.
+    let h = maintenance::historial(JOB, 10);
+    assert_eq!(h.len(), 5);
+    assert_eq!(h[0].nota, "0 elegibles");
+    assert!(h[1].rindio, "el orden no es de la más reciente a la más vieja");
+
+    // LA PODA. Sin techo, un año de pasadas diarias son trescientas sesenta y
+    // cinco filas por trabajo que nadie va a leer.
+    for i in 0..maintenance::HISTORIAL_MAX + 10 {
+        maintenance::marca_con(JOB, &format!("relleno {i}"), false).expect("marcar");
+    }
+    let n: i64 = lucy_core::with_db(|c| {
+        c.query_row("SELECT COUNT(*) FROM maintenance_log WHERE job = ?1", [JOB], |r| r.get(0))
+            .map_err(|e| e.to_string())
+    })
+    .expect("contar");
+    assert_eq!(
+        n as usize,
+        maintenance::HISTORIAL_MAX,
+        "el histórico crece sin techo: {n} filas"
+    );
 }

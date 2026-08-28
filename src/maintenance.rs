@@ -44,11 +44,27 @@ pub fn ensure_schema() -> Result<(), String> {
                  job        TEXT PRIMARY KEY,
                  last_run   INTEGER NOT NULL,
                  last_note  TEXT NOT NULL DEFAULT ''
-             );",
+             );
+             CREATE TABLE IF NOT EXISTS maintenance_log (
+                 id      INTEGER PRIMARY KEY AUTOINCREMENT,
+                 job     TEXT    NOT NULL,
+                 ts      INTEGER NOT NULL,
+                 nota    TEXT    NOT NULL DEFAULT '',
+                 rindio  INTEGER NOT NULL DEFAULT 0
+             );
+             CREATE INDEX IF NOT EXISTS idx_maintenance_log_job
+                 ON maintenance_log(job, ts DESC);",
         )
         .map_err(|e| format!("maintenance: esquema: {e}"))
     })
 }
+
+/// Cuántas pasadas se guardan por trabajo.
+///
+/// Con una al día, sesenta son dos meses: de sobra para ver una racha y para
+/// notar que un cambio de umbral funcionó, y lo bastante poco para que la tabla
+/// no crezca sin techo. Se poda al escribir.
+pub const HISTORIAL_MAX: usize = 60;
 
 fn ahora() -> i64 {
     std::time::SystemTime::now()
@@ -103,18 +119,128 @@ pub fn toca(job: &str, cada: i64) -> bool {
 /// reintentaría en cada comprobación, cada pocos minutos, mientras dure la avería.
 /// La nota dice qué pasó, que es lo que hace falta para diagnosticarlo.
 pub fn marca(job: &str, nota: &str) -> Result<(), String> {
+    marca_con(job, nota, false)
+}
+
+/// Igual, diciendo además si la pasada RINDIÓ algo.
+///
+/// SE ESCRIBE EN DOS SITIOS, y no es duplicar: son dos preguntas distintas.
+/// `maintenance_runs` tiene una fila por trabajo y contesta «cuándo tocó»— es lo
+/// que decide si vence. `maintenance_log` tiene una fila por pasada y contesta
+/// «qué viene saliendo», que es la que no se podía contestar.
+///
+/// POR QUÉ HACÍA FALTA. La nota está bien escrita a propósito —el módulo insiste
+/// en que «un cero pelado es indistinguible de una avería»— y sin embargo se
+/// perdía la única forma de leerla que importa: la serie. En una tabla con una
+/// fila por trabajo, estas dos cosas se ven EXACTAMENTE IGUAL:
+///
+/// ```text
+///   «0 elegibles · corpus demasiado pequeño»   ← ayer, y solo ayer
+///   «0 elegibles · corpus demasiado pequeño»   ← eso mismo, treinta días seguidos
+/// ```
+///
+/// Y son dos diagnósticos opuestos. El primero no es nada; el segundo dice que
+/// `MIN_PARECIDO` o `MIN_GRUPO` están mal calibrados para este corpus y que la
+/// reflexión lleva un mes gastando llamadas a Ollama para no producir nada.
+///
+/// `rindio` se guarda como columna y no se deduce de la nota: el texto es libre
+/// y adivinarlo con un `contains` sería una regla que se rompe la primera vez
+/// que alguien reescriba una frase.
+pub fn marca_con(job: &str, nota: &str, rindio: bool) -> Result<(), String> {
     ensure_schema()?;
     let nota: String = nota.chars().take(300).collect();
+    let ts = ahora();
     crate::with_db(|c| {
         c.execute(
             "INSERT INTO maintenance_runs (job, last_run, last_note) VALUES (?1, ?2, ?3)
              ON CONFLICT(job) DO UPDATE SET last_run = excluded.last_run,
                                            last_note = excluded.last_note",
-            rusqlite::params![job, ahora(), nota],
+            rusqlite::params![job, ts, nota],
         )
         .map_err(|e| format!("maintenance: marcar: {e}"))?;
+        c.execute(
+            "INSERT INTO maintenance_log (job, ts, nota, rindio) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![job, ts, nota, i64::from(rindio)],
+        )
+        .map_err(|e| format!("maintenance: historial: {e}"))?;
+        // La poda va aquí y no en un trabajo aparte: sin techo, un año de
+        // pasadas diarias son trescientas sesenta y cinco filas por trabajo que
+        // nadie va a leer, y añadir un mantenimiento para el mantenimiento sería
+        // empezar a girar en círculo.
+        c.execute(
+            "DELETE FROM maintenance_log
+             WHERE job = ?1 AND id NOT IN (
+                 SELECT id FROM maintenance_log WHERE job = ?1
+                 ORDER BY ts DESC, id DESC LIMIT ?2
+             )",
+            rusqlite::params![job, HISTORIAL_MAX as i64],
+        )
+        .map_err(|e| format!("maintenance: poda: {e}"))?;
         Ok(())
     })
+}
+
+/// Una pasada del histórico.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Pasada {
+    pub ts: i64,
+    pub nota: String,
+    pub rindio: bool,
+}
+
+/// Las últimas pasadas de un trabajo, la más reciente primero.
+pub fn historial(job: &str, limite: usize) -> Vec<Pasada> {
+    if ensure_schema().is_err() {
+        return Vec::new();
+    }
+    crate::with_db(|c| {
+        let mut st = c
+            .prepare(
+                // `id DESC` DESEMPATA. Dos pasadas del mismo segundo dejan el
+                // orden en manos de SQLite, y con `take_while` en
+                // `racha_en_blanco` eso no es una diferencia cosmética: la
+                // pasada que rindió puede acabar detrás de las que no y la racha
+                // no se corta. En uso real las pasadas van separadas por horas,
+                // así que esto no se ve nunca — lo cazó un test que las escribe
+                // seguidas, que es exactamente para lo que sirve.
+                "SELECT ts, nota, rindio FROM maintenance_log
+                 WHERE job = ?1 ORDER BY ts DESC, id DESC LIMIT ?2",
+            )
+            .map_err(|e| e.to_string())?;
+        let v = st
+            .query_map(rusqlite::params![job, limite.clamp(1, HISTORIAL_MAX) as i64], |r| {
+                Ok(Pasada {
+                    ts: r.get(0)?,
+                    nota: r.get(1)?,
+                    rindio: r.get::<_, i64>(2)? != 0,
+                })
+            })
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(v)
+    })
+    .unwrap_or_default()
+}
+
+/// Cuántas pasadas seguidas lleva este trabajo sin producir nada, y desde
+/// cuándo: `(cuántas, ts de la más antigua de la racha)`.
+///
+/// ES LA LECTURA QUE JUSTIFICA EL HISTÓRICO. La lista entera es un volcado que
+/// nadie mira; esto es una frase: «la reflexión lleva treinta pasadas
+/// devolviendo cero, desde hace un mes». Con `(0, 0)` la última rindió y no hay
+/// nada que decir.
+///
+/// LA FECHA VA CON EL NÚMERO porque sin ella el número engaña: doce pasadas en
+/// blanco son doce días de reflexión o veinticuatro de consolidación, y quien
+/// mira la pantalla no tiene por qué saber de memoria el plazo de cada trabajo.
+pub fn racha_en_blanco(job: &str) -> (usize, i64) {
+    let h = historial(job, HISTORIAL_MAX);
+    let racha: Vec<&Pasada> = h.iter().take_while(|p| !p.rindio).collect();
+    match racha.last() {
+        None => (0, 0),
+        Some(p) => (racha.len(), p.ts),
+    }
 }
 
 /// Cuánto falta, en segundos. Cero o menos = vencido.
@@ -145,30 +271,44 @@ impl Tanda {
 /// ahora» por trabajo: esperar hasta dos días para ver si una corrección
 /// funcionó no es una forma de verificar nada.
 pub fn corre(job: &str, stop: &std::sync::atomic::AtomicBool) -> String {
-    let nota = match job {
+    // `rindio` sale de las CIFRAS del reporte, no de leer la nota. Ver
+    // `marca_con`: el texto es libre y adivinarlo con un `contains` sería una
+    // regla que se rompe la primera vez que alguien reescriba una frase.
+    //
+    // Y «rindió» significa que cambió algo en la memoria, no que el trabajo
+    // terminara sin error: una pasada que mira cuarenta memorias y no funde
+    // ninguna acabó bien y no rindió nada, y son justo las que hay que poder
+    // contar seguidas.
+    let (nota, rindio) = match job {
         CONSOLIDAR => match crate::consolidate::run(false) {
-            Ok(r) => format!(
-                "{} memorias miradas, {} grupos, {} fundidas",
-                r.scanned, r.clusters_found, r.memories_merged
+            Ok(r) => (
+                format!(
+                    "{} memorias miradas, {} grupos, {} fundidas",
+                    r.scanned, r.clusters_found, r.memories_merged
+                ),
+                r.memories_merged > 0,
             ),
-            Err(e) => format!("falló: {e}"),
+            Err(e) => (format!("falló: {e}"), false),
         },
         INSIGHTS => {
             let r = crate::insights::run(stop);
             if r.creados + r.reforzados > 0 {
-                format!(
-                    "{} elegibles, {} grupos, {} patrones nuevos, {} reforzados",
-                    r.elegibles, r.grupos, r.creados, r.reforzados
+                (
+                    format!(
+                        "{} elegibles, {} grupos, {} patrones nuevos, {} reforzados",
+                        r.elegibles, r.grupos, r.creados, r.reforzados
+                    ),
+                    true,
                 )
             } else {
                 // Sin patrones, lo que interesa es POR QUÉ. Un cero pelado es
                 // indistinguible de una avería.
-                format!("{} elegibles · {}", r.elegibles, r.motivo)
+                (format!("{} elegibles · {}", r.elegibles, r.motivo), false)
             }
         }
-        otro => format!("trabajo desconocido: {otro}"),
+        otro => (format!("trabajo desconocido: {otro}"), false),
     };
-    let _ = marca(job, &nota);
+    let _ = marca_con(job, &nota, rindio);
     nota
 }
 
