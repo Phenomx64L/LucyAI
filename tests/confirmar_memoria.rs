@@ -13,6 +13,14 @@
 //! Va en `tests/` porque necesita base de datos y el pool es un `OnceLock`
 //! global: un proceso para él solo.
 
+// Varias aserciones de este fichero comparan CONSTANTES entre sí. Clippy las ve
+// evaluables en compilación y avisa; no son aserciones muertas sino guardas de
+// invariante — fijan una relación de diseño (que el listón rebajado esté por
+// debajo del normal, que el techo proteja el 1,0) para que cambiar un número
+// rompa el test en vez de cambiar el comportamiento en silencio. Mismo criterio
+// y mismo `allow` que `maintenance` y `principles`.
+#![allow(clippy::assertions_on_constants)]
+
 use std::path::PathBuf;
 
 /// De uno en uno: los tests de este fichero comparten la tabla.
@@ -112,9 +120,18 @@ fn el_rendimiento_es_decreciente_y_no_llega_al_uno() {
     // Y NO LLEGA AL 1,0 NUNCA. El uno queda para que lo diga una persona, igual
     // que la importancia 10. Lucy confirmándose seis veces es una buena señal,
     // no una certeza: puede haber leído el mismo dato equivocado seis veces.
+    //
+    // Se comprueba contra el TECHO y no también contra 1,0: el techo ya está por
+    // debajo del uno, así que la segunda comparación no puede fallar sin que
+    // falle la primera. La invariante «el techo protege el uno» es lo que hay
+    // que fijar, y se fija abajo con las dos constantes a la vista.
     assert!(
-        previo < 1.0 && previo <= lucy_core::memories::TECHO_CONFIRMACION,
+        previo <= lucy_core::memories::TECHO_CONFIRMACION,
         "la confianza automática pasó de su techo: {previo}"
+    );
+    assert!(
+        lucy_core::memories::TECHO_CONFIRMACION < 1.0,
+        "el techo dejó de proteger el 1,0, y con él la única forma de decir «esto es seguro»"
     );
 }
 
