@@ -447,7 +447,15 @@ impl Section for Actions {
              más y mejor que lo que tú recuerdes, y citarlo es la diferencia entre una \
              respuesta y una respuesta comprobable.\n\
              Y dos para cambiar ficheros, que NO escriben solas: preparan el cambio en \
-             el panel de Artefactos con su diff, y escribe el operador al aprobarlo.\n\
+             el panel de Artefactos con su diff. De ahí sale al disco por una de dos \
+             puertas: la aprueba el operador, o —si tiene el automático encendido— la \
+             escribe el propio bucle, y eso solo pasa con ficheros NUEVOS dentro del \
+             directorio de trabajo. En los dos casos se te dice en el turno siguiente si \
+             quedó escrito o esperando: no des por escrito nada que no te hayan \
+             confirmado, y si te dicen que espera, dilo así en vez de darlo por hecho.\n\
+             Por eso, cuando el fichero sea tuyo —un informe, un script, unas notas— \
+             déjalo dentro del directorio de trabajo. Fuera de ahí también vale, pero \
+             entonces hace falta un clic.\n\
              · <TOOL>writefile:C:\\ruta\\fichero.txt|||CONTENIDO</TOOL>\n\
              · <TOOL>editfile:C:\\ruta|||TEXTO_VIEJO|||TEXTO_NUEVO</TOOL>\n\
              En `editfile`, el TEXTO_VIEJO tiene que aparecer UNA sola vez en el \
@@ -1255,6 +1263,21 @@ mod tests {
         let p = build(&Ctx::default());
         assert!(p.contains("NO escriben solas"), "no se le dice que solo proponen");
         assert!(p.contains("Artefactos"), "no se le dice dónde acaba la propuesta");
+        // Y EL OTRO LADO, desde que el automático puede escribirlas. Con el modo
+        // encendido la frase de arriba es cierta a medias, y una media verdad
+        // aquí es peor que la mentira entera: Lucy anunciaría como pendiente algo
+        // que ya está en disco, y el operador aprobaría dos veces el mismo
+        // cambio. Lo que la saca del apuro no es saber la regla, sino saber que
+        // se le va a decir cuál de las dos cosas pasó.
+        assert!(p.contains("automático"), "no se le dice que la otra puerta existe");
+        assert!(
+            p.contains("no des por escrito nada que no te hayan confirmado"),
+            "no se le dice que espere a la confirmación en vez de suponer"
+        );
+        assert!(
+            p.contains("directorio de trabajo"),
+            "no se le dice dónde dejar los ficheros para que pasen sin clic"
+        );
         // Y el caso que rechaza el cambio, dicho ANTES de que lo intente: sin
         // esto lo descubre por un error y gasta una vuelta en enterarse.
         assert!(p.contains("UNA sola vez"), "no se le avisa de la coincidencia única");

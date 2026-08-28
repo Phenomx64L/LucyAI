@@ -187,7 +187,8 @@ const EXEC_MAX_OUTPUT: usize = 16_000;
 const TRACE_MAX_ENTRIES: usize = 2_000;
 const TRACE_MAX_DETAIL: usize = 4_000;
 const ARTIFACT_MAX_ENTRIES: usize = 60;
-const ARTIFACT_MAX_BODY: usize = 8_000;
+// El tope del CUERPO de un artefacto no está aquí: está en `tools::MAX_ARTEFACTO`,
+// que rechaza lo que no cabe en vez de cortarlo. Ver `artifact_push`.
 
 /// Recorta a `max` CARACTERES y lo dice.
 ///
@@ -293,10 +294,31 @@ impl Workspace {
         trim_front(&mut self.trace, TRACE_MAX_ENTRIES);
     }
 
+    /// UN ARTEFACTO NO SE RECORTA, y recortarlo aquí escribía ficheros rotos.
+    ///
+    /// Los otros tres carriles guardan TESTIMONIO: la salida de un comando y el
+    /// detalle de un trace se enseñan y ya está, así que cortarlos a lo que cabe
+    /// en la ficha —con su marca de «truncado», que se ve— es exactamente lo que
+    /// hay que hacer. Un artefacto no es testimonio: es la ORDEN que `tools::apply`
+    /// va a ejecutar sobre el disco, y los dos campos que se recortaban son los
+    /// dos que decide.
+    ///
+    /// `after` es lo que se escribe. Cortado a 8.000 caracteres, `writefile` de un
+    /// fichero más largo creaba el fichero con el principio y la palabra
+    /// «(truncado)» pegada al final — sin error, sin aviso, y con el diff de la
+    /// ficha enseñando el mismo recorte, así que ni mirándolo se notaba.
+    ///
+    /// `before` es contra lo que `apply` comprueba que nadie haya tocado el
+    /// fichero mientras el operador decidía. Cortado, NUNCA coincide con lo que
+    /// hay en disco, así que cualquier `editfile` sobre un fichero de más de
+    /// 8.000 caracteres moría diciendo «ha cambiado desde que se preparó este
+    /// cambio» — un mensaje falso que manda a releer un fichero que estaba igual.
+    ///
+    /// Lo que sí hacía falta —no tener megabytes en el carril— se resuelve donde
+    /// corresponde: `tools::prepare_*` RECHAZA lo que no cabe en vez de cortarlo,
+    /// y la ficha ya pinta solo las líneas que cambian.
     pub fn artifact_push(&mut self, mut a: Artifact) {
         a.id = self.nid();
-        a.before = clip(&a.before, ARTIFACT_MAX_BODY);
-        a.after = clip(&a.after, ARTIFACT_MAX_BODY);
         if a.ts == 0 {
             a.ts = now_ms();
         }
