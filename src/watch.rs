@@ -460,7 +460,7 @@ pub fn pasada(s: &SysSnapshot, servicios: &[DownService], ahora: i64) -> Vec<Dec
     let decisiones = decide(sintomas, &lo_ya_dicho(&claves), ahora);
     for d in &decisiones {
         if let Decision::Avisa(s, m) = d {
-            let a = aviso_de(s, *m);
+            let a = con_redaccion(aviso_de(s, *m), s, *m);
             crate::notify::envia(&a);
             // SE APUNTA AQUÍ Y NO SOLO EN LA BASE. Si el INSERT falló —disco
             // lleno, que es justo cuando esto importa— la fila no existe y el
@@ -499,6 +499,42 @@ pub fn aviso_de(s: &Sintoma, m: Motivo) -> crate::notify::Aviso {
         .con_nivel(if m == Motivo::Recuperado { Nivel::Ok } else { s.nivel })
         .con_clave(&s.clave)
         .en_equipo(&s.equipo)
+}
+
+/// Le pide al modelo que lo diga mejor, y se queda con la plantilla si no puede.
+///
+/// LA PLANTILLA ES LA RED Y NO EL PLAN B TRISTE. Lo que sale de `aviso_de` ya
+/// está bien: lleva las cifras medidas y se lee. Lo que el modelo aporta es que
+/// suene a alguien y no a un panel — y por eso puede fallar sin consecuencias.
+///
+/// SE CAE A LA PLANTILLA POR CUATRO MOTIVOS, y ninguno se anuncia: no hay Ollama,
+/// no hay modelo instalado, tardó más de ocho segundos, o la redacción trajo una
+/// cifra que no se le había dado. El último es el interesante — ver
+/// `redacta::solo_usa_cifras_dadas`— y es lo que permite encender esto sin miedo
+/// a que un modelo de seiscientos millones de parámetros se invente los días que
+/// le quedan a un disco.
+///
+/// EL NIVEL, LA CLAVE Y EL EQUIPO NO PASAN POR EL MODELO. Solo el texto. La
+/// gravedad de un aviso y la clave que lo dedupica son decisiones de la capa 2, y
+/// dejar que un modelo las tocara sería devolverle justo lo que se le quitó.
+fn con_redaccion(a: crate::notify::Aviso, s: &Sintoma, m: Motivo) -> crate::notify::Aviso {
+    let material = crate::redacta::Material {
+        titulo: a.titulo.clone(),
+        cuerpo: a.cuerpo.clone(),
+        motivo: match m {
+            Motivo::Nuevo => "acaba de empezar",
+            Motivo::Empeora => "estaba mal y ha ido a peor",
+            Motivo::Recordatorio => "sigue igual desde hace horas",
+            Motivo::Recuperado => "estaba mal y se ha arreglado",
+            _ => "",
+        }
+        .to_string(),
+        equipo: s.equipo.clone(),
+    };
+    match crate::redacta::redacta(&material) {
+        Some((t, c)) => crate::notify::Aviso { titulo: t, cuerpo: c, ..a },
+        None => a,
+    }
 }
 
 #[cfg(test)]

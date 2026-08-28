@@ -99,6 +99,8 @@ pub mod usage;
 pub mod notify;
 /// Qué mira el vigilante, y sobre todo qué se calla.
 pub mod watch;
+/// La frase que se enseña: la única capa donde entra el modelo, y atado.
+pub mod redacta;
 /// El prompt de sistema, por secciones. Port de la ARQUITECTURA de
 /// `commands/prompt_sections.rs`, no de su texto: allí se describen herramientas
 /// que este shell todavía no tiene.
