@@ -342,26 +342,59 @@ pub fn marca_visto(id: Option<i64>) -> Result<(), String> {
     })
 }
 
-/// Cuándo se mandó por última vez un aviso con esta clave. `None` = nunca.
+/// Cuándo se mandó por última vez un aviso con esta clave, y con qué nivel.
+/// `None` = nunca.
 ///
 /// LO ÚNICO QUE ESTE MÓDULO APORTA A LA DECISIÓN de si algo merece decirse. No
 /// decide él: da el dato para que decida quien tiene que hacerlo. Un vigilante
 /// que muestrea cada cinco minutos necesita saber que el disco lleno ya se dijo
 /// hace un rato, y esa consulta no tiene por qué reinventarla cada capa.
-pub fn ultimo_de(clave: &str) -> Option<i64> {
+///
+/// EL NIVEL VIAJA CON LA FECHA porque sin él la mitad de la política no se puede
+/// escribir: «esto ha empeorado» y «esto se ha arreglado» son preguntas sobre en
+/// qué estado se dijo la última vez, no sobre cuándo.
+pub fn ultimo_de(clave: &str) -> Option<(i64, Nivel)> {
     if clave.is_empty() || ensure_schema().is_err() {
         return None;
     }
     crate::with_db(|c| {
         c.query_row(
-            "SELECT MAX(ts) FROM avisos WHERE clave = ?1",
+            "SELECT ts, nivel FROM avisos WHERE clave = ?1 ORDER BY ts DESC, id DESC LIMIT 1",
             [clave],
-            |r| r.get::<_, Option<i64>>(0),
+            |r| Ok((r.get::<_, i64>(0)?, de_num(r.get::<_, i64>(1)?))),
         )
         .map_err(|e| e.to_string())
     })
     .ok()
-    .flatten()
+}
+
+/// Cuántos avisos de esta clave se han mandado desde `desde` (epoch).
+///
+/// LO QUE PERMITE QUE EL FRENO SE ESPACIE SOLO. Un vigilante con un freno fijo
+/// no puede con algo que parpadea: cada cambio de estado es de verdad una
+/// noticia, y el estado cambia sin parar. Con el recuento, quien decide puede
+/// duplicar la espera a partir del tercer aviso — y como sale de la tabla y no
+/// de la memoria del proceso, un parpadeo que llevaba toda la mañana no
+/// reinicia su espaciado porque alguien reiniciara Lucy.
+pub fn cuantos_de(clave: &str, desde: i64) -> usize {
+    if clave.is_empty() || ensure_schema().is_err() {
+        return 0;
+    }
+    crate::with_db(|c| {
+        c.query_row(
+            "SELECT COUNT(*) FROM avisos WHERE clave = ?1 AND ts >= ?2",
+            rusqlite::params![clave, desde],
+            |r| r.get::<_, i64>(0),
+        )
+        .map_err(|e| e.to_string())
+    })
+    .map(|n| n as usize)
+    .unwrap_or(0)
+}
+
+/// El reloj del módulo, para que quien decide use el mismo que quien anota.
+pub fn ahora_epoch() -> i64 {
+    ahora()
 }
 
 /// Borra los avisos vistos de hace más de `dias`.

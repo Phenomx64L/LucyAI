@@ -6,6 +6,11 @@
 
 use sysinfo::{Disks, Networks, System};
 
+/// `Clone` para poder mandar una medición a otro hilo. El vigilante decide y
+/// notifica fuera del hilo que pinta —lanzar un toast es un PowerShell de
+/// doscientos milisegundos— y sin esto habría que desmontar la estructura campo
+/// a campo para cruzar esa frontera.
+#[derive(Debug, Clone)]
 pub struct DiskInfo {
     pub name: String,
     pub mount: String,
@@ -13,6 +18,7 @@ pub struct DiskInfo {
     pub avail: u64,
 }
 
+#[derive(Debug, Clone)]
 pub struct SysSnapshot {
     pub host: String,
     pub os: String,

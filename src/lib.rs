@@ -97,6 +97,8 @@ pub mod pricing;
 pub mod usage;
 /// Por dónde Lucy te dice algo cuando no la estás mirando.
 pub mod notify;
+/// Qué mira el vigilante, y sobre todo qué se calla.
+pub mod watch;
 /// El prompt de sistema, por secciones. Port de la ARQUITECTURA de
 /// `commands/prompt_sections.rs`, no de su texto: allí se describen herramientas
 /// que este shell todavía no tiene.

@@ -68,8 +68,12 @@ fn el_registro_de_avisos() {
     // antirrepetición, porque un canal que se calla cosas por su cuenta es un
     // canal en el que no se confía. Lo único que aporta es saber cuándo se dijo
     // por última vez algo con esta clave — con eso, quien decide puede decidir.
-    let t = notify::ultimo_de("disco:C:").expect("no recuerda cuándo lo dijo");
+    let (t, n) = notify::ultimo_de("disco:C:").expect("no recuerda cuándo lo dijo");
     assert!(t > 0);
+    // EL NIVEL VIAJA CON LA FECHA. Sin él, «esto ha empeorado» y «esto se ha
+    // arreglado» no se pueden preguntar, y esas dos son media política del
+    // vigilante.
+    assert_eq!(n, Nivel::Critico, "no recuerda en qué estado lo dijo");
     assert_eq!(notify::ultimo_de("cpu"), None, "una clave que no se ha usado no tiene fecha");
     assert_eq!(notify::ultimo_de(""), None, "la clave vacía no puede casar con todo");
 
