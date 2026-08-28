@@ -24,15 +24,27 @@
 //! mirando» serían indistinguibles — y la primera vez que pasara lo segundo, el
 //! operador dejaría de fiarse del vigilante entero.
 //!
-//! Y HAY UN MOTIVO MEDIDO QUE LO HACE IMPRESCINDIBLE. Un toast lanzado con un
-//! AUMID que no está registrado por un acceso directo del menú de inicio SÍ SE
-//! MUESTRA, pero NO SE ARCHIVA: no deja rastro en el centro de notificaciones de
-//! Windows. O sea que, sin esta tabla, un aviso que el operador no pilla en los
-//! segundos que dura el globo desaparece para siempre — no está ni siquiera
-//! donde uno iría a buscarlo. Comprobado leyendo `wpndatabase.db`: ni una fila,
-//! ni el handler.
+//! Con la fila puesta, un aviso sigue estando aunque nadie lo viera pasar, y
+//! aunque el centro de notificaciones de Windows lo borre —lo hace: tiene tope
+//! por aplicación y el operador puede vaciarlo con un botón.
 //!
-//! Con la fila puesta, un aviso sigue estando aunque nadie lo viera pasar.
+//! ── LO QUE HACE WINDOWS, MEDIDO ─────────────────────────────────────────────
+//!
+//! El globo aparece y ADEMÁS queda archivado en el centro de notificaciones,
+//! atribuido a «Lucy», sin instalar nada y sin que el AUMID esté declarado por
+//! ningún acceso directo. Comprobado en el propio `wpndatabase.db`: handler
+//! `IvanEduardoLuna.Lucy` y sus filas.
+//!
+//! Esto costó dos conclusiones equivocadas antes de salir bien, y las dos por lo
+//! mismo, así que queda escrito: esa base va en modo WAL, y copiar solo el
+//! `.db` sin su `-wal` no da un error ni una base rota — da una base
+//! PERFECTAMENTE VÁLIDA con los datos de hace horas. Así que la comprobación
+//! contestaba «no llegó» mirando una foto anterior a mandarlo. El peor modo de
+//! fallo que hay es el que no se parece a un fallo.
+//!
+//! Lo que sigue sin poder comprobarse desde código es si el globo se VE: las
+//! tres vías de la API contestan lo mismo pase lo que pase. Por eso
+//! `diagnostico` acaba preguntándoselo a quien está delante.
 //!
 //! ── POR QUÉ POWERSHELL Y NO UN CRATE DE WINRT ───────────────────────────────
 //!
@@ -472,15 +484,10 @@ fn enseña(_a: &Aviso) -> Entrega {
 ///   SE ARCHIVA     además queda en el centro de notificaciones, para mirarlo luego
 /// ```
 ///
-/// Son independientes. Un toast lanzado con un AUMID que no está registrado por
-/// un acceso directo del menú de inicio SÍ SE MUESTRA —comprobado por el
-/// operador, que lo vio— y NO se archiva: no deja fila en `wpndatabase.db` ni
-/// crea su handler. Yo medí lo segundo y lo reporté como lo primero, y este
-/// módulo llegó a afirmar que Windows no entregaba. Entregaba.
-///
-/// Lo único verificable desde aquí es el archivado. Que el globo aparezca solo
-/// lo puede confirmar quien está delante de la pantalla, y por eso el
-/// diagnóstico completo termina en una pregunta al operador y no en un booleano.
+/// Son independientes, y en esta máquina ocurren las dos: el globo sale y queda
+/// archivado como «Lucy». Pero solo la segunda se puede comprobar desde aquí —
+/// que el globo APAREZCA no lo dice ninguna de las tres vías de la API— y por
+/// eso el diagnóstico termina en una pregunta al operador y no en un booleano.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Diagnostico {
     /// Se pudo lanzar la llamada sin que el sistema se quejara.
@@ -489,9 +496,10 @@ pub struct Diagnostico {
     /// leyendo la base de Windows.
     ///
     /// `false` NO significa que no se viera: significa que se pierde en cuanto
-    /// se va de pantalla, y que el operador no lo va a encontrar después
-    /// buscándolo ahí. Es justo lo que hace que el registro de `avisos` de este
-    /// módulo sea imprescindible y no un lujo.
+    /// se va de pantalla y que no se va a encontrar después buscándolo ahí. Con
+    /// el AUMID sin declarar, en esta máquina sale `true` — pero el centro tiene
+    /// tope por aplicación y un botón de vaciar, así que el registro de `avisos`
+    /// no sobra ni cuando esto va bien.
     pub queda_en_el_centro: bool,
     /// Qué se vio, en una línea que se pueda enseñar.
     pub detalle: String,
@@ -540,10 +548,9 @@ pub fn diagnostico() -> Diagnostico {
         ),
         Ok(false) => (
             false,
-            "PERO NO QUEDA ARCHIVADO: se pierde en cuanto se va de pantalla, y no lo vas a \
-             encontrar después en el centro de notificaciones. Es lo que pasa mientras el AUMID \
-             no lo registre un acceso directo del menú de inicio. El registro de avisos de Lucy \
-             sí lo conserva."
+            "PERO NO QUEDA ARCHIVADO: se pierde en cuanto se va de pantalla y no lo vas a \
+             encontrar después en el centro de notificaciones. El registro de avisos de Lucy sí \
+             lo conserva."
                 .to_string(),
         ),
         Err(e) => (false, format!("y no se pudo comprobar si queda archivado: {e}")),
@@ -578,15 +585,32 @@ pub fn diagnostico() -> Diagnostico {
 /// SE COPIA ANTES DE ABRIR porque el sistema la tiene abierta: leerla en su
 /// sitio da «database is locked» la mayoría de las veces, y un diagnóstico que
 /// falla la mitad de las veces no diagnostica nada.
+///
+/// Y SE COPIA EL `-wal` CON ELLA, que es donde me equivoqué dos veces seguidas.
+/// `wpndatabase.db` va en modo WAL: lo que se acaba de escribir vive en el
+/// fichero de registro y no en el principal. Copiar solo el `.db` no da un
+/// error ni una base corrupta — da una base PERFECTAMENTE VÁLIDA con los datos
+/// de hace horas. Así que el diagnóstico contestaba que el aviso no había
+/// llegado mirando una foto anterior a mandarlo, dos veces, con toda
+/// convicción.
+///
+/// Es el peor modo de fallo que hay: no se parece a un fallo.
 #[cfg(windows)]
 fn busca_en_el_centro(texto: &str) -> Result<bool, String> {
-    let base = std::path::PathBuf::from(std::env::var("LOCALAPPDATA").map_err(|_| "sin LOCALAPPDATA")?)
-        .join("Microsoft\\Windows\\Notifications\\wpndatabase.db");
+    let dir = std::path::PathBuf::from(std::env::var("LOCALAPPDATA").map_err(|_| "sin LOCALAPPDATA")?)
+        .join("Microsoft\\Windows\\Notifications");
+    let base = dir.join("wpndatabase.db");
     if !base.exists() {
         return Err("este Windows no tiene centro de notificaciones".into());
     }
     let copia = std::env::temp_dir().join("lucy-wpn-diagnostico.db");
     std::fs::copy(&base, &copia).map_err(|e| format!("no se pudo copiar: {e}"))?;
+    // El `-wal` es el que trae lo reciente. Si no está, es que el sistema acaba
+    // de hacer checkpoint y lo reciente ya está en el principal: no es un error.
+    let wal = dir.join("wpndatabase.db-wal");
+    if wal.exists() {
+        let _ = std::fs::copy(&wal, copia.with_extension("db-wal"));
+    }
     let c = rusqlite::Connection::open_with_flags(
         &copia,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
@@ -602,7 +626,13 @@ fn busca_en_el_centro(texto: &str) -> Result<bool, String> {
         .map_err(|e| format!("consulta: {e}"))?
         .filter_map(|x| x.ok())
         .any(|p| String::from_utf8_lossy(&p).contains(texto));
-    let _ = std::fs::remove_file(&copia);
+    // El statement y la conexión sueltan la base antes de borrarla: con el `-wal`
+    // al lado, SQLite crea además un `-shm` propio al abrir.
+    drop(st);
+    drop(c);
+    for f in [&copia, &copia.with_extension("db-wal"), &copia.with_extension("db-shm")] {
+        let _ = std::fs::remove_file(f);
+    }
     Ok(hay)
 }
 
