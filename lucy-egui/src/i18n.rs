@@ -4156,11 +4156,19 @@ mod tests {
         // aquel mide DEUDA —lo que falta por traducir— y baja cuando se
         // traduce; este mide un ERROR —un sitio que pinta sin envolver— y no
         // hay ninguno que este bien. Subirlo no documenta nada: apaga el test.
-        const TOPE: usize = 0;
+        // SIN CONSTANTE `TOPE`, y por lo que dice el párrafo de arriba. Aquí
+        // había un `const TOPE: usize = 0` con un `crudos.len() <= TOPE`, que es
+        // una comparación que nunca puede ser falsa por otro motivo que la
+        // igualdad — clippy la deniega, y llevaba desde el 19 de agosto haciendo
+        // que `cargo clippy` de este binario terminara en error sin que nadie lo
+        // notara. Como el tope es cero A PROPÓSITO y para siempre, la forma
+        // honesta de escribirlo es «no puede haber ninguno»: la constante solo
+        // dejaba abierta la puerta a subirla, que es justo lo que el comentario
+        // dice que no hay que hacer.
         assert!(
-            crudos.len() <= TOPE,
-            "{} sitios pintan texto sin pasarlo por la traducción y el tope son \
-             {TOPE}. Estos salen en español en cualquier idioma:\n{}",
+            crudos.is_empty(),
+            "{} sitios pintan texto sin pasarlo por la traducción, y no puede haber \
+             ninguno. Estos salen en español en cualquier idioma:\n{}",
             crudos.len(),
             crudos
                 .iter()

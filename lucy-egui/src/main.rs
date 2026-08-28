@@ -10076,15 +10076,13 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
             .collect();
         for (cmd, host) in pendientes {
             let clave = format!("{host}\u{1}{cmd}");
-            if !self.fallos.contains_key(&clave) {
-                let n = lucy_core::audit::fallos_recientes(
-                    &cmd,
-                    &host,
-                    lucy_core::audit::DIAS_FALLOS,
-                )
-                .unwrap_or(0);
-                self.fallos.insert(clave, n);
-            }
+            // `entry` y no `contains_key` + `insert`: son dos búsquedas en el
+            // mapa por cada paso pendiente y en cada fotograma. La consulta solo
+            // corre cuando la clave falta, igual que antes.
+            self.fallos.entry(clave).or_insert_with(|| {
+                lucy_core::audit::fallos_recientes(&cmd, &host, lucy_core::audit::DIAS_FALLOS)
+                    .unwrap_or(0)
+            });
         }
         // `(id, comando, elevado)`.
         let mut aprobado: Option<(String, String, bool)> = None;
