@@ -910,10 +910,19 @@ fn next_auto(
             &[("equipo", &step.host)],
         ));
     }
-    if loops >= max {
-        return NextAuto::Ceiling(format!(
-            "{max} pasos seguidos sin llegar a una respuesta. El automático se \
-             apaga y el siguiente paso lo apruebas tú."
+    // SE MIRA SI EL SIGUIENTE PASO CABE, no si ya se pasó. Con pasos que valen
+    // distinto, comprobar solo lo gastado dejaría arrancar un cambio de tres
+    // puntos teniendo uno de margen: el tope se rebasaría DESPUÉS de correrlo,
+    // que es cuando ya da igual.
+    if loops + coste_de_paso(&step.detail) > max {
+        return NextAuto::Ceiling(i18n::trf(
+            "Se acabó el margen del automático ({gastado} de {max}). El siguiente paso lo \
+             apruebas tú — mirar cuesta 1 punto y cambiar algo cuesta {cambio}.",
+            &[
+                ("gastado", &loops.to_string()),
+                ("max", &max.to_string()),
+                ("cambio", &COSTE_CAMBIO.to_string()),
+            ],
         ));
     }
     NextAuto::Run(step.id.clone(), step.detail.clone())
@@ -4159,6 +4168,13 @@ struct App {
     /// un equipo caído son información útil, y dejar la lista vacía sin decir
     /// nada hace que el operador crea que el log está limpio.
     lv_error: String,
+    /// Si el carril de la derecha está plegado.
+    ///
+    /// PLEGADO Y NO ESTRECHADO. Se podía llevar el borde hasta el mínimo, pero
+    /// 280 px de plan vacío al lado de una conversación siguen siendo 280 px que
+    /// no se están usando — y el mínimo existe porque por debajo el panel deja
+    /// de servir, no porque nadie quiera menos.
+    ws_plegado: bool,
     /// El resumen de supervisión y aceptación de los últimos 30 días. `None`
     /// hasta la primera carga de la auditoría.
     ///
@@ -4520,6 +4536,8 @@ const K_SPEND: &str = "lucy.spend_limit";
 /// clave el interruptor volvería a apagarse en cada arranque. Un ajuste que no
 /// se recuerda no es un ajuste: es un botón que engaña.
 const K_REDACTA: &str = "lucy.redacta_avisos";
+/// Si el carril de la derecha está plegado.
+const K_WS_PLEGADO: &str = "lucy.ws_plegado";
 /// Cuánto se extiende Lucy al contestar.
 /// El idioma de la interfaz.
 ///
@@ -4553,13 +4571,6 @@ const WS_MIN: f32 = 280.0;
 const WS_MAX: f32 = 560.0;
 const WS_DEF: f32 = 340.0;
 
-/// Cuántos pasos seguidos puede dar Lucy sola antes de parar a preguntar.
-///
-/// La V2 trae 60 por defecto, y aquí serían demasiados por una diferencia real:
-/// allí la mayoría de las vueltas son herramientas de lectura —buscar en
-/// memoria, leer una página—, y aquí CADA vuelta es un comando en esta máquina.
-/// Ocho alcanzan para una investigación normal —mirar servicios, mirar eventos,
-/// mirar disco, concluir— y se quedan cortos justo donde uno quiere enterarse.
 /// Cada cuánto mira el vigilante, en segundos.
 ///
 /// Un minuto. No lo pone la urgencia —la política de `watch` no repetiría un
@@ -4571,10 +4582,54 @@ const WS_DEF: f32 = 340.0;
 /// series hablan de lo mismo.
 const VIGILANTE_CADA_SECS: i64 = 60;
 
-const MAX_LOOPS_DEF: u32 = 8;
+/// El presupuesto del modo automático, en «puntos de paso».
+///
+/// NO ES UN NÚMERO DE PASOS, y ese cambio es el que permite subirlo sin aflojar
+/// el freno donde importa. Antes eran ocho pasos de cualquier clase, con este
+/// razonamiento —que sigue siendo bueno—: la V2 trae sesenta porque allí la
+/// mayoría de las vueltas son herramientas de LECTURA, y aquí cada vuelta es un
+/// comando en esta máquina.
+///
+/// Pero no todas las vueltas de aquí son iguales tampoco. Mirar qué servicios
+/// hay caídos y reiniciar uno no se parecen en nada, y el tope los cobraba
+/// igual: ocho `Get-` seguidos agotaban el presupuesto de una investigación que
+/// no había tocado nada.
+///
+/// Así que ahora un paso que SOLO MIRA cuesta un punto y uno que cambia algo
+/// cuesta `COSTE_CAMBIO`. Con veinticuatro puntos:
+///
+/// ```text
+///   24 consultas seguidas          una investigación de verdad
+///    8 comandos que cambian algo   exactamente lo de antes
+///   una mezcla, en proporción
+/// ```
+///
+/// O sea: el límite de lo que Lucy puede CAMBIAR sola no se ha movido ni un
+/// paso. Lo que se ha triplicado es lo que puede MIRAR antes de tener que
+/// preguntar, que era donde el tope estorbaba.
+const MAX_LOOPS_DEF: u32 = 24;
+
+/// Lo que cuesta un paso que cambia algo, en puntos.
+///
+/// Tres, para que `MAX_LOOPS_DEF / COSTE_CAMBIO` dé los ocho de antes exactos.
+/// El número no sale de una teoría: sale de conservar el freno que ya estaba
+/// calibrado y ensanchar solo la parte que no lo necesitaba.
+const COSTE_CAMBIO: u32 = 3;
+
+/// Lo que cuesta un paso, según lo que haga.
+///
+/// La clasificación es del núcleo (`destructive::solo_lectura`) y es una lista
+/// BLANCA: lo que no se reconoce con certeza como una consulta paga entero. Se
+/// equivoca del lado seguro — como mucho, una investigación se para antes de lo
+/// que podría.
+fn coste_de_paso(cmd: &str) -> u32 {
+    if lucy_core::destructive::solo_lectura(cmd) { 1 } else { COSTE_CAMBIO }
+}
 /// Los extremos del ajuste. Abajo, menos de dos no es un bucle. Arriba, el mismo
 /// techo que la V2: quien lo suba hasta ahí sabe lo que hace.
-const MAX_LOOPS_MIN: u32 = 2;
+/// El suelo. Con menos de un cambio de presupuesto, el automático se apaga en el
+/// primer paso que toque algo y el operador busca el fallo donde no está.
+const MAX_LOOPS_MIN: u32 = COSTE_CAMBIO;
 const MAX_LOOPS_MAX: u32 = 200;
 
 /// El modelo con el que arranca una instalación nueva.
@@ -4896,6 +4951,10 @@ impl App {
                 .and_then(|s| s.get_string(K_SPEND))
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(0.0),
+            ws_plegado: storage
+                .and_then(|s| s.get_string(K_WS_PLEGADO))
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(false),
             vista_anterior: None,
             mant_primera: true,
             ventana_curada: false,
@@ -5496,6 +5555,7 @@ impl eframe::App for App {
         storage.set_string(K_PRIVACY, self.privacy.to_string());
         storage.set_string(K_SPEND, self.spend_limit.to_string());
         storage.set_string(K_REDACTA, lucy_core::redacta::activa().to_string());
+        storage.set_string(K_WS_PLEGADO, self.ws_plegado.to_string());
         storage.set_string(K_LANG, i18n::lang().clave().to_string());
         if let Some(t) = self.chips_ts {
             storage.set_string(K_CHIPS_TS, t.to_string());
@@ -5994,7 +6054,7 @@ impl eframe::App for App {
         //
         // Solo en Terminal IA. En las demás vistas no hay turno del que enseñar
         // el plan, y un panel vacío permanente enseña a no mirarlo.
-        if self.view == View::TerminalIa {
+        if self.view == View::TerminalIa && !self.ws_plegado {
             // Se puede arrastrar el borde, con los mismos topes que la V2 (280 a
             // 560). No es capricho: el carril enseña comandos completos en
             // monoespaciada, y un `Get-WinEvent` con seis parámetros no cabe en
@@ -6003,6 +6063,7 @@ impl eframe::App for App {
             // existe: por debajo de 280 los comandos se parten en cada palabra y
             // el panel deja de servir para lo que está.
             let mut ancho = self.ws_width;
+            let mut plegar = false;
             egui::SidePanel::right("workspace")
                 .default_width(ancho)
                 .width_range(WS_MIN..=WS_MAX)
@@ -6018,9 +6079,18 @@ impl eframe::App for App {
                     // una ventana estrecha con un panel imposible. Los 28 son el
                     // margen interior, que `available_width` ya ha descontado.
                     ancho = ui.available_width() + 28.0;
+                    // El botón de plegar va DENTRO del panel y arriba del todo,
+                    // pegado a su borde izquierdo: es donde la mano ya está
+                    // cuando se acaba de leer el plan y se quiere sitio.
+                    if self.ws_cabecera_plegar(ui) {
+                        plegar = true;
+                    }
                     self.workspace(ui);
                 });
             self.ws_width = ancho;
+            if plegar {
+                self.ws_plegado = true;
+            }
         }
 
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -6081,6 +6151,23 @@ impl App {
         // que buscar en un sitio distinto cada vez no se busca.
         row_align(ui, 26.0, egui::Align::Center, |ui| {
             titulo_modulo(ui, View::TerminalIa);
+            // LA VUELTA DEL CARRIL PLEGADO, y sin esto plegarlo sería una
+            // trampa: el plan, la ejecución y el trace desaparecerían sin una
+            // forma visible de recuperarlos, y el operador tendría que adivinar
+            // que el ajuste vive en algún sitio. Solo aparece cuando está
+            // plegado — un botón permanente para volver a abrir algo que está
+            // abierto es ruido.
+            if self.ws_plegado {
+                right(ui, 26.0, |ui| {
+                    if ui
+                        .button(i18n::tr("Plan ▸"))
+                        .on_hover_text(i18n::tr("Volver a abrir el carril del agente"))
+                        .clicked()
+                    {
+                        self.ws_plegado = false;
+                    }
+                });
+            }
         });
         ui.add_space(6.0);
         self.tab_bar(ui);
@@ -9564,7 +9651,11 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
         ) {
             NextAuto::Idle => {}
             NextAuto::Run(id, cmd) => {
-                self.tabs[ti].loops += 1;
+                // SE SUMA LO QUE CUESTA, no uno. Ver `coste_de_paso`: mirar y
+                // cambiar no valen lo mismo, y cobrarlos igual era lo que hacía
+                // que ocho consultas agotaran el presupuesto de una
+                // investigación que no había tocado nada.
+                self.tabs[ti].loops += coste_de_paso(&cmd);
                 // NADIE LO APROBÓ. Es el bucle automático quien lo lanza, y esa
                 // es justo la fila que un auditor querría poder separar.
                 self.run_step(ti, id, cmd, false, "auto");
@@ -10093,6 +10184,33 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
     }
 
     /// El panel derecho: los cuatro carriles del agente.
+    /// El botón de plegar el carril. Devuelve `true` si se ha pulsado.
+    ///
+    /// A LA IZQUIERDA DEL TODO Y ARRIBA, pegado al borde que separa el carril de
+    /// la conversación: es donde está la mano después de leer el plan, y es el
+    /// lado por el que el panel se va a ir.
+    fn ws_cabecera_plegar(&mut self, ui: &mut egui::Ui) -> bool {
+        let mut pulsado = false;
+        let ancho = ui.available_width();
+        ui.allocate_ui_with_layout(
+            egui::vec2(ancho, 0.0),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                let (r, resp) =
+                    ui.allocate_exact_size(egui::vec2(22.0, 22.0), egui::Sense::click());
+                let c = if resp.hovered() { theme::txt() } else { theme::faint() };
+                icons::draw(ui.painter(), icons::Icon::ChevronDown, r.center(), 13.0, c);
+                if resp
+                    .on_hover_text(i18n::tr("Plegar el carril — vuelve con el botón de la cabecera"))
+                    .clicked()
+                {
+                    pulsado = true;
+                }
+            },
+        );
+        pulsado
+    }
+
     fn workspace(&mut self, ui: &mut egui::Ui) {
         let counts = [
             self.tabs[self.tab].ws.plan.len(),
@@ -21544,5 +21662,92 @@ mod maquetado {
             assert!(n >= previo, "a {ancho} px caben {n} y a menos cabían {previo}");
             previo = n;
         }
+    }
+}
+
+#[cfg(test)]
+mod presupuesto {
+    use super::*;
+
+    /// El límite de lo que Lucy puede CAMBIAR sola no se ha movido.
+    ///
+    /// Es la aserción que autoriza haber subido el tope de 8 a 24. El
+    /// razonamiento viejo —«aquí cada vuelta es un comando en esta máquina, no
+    /// una herramienta de lectura»— sigue siendo bueno para lo que cambia
+    /// algo; lo que no era cierto es que mirar costara lo mismo.
+    #[test]
+    fn el_margen_para_cambiar_cosas_es_el_mismo_de_antes() {
+        const ANTES: u32 = 8;
+        assert_eq!(
+            MAX_LOOPS_DEF / COSTE_CAMBIO,
+            ANTES,
+            "el presupuesto ya no da los {ANTES} cambios de antes: se ha aflojado el freno"
+        );
+    }
+
+    #[test]
+    fn mirar_cuesta_uno_y_cambiar_cuesta_mas() {
+        assert_eq!(coste_de_paso("Get-Service | Where-Object {$_.Status -ne 'Running'}"), 1);
+        assert_eq!(coste_de_paso("ipconfig /all"), 1);
+        assert_eq!(coste_de_paso("Restart-Service Spooler"), COSTE_CAMBIO);
+        // Y lo que no se reconoce paga entero: la lista es blanca a propósito.
+        assert_eq!(coste_de_paso("New-Item -Path x -ItemType File"), COSTE_CAMBIO);
+        assert!(COSTE_CAMBIO > 1, "si cambiar costara lo mismo que mirar, esto no separa nada");
+    }
+
+    fn paso(cmd: &str) -> lucy_core::agent::PlanStep {
+        lucy_core::agent::PlanStep {
+            id: "1".into(),
+            detail: cmd.into(),
+            status: lucy_core::agent::StepStatus::Pending,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn una_investigacion_larga_cabe_donde_antes_no() {
+        // Veinticuatro consultas seguidas sin tocar nada: el caso que el tope
+        // viejo cortaba a la octava.
+        let plan = [paso("Get-WinEvent -LogName System -MaxEvents 50")];
+        for gastado in 0..MAX_LOOPS_DEF {
+            assert!(
+                matches!(next_auto(true, false, gastado, MAX_LOOPS_DEF, 0.0, 0.0, &plan), NextAuto::Run(..)),
+                "la consulta número {} ya no cabía", gastado + 1
+            );
+        }
+    }
+
+    #[test]
+    fn un_cambio_que_no_cabe_no_se_arranca() {
+        // SE MIRA SI CABE, no si ya se pasó. Con pasos que valen distinto,
+        // comprobar solo lo gastado dejaría arrancar un cambio de tres puntos
+        // teniendo uno de margen, y el tope se rebasaría DESPUÉS de correrlo.
+        let plan = [paso("Restart-Service Spooler")];
+        let queda_poco = MAX_LOOPS_DEF - 1;
+        assert!(
+            matches!(
+                next_auto(true, false, queda_poco, MAX_LOOPS_DEF, 0.0, 0.0, &plan),
+                NextAuto::Ceiling(_)
+            ),
+            "arrancó un cambio que no cabía en el presupuesto"
+        );
+        // Pero una consulta sí cabe con ese mismo margen: el freno es del coste,
+        // no del número de vueltas.
+        let plan = [paso("Get-Service")];
+        assert!(matches!(
+            next_auto(true, false, queda_poco, MAX_LOOPS_DEF, 0.0, 0.0, &plan),
+            NextAuto::Run(..)
+        ));
+    }
+
+    #[test]
+    fn el_suelo_deja_hacer_al_menos_un_cambio() {
+        // Con menos, el automático se apagaría en el primer paso que tocara algo
+        // y el operador buscaría el fallo donde no está.
+        let plan = [paso("Restart-Service Spooler")];
+        assert!(matches!(
+            next_auto(true, false, 0, MAX_LOOPS_MIN, 0.0, 0.0, &plan),
+            NextAuto::Run(..)
+        ));
     }
 }

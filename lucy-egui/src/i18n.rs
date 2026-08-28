@@ -2286,6 +2286,14 @@ pub const FRASES: &[Frase] = &[
         "Demande le catalogue de modèles — ne coûte rien",
         "Fragt den Modellkatalog ab — kostet nichts",
     ),
+    f!("Plan ▸", "Plan ▸", "Plano ▸", "Plan ▸", "Plan ▸"),
+    f!(
+        "Plegar el carril — vuelve con el botón de la cabecera",
+        "Collapse the rail — bring it back from the header button",
+        "Recolher o carril — volta com o botão do cabeçalho",
+        "Replier le rail — il revient avec le bouton de l'en-tête",
+        "Leiste einklappen — kommt über die Kopfzeile zurück",
+    ),
     f!(
         "Plegar las alertas",
         "Collapse alerts",
@@ -2582,6 +2590,13 @@ pub const FRASES: &[Frase] = &[
         "Systemzustand",
     ),
     f!("Saludable", "Healthy", "Saudável", "Sain", "Gesund"),
+    f!(
+        "Se acabó el margen del automático ({gastado} de {max}). El siguiente paso lo apruebas tú — mirar cuesta 1 punto y cambiar algo cuesta {cambio}.",
+        "The auto budget is spent ({gastado} of {max}). You approve the next step — looking costs 1 point, changing something costs {cambio}.",
+        "Acabou a margem do automático ({gastado} de {max}). O próximo passo aprova-lo tu — olhar custa 1 ponto e mudar algo custa {cambio}.",
+        "La marge du mode automatique est épuisée ({gastado} sur {max}). L'étape suivante, c'est toi qui l'approuves — regarder coûte 1 point, changer quelque chose en coûte {cambio}.",
+        "Das Budget des Automatikmodus ist aufgebraucht ({gastado} von {max}). Den nächsten Schritt gibst du frei — Nachsehen kostet 1 Punkt, etwas ändern {cambio}.",
+    ),
     f!(
         "Se guardan en el Credential Manager de Windows, en el mismo sitio del que las lee la app de escritorio. Ollama no necesita clave: es local.",
         "They're saved in the Windows Credential Manager, the same place the desktop app reads them from. Ollama needs no key: it's local.",
@@ -2948,6 +2963,13 @@ pub const FRASES: &[Frase] = &[
     f!("Ver sus logs", "View its logs", "Ver os seus logs", "Voir ses logs", "Logs ansehen"),
     f!("Versión", "Version", "Versão", "Version", "Version"),
     f!("Visor de logs", "Log viewer", "Visor de logs", "Visionneuse de logs", "Log-Ansicht"),
+    f!(
+        "Volver a abrir el carril del agente",
+        "Reopen the agent rail",
+        "Voltar a abrir o carril do agente",
+        "Rouvrir le rail de l'agent",
+        "Die Agenten-Leiste wieder öffnen",
+    ),
     // ── La ayuda de cada módulo ──────────────────────────────────────────────
     f!(
         "Volver a los de fábrica",
