@@ -105,6 +105,17 @@ pub struct Reporte {
     /// Por qué no salió nada, cuando no salió nada. Un cero sin explicación es
     /// indistinguible de una avería.
     pub motivo: String,
+    /// Lo que masticó el modelo local en toda la pasada, sumando los grupos que
+    /// no dieron patrón.
+    ///
+    /// EN DINERO ES CERO Y AUN ASÍ IMPORTA. Ollama no cobra, pero ocupa la
+    /// máquina: si esta pasada mueve doscientos mil tokens cada noche para sacar
+    /// un patrón al mes, eso es una decisión que tomar, y sin la cifra no se
+    /// puede ni plantear.
+    pub tokens_entrada: u32,
+    pub tokens_salida: u32,
+    /// Con qué modelo. Vacío si no se llegó a preguntar a ninguno.
+    pub modelo: String,
 }
 
 // ── El formato ──────────────────────────────────────────────────────────────
@@ -381,15 +392,24 @@ pub fn prompt(filas: &[Fila], grupo: &[usize]) -> String {
 /// Aparte de `run` porque es la unidad que se puede pedir suelta: la vista de
 /// Memoria querrá un «reflexiona sobre estas ahora» sin esperar al vencimiento, y
 /// porque es lo único de aquí que se puede medir contra un Ollama de verdad.
+/// Devuelve además los tokens que gastó el modelo local: `(patrón, entrada,
+/// salida)`.
+///
+/// LOS RECUENTOS VIAJAN CON EL RESULTADO porque son la parte del trabajo que
+/// nadie ve pasar. Esta pasada corre sola, de madrugada, y gasta hasta cuatro
+/// llamadas al modelo local por vencimiento; sin los tokens no hay forma de
+/// contestar si tener Ollama encendido para esto sale a cuenta. En dinero es
+/// gratis y por eso se olvidó — pero gratis no es lo mismo que sin coste.
 pub fn destila_grupo(
     filas: &[Fila],
     grupo: &[usize],
     modelo: &str,
-) -> Result<Option<Crudo>, String> {
-    Ok(parse(&pregunta(&prompt(filas, grupo), modelo)?))
+) -> Result<(Option<Crudo>, u32, u32), String> {
+    let (texto, ent, sal) = pregunta(&prompt(filas, grupo), modelo)?;
+    Ok((parse(&texto), ent, sal))
 }
 
-fn pregunta(texto: &str, modelo: &str) -> Result<String, String> {
+fn pregunta(texto: &str, modelo: &str) -> Result<(String, u32, u32), String> {
     let body = serde_json::json!({
         "model": modelo,
         "messages": [
@@ -412,12 +432,14 @@ fn pregunta(texto: &str, modelo: &str) -> Result<String, String> {
     if let Some(e) = json.get("error").and_then(|e| e.as_str()) {
         return Err(format!("Ollama: {e}"));
     }
-    Ok(json
+    let salida = json
         .get("message")
         .and_then(|m| m.get("content"))
         .and_then(|c| c.as_str())
         .unwrap_or("")
-        .to_string())
+        .to_string();
+    let (ent, sal) = crate::chat::tokens_ollama(&json);
+    Ok((salida, ent, sal))
 }
 
 /// Guarda un patrón, o refuerza el que ya decía lo mismo.
@@ -506,9 +528,20 @@ pub fn run(stop: &std::sync::atomic::AtomicBool) -> Reporte {
         // Sin patrón es una respuesta válida: no todo montón de notas esconde una
         // regla, y forzar una sería inventarla. Un error de red sí para la pasada:
         // si Ollama no está, los grupos siguientes tampoco van a contestar.
+        // Los tokens se suman ANTES de mirar si salió patrón: un grupo que se
+        // miró y no dio nada costó exactamente lo mismo que uno que sí, y
+        // contar solo los que aciertan haría que la pasada pareciera más barata
+        // cuanto peor funcionase.
         let c = match destila_grupo(&filas, g, &modelo) {
-            Ok(Some(c)) => c,
-            Ok(None) => continue,
+            Ok((patron, ent, sal)) => {
+                rep.tokens_entrada += ent;
+                rep.tokens_salida += sal;
+                rep.modelo = modelo.clone();
+                match patron {
+                    Some(c) => c,
+                    None => continue,
+                }
+            }
             Err(e) => {
                 rep.motivo = e;
                 return rep;

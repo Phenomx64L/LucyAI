@@ -218,13 +218,20 @@ fn turnos(orden: &str) -> Vec<Turn> {
 /// barra de estado.
 pub fn nombra(orden: &str, fuente: &Fuente) -> Result<(String, u32, u32), String> {
     match fuente {
-        Fuente::Local(m) => local(orden, m).map(|t| (t, 0, 0)),
+        Fuente::Local(m) => local(orden, m),
         Fuente::Nube(m) => nube(orden, m),
     }
 }
 
 /// Ollama, sin streaming: son treinta tokens y no hay nada que enseñar mientras.
-fn local(orden: &str, modelo: &str) -> Result<String, String> {
+///
+/// DEVUELVE SUS RECUENTOS, que antes se tiraban con un `(t, 0, 0)` a pelo. Ollama
+/// los manda en la misma respuesta y no costaba nada leerlos; sin ellos, el cubo
+/// «titulo» de la pantalla de coste no se llenaba NUNCA mientras hubiera un
+/// modelo local instalado —que es el caso por defecto, porque `elige` lo
+/// prefiere— y ahí «los títulos no cuestan dinero» y «los títulos no se están
+/// midiendo» se leían exactamente igual.
+fn local(orden: &str, modelo: &str) -> Result<(String, u32, u32), String> {
     let cuerpo = serde_json::json!({
         "model": modelo,
         "messages": turnos(orden)
@@ -262,7 +269,8 @@ fn local(orden: &str, modelo: &str) -> Result<String, String> {
     if t.is_empty() {
         return Err("el modelo devolvió un título vacío".into());
     }
-    Ok(t)
+    let (ent, sal) = crate::chat::tokens_ollama(&json);
+    Ok((t, ent, sal))
 }
 
 /// La nube, drenando el stream que ya usa el resto de la aplicación.

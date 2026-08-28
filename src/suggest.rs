@@ -300,7 +300,7 @@ fn parece_comando(s: &str) -> bool {
 /// en la factura sin haber salido nunca en la barra de estado.
 pub fn pide_a(ctx: &str, f: &Fuente) -> Result<(Vec<Chip>, u32, u32), String> {
     match f {
-        Fuente::Local(m) => pide(ctx, m).map(|v| (v, 0, 0)),
+        Fuente::Local(m) => pide(ctx, m),
         Fuente::Nube(m) => nube(ctx, m),
     }
 }
@@ -332,7 +332,11 @@ fn nube(ctx: &str, modelo: &str) -> Result<(Vec<Chip>, u32, u32), String> {
 }
 
 /// Pide los atajos a Ollama. BLOQUEANTE.
-pub fn pide(ctx: &str, modelo: &str) -> Result<Vec<Chip>, String> {
+///
+/// DEVUELVE SUS RECUENTOS, por lo mismo que `titles::local`: Ollama los manda en
+/// la misma respuesta y descartarlos dejaba el cubo «chips» del gasto vacío para
+/// siempre, sin forma de distinguir «no cuesta» de «no se mide».
+pub fn pide(ctx: &str, modelo: &str) -> Result<(Vec<Chip>, u32, u32), String> {
     let cuerpo = serde_json::json!({
         "model": modelo,
         "messages": [
@@ -361,7 +365,8 @@ pub fn pide(ctx: &str, modelo: &str) -> Result<Vec<Chip>, String> {
         .and_then(|m| m.get("content"))
         .and_then(|c| c.as_str())
         .unwrap_or("");
-    Ok(parse(salida))
+    let (ent, sal) = crate::chat::tokens_ollama(&json);
+    Ok((parse(salida), ent, sal))
 }
 
 #[cfg(test)]

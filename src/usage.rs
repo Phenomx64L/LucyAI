@@ -38,12 +38,18 @@
 /// interesante. Un mes en el que el 40 % del gasto se lo llevan los títulos de
 /// las conversaciones no se arregla hablando menos con Lucy: se arregla
 /// titulando con el modelo local.
-/// SOLO LO QUE SE PUEDE LLENAR. Aquí había una quinta variante, `Reflexion`,
-/// para la destilación de patrones del mantenimiento — y no se puede escribir:
-/// `insights::destila_grupo` habla con Ollama y devuelve el texto parseado, sin
-/// los recuentos. Una variante que nadie escribe es exactamente la pieza muerta
-/// que este módulo existe para quitar, así que se queda fuera hasta que esa
-/// cadena devuelva tokens. Anotado y no fingido.
+/// SOLO LO QUE SE PUEDE LLENAR, y `Reflexion` volvió por eso. Estuvo fuera un
+/// rato: `insights::destila_grupo` hablaba con Ollama y devolvía el texto
+/// parseado tirando los recuentos, así que la variante no se podía escribir — y
+/// una variante que nadie escribe es exactamente la pieza muerta que este módulo
+/// existe para quitar. Ahora esa cadena devuelve tokens y la variante tiene
+/// quien la llene.
+///
+/// TRES DE LOS CUATRO CUBOS SON DEL MODELO LOCAL y por tanto valen cero dólares.
+/// Se guardan igual: «no cuesta dinero» y «no se está midiendo» no pueden
+/// leerse iguales en una pantalla de coste, y cuántos tokens mastica Ollama para
+/// poner títulos y destilar patrones es la única forma de decidir si compensa
+/// tenerlo encendido.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Para {
     /// Un turno de conversación: lo que el operador pidió.
@@ -54,6 +60,8 @@ pub enum Para {
     Chips,
     /// Un sub-agente.
     Fork,
+    /// La destilación de patrones del mantenimiento.
+    Reflexion,
 }
 
 impl Para {
@@ -65,6 +73,7 @@ impl Para {
             Self::Titulo => "titulo",
             Self::Chips => "chips",
             Self::Fork => "fork",
+            Self::Reflexion => "reflexion",
         }
     }
 }

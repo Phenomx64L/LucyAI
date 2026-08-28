@@ -292,6 +292,19 @@ pub fn corre(job: &str, stop: &std::sync::atomic::AtomicBool) -> String {
         },
         INSIGHTS => {
             let r = crate::insights::run(stop);
+            // LO QUE MASTICÓ EL MODELO LOCAL, AL REGISTRO DE GASTO. En dinero es
+            // cero —Ollama no cobra— pero esta pasada corre sola de madrugada y
+            // gasta hasta cuatro llamadas por vencimiento: sin la cifra no hay
+            // forma de contestar si tenerlo encendido para esto sale a cuenta.
+            if !r.modelo.is_empty() {
+                let _ = crate::usage::apunta(
+                    &r.modelo,
+                    r.tokens_entrada,
+                    r.tokens_salida,
+                    crate::usage::Para::Reflexion,
+                    "",
+                );
+            }
             if r.creados + r.reforzados > 0 {
                 (
                     format!(

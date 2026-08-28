@@ -133,4 +133,32 @@ fn el_gasto_sobrevive_y_se_puede_desglosar() {
     let mes = usage::resumen(30).expect("resumen").total;
     assert!(hoy > 0.0, "todo lo apuntado es de hoy y sale cero");
     assert!(hoy <= mes + 1e-9, "lo de hoy no puede pasar de lo del mes: {hoy} > {mes}");
+
+    // ── EL MODELO LOCAL CUESTA CERO Y AUN ASÍ SE MIDE ───────────────────────
+    //
+    // Tres cubos —`titulo`, `chips`, `reflexion`— los llena Ollama, que no
+    // cobra. Guardarlos igual es lo que separa «no cuesta dinero» de «no se
+    // está midiendo», que en una pantalla de coste no pueden leerse iguales: la
+    // segunda es un agujero y la primera es una respuesta.
+    //
+    // La extracción del JSON de Ollama se prueba en `chat.rs`, que es donde
+    // vive y donde se llega a un `pub(crate)`.
+    let antes = usage::resumen(30).expect("resumen").llamadas;
+    usage::apunta("qwen3:0.6b", 0, 0, Para::Reflexion, "").expect("apuntar");
+    assert_eq!(
+        usage::resumen(30).expect("resumen").llamadas,
+        antes,
+        "una destilación de la que no se sabe el gasto dejó fila"
+    );
+
+    usage::apunta("qwen3:0.6b", 412, 37, Para::Reflexion, "").expect("apuntar");
+    let r = usage::resumen(30).expect("resumen");
+    assert_eq!(r.llamadas, antes + 1);
+    let refl = r
+        .por_para
+        .iter()
+        .find(|(k, ..)| k == "reflexion")
+        .expect("el cubo de la reflexión no existe");
+    assert_eq!(refl.2, 1, "la destilación no dejó su fila");
+    assert!(refl.1.abs() < 1e-9, "un modelo local sin tarifa sumó dinero: {}", refl.1);
 }

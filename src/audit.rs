@@ -339,6 +339,98 @@ pub fn fallos_recientes(command: &str, host_id: &str, days: i64) -> Result<usize
     })
 }
 
+/// Las dos preguntas que la lista cronológica no puede contestar.
+///
+/// EL VISOR ENSEÑA QUÉ PASÓ EL MARTES, no cómo va la cosa. Con los orígenes ya
+/// separados —`ai` lo aprobó una persona, `auto` corrió solo, `descartado` se
+/// propuso y nadie lo ejecutó— la tabla puede contestar dos cosas que antes no
+/// tenían respuesta en ninguna parte, y las dos caben en una línea:
+///
+/// ```text
+///   supervisión   de lo que CORRIÓ aquí, qué fracción miró una persona
+///   aceptación    de lo que Lucy PROPUSO, qué fracción se llegó a ejecutar
+/// ```
+///
+/// La primera es la pregunta de auditoría de verdad, y con el automático
+/// encendido es la única forma de saber si está haciendo cosas que el operador
+/// no habría dejado pasar. La segunda es la medida más barata que existe de si
+/// lo que Lucy sugiere sirve — y hasta que `descartado` empezó a escribirse no
+/// se podía calcular ni a posteriori, porque el rechazo desaparecía al cerrar la
+/// pestaña.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Resumen {
+    /// `(origen, cuántos, cuántos fueron bien, cuántos fallaron)`, el más
+    /// frecuente primero. Un comando sin código de salida no cuenta en ninguna
+    /// de las dos últimas: «no se sabe» no es «fue bien».
+    pub por_origen: Vec<(String, usize, usize, usize)>,
+    /// Lo que ejecutó una persona o aprobó con el botón.
+    pub aprobados: usize,
+    /// Lo que lanzó el bucle automático sin que nadie lo mirara.
+    pub solos: usize,
+    /// Lo que Lucy propuso y nunca llegó a correr.
+    pub descartados: usize,
+}
+
+impl Resumen {
+    /// Qué fracción de lo que corrió aquí pasó por delante de una persona.
+    /// `None` si no corrió nada — cero de cero no es cero por ciento.
+    pub fn supervision(&self) -> Option<f32> {
+        let n = self.aprobados + self.solos;
+        (n > 0).then(|| self.aprobados as f32 / n as f32)
+    }
+
+    /// Qué fracción de lo que Lucy propuso se llegó a ejecutar.
+    ///
+    /// SOLO CUENTA LO QUE PROPUSO ELLA: `manual` es lo que el operador escribió
+    /// en la terminal, y meterlo aquí subiría el número con turnos en los que
+    /// Lucy no propuso nada — que es la forma más fácil de que una métrica de
+    /// utilidad deje de medir utilidad.
+    pub fn aceptacion(&self) -> Option<f32> {
+        let propuesto = self.de("ai") + self.de("auto") + self.descartados;
+        (propuesto > 0).then(|| (propuesto - self.descartados) as f32 / propuesto as f32)
+    }
+
+    fn de(&self, origen: &str) -> usize {
+        self.por_origen.iter().find(|(o, ..)| o == origen).map_or(0, |(_, n, ..)| *n)
+    }
+}
+
+/// El resumen de los últimos `days` días.
+pub fn resumen(days: i64) -> Result<Resumen, String> {
+    ensure_schema()?;
+    let days = days.clamp(1, 3_650);
+    crate::with_db(|c| {
+        let mut st = c
+            .prepare(
+                "SELECT source, COUNT(*),
+                        SUM(exit_code = 0), SUM(exit_code IS NOT NULL AND exit_code != 0)
+                 FROM audit_trail
+                 WHERE created_at > (strftime('%s','now') - ?1 * 86400)
+                 GROUP BY source ORDER BY COUNT(*) DESC",
+            )
+            .map_err(|e| format!("audit: resumen: {e}"))?;
+        let filas: Vec<(String, usize, usize, usize)> = st
+            .query_map([days], |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get::<_, i64>(1)? as usize,
+                    r.get::<_, Option<i64>>(2)?.unwrap_or(0) as usize,
+                    r.get::<_, Option<i64>>(3)?.unwrap_or(0) as usize,
+                ))
+            })
+            .map_err(|e| format!("audit: resumen: {e}"))?
+            .filter_map(|x| x.ok())
+            .collect();
+        let mut r = Resumen { por_origen: filas, ..Default::default() };
+        // `manual` cuenta como supervisado porque lo escribió una persona
+        // entera, no solo lo aprobó.
+        r.aprobados = r.de("ai") + r.de("manual");
+        r.solos = r.de("auto");
+        r.descartados = r.de("descartado");
+        Ok(r)
+    })
+}
+
 /// La ventana por defecto de `fallos_recientes`.
 ///
 /// Dos semanas: lo bastante largo para que un problema que se arrastra se note,

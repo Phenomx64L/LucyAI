@@ -10,6 +10,29 @@ use std::thread;
 
 const OLLAMA: &str = "http://localhost:11434";
 
+/// Los tokens que Ollama dice haber gastado, sacados de una respuesta suya sin
+/// streaming: `(entrada, salida)`.
+///
+/// LO QUE TIRABAN TRES MÓDULOS. `titles`, `suggest` e `insights` hacen el mismo
+/// `POST /api/chat` con `stream: false`, leen `message.content` y descartan el
+/// resto — y en ese resto vienen los dos recuentos. Los tres devolvían
+/// `(texto, 0, 0)` a pelo, así que el contador de gasto no veía pasar ni un token
+/// del modelo local: en la pantalla de coste, «no cuesta dinero» y «no se está
+/// midiendo» se leían igual.
+///
+/// En dinero da lo mismo —Ollama es gratis— pero en trabajo no: cuántos tokens
+/// mastica el modelo local para poner títulos y destilar patrones es la única
+/// forma de decidir si compensa tenerlo encendido.
+///
+/// CERO SI NO VIENEN, y eso es correcto aquí y no una pérdida disfrazada:
+/// `usage::apunta` descarta la fila que no gastó nada, así que una versión de
+/// Ollama que no mande los recuentos deja de escribir filas en vez de escribir
+/// ceros que ensuciarían la media.
+pub(crate) fn tokens_ollama(json: &serde_json::Value) -> (u32, u32) {
+    let n = |k: &str| json.get(k).and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    (n("prompt_eval_count"), n("eval_count"))
+}
+
 #[derive(Debug)]
 pub enum ChatEvent {
     Token(String),
@@ -138,4 +161,48 @@ pub fn list_models() -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Los recuentos que Ollama manda y tres módulos tiraban.
+    ///
+    /// `titles`, `suggest` e `insights` hacen el mismo `POST /api/chat` sin
+    /// streaming, leen `message.content` y descartaban el resto — y en ese resto
+    /// vienen los dos contadores. Los tres devolvían `(texto, 0, 0)` a pelo, así
+    /// que los cubos `titulo`, `chips` y `reflexion` de la pantalla de coste no
+    /// se llenaban NUNCA mientras hubiera un modelo local instalado, que es el
+    /// caso por defecto porque `elige` lo prefiere. Y ahí «no cuesta dinero» y
+    /// «no se está midiendo» se leían exactamente igual.
+    #[test]
+    fn se_leen_los_tokens_de_una_respuesta_de_ollama() {
+        let json: serde_json::Value = serde_json::from_str(
+            r#"{"model":"qwen3:0.6b",
+                "message":{"role":"assistant","content":"Servicios detenidos"},
+                "done":true,
+                "prompt_eval_count":412,
+                "eval_count":37}"#,
+        )
+        .expect("json");
+        assert_eq!(tokens_ollama(&json), (412, 37));
+    }
+
+    #[test]
+    fn una_respuesta_sin_recuentos_da_cero_y_no_revienta() {
+        // Es correcto y no una pérdida disfrazada: `usage::apunta` descarta la
+        // fila que no gastó nada, así que una versión de Ollama que no los mande
+        // deja de escribir filas en vez de escribir ceros que hundirían la
+        // media de tokens por llamada.
+        let mudo: serde_json::Value =
+            serde_json::from_str(r#"{"message":{"content":"algo"},"done":true}"#).expect("json");
+        assert_eq!(tokens_ollama(&mudo), (0, 0));
+
+        // Y un valor que no es un número tampoco: el JSON viene de fuera.
+        let raro: serde_json::Value =
+            serde_json::from_str(r#"{"prompt_eval_count":"muchos","eval_count":null}"#)
+                .expect("json");
+        assert_eq!(tokens_ollama(&raro), (0, 0));
+    }
 }

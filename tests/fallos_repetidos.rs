@@ -262,3 +262,88 @@ fn cargar_un_skill_deja_constancia_de_que_se_uso() {
     .len();
     assert_eq!(despues, antes, "se apuntó como usado un skill que no existe");
 }
+
+#[test]
+fn el_resumen_contesta_supervision_y_aceptacion() {
+    let _t = turno();
+    con_base();
+
+    // LAS DOS PREGUNTAS QUE LA LISTA CRONOLOGICA NO PUEDE CONTESTAR, y que
+    // existen porque ayer se separaron los origenes. Escribir la señal y no
+    // leerla es el mismo fallo que se ha ido cerrando por toda la casa — y este
+    // me lo hice yo al añadir las fuentes sin agregarlas en ninguna parte.
+    //
+    // La base ya trae filas de los tests de arriba, asi que se mide el
+    // MOVIMIENTO y no el valor absoluto: afirmar «supervision = 80 %» seria
+    // probar el estado del fichero de test en vez del comportamiento.
+    let antes = lucy_core::audit::resumen(30).expect("resumen");
+
+    for _ in 0..6 {
+        corrio("Get-Service -Name Spooler", "", true);
+    }
+    for _ in 0..2 {
+        lucy_core::audit::record(
+            &lucy_core::audit::Entry::nueva("Restart-Computer", "auto").resultado(true, 10, ""),
+        )
+        .expect("registrar");
+    }
+    for _ in 0..2 {
+        lucy_core::audit::record(
+            &lucy_core::audit::Entry::nueva("Format-Volume", "descartado").nota("cancelado"),
+        )
+        .expect("registrar");
+    }
+
+    let r = lucy_core::audit::resumen(30).expect("resumen");
+    assert_eq!(r.aprobados, antes.aprobados + 6, "no cuenta lo que aprobo una persona");
+    assert_eq!(r.solos, antes.solos + 2, "no separa lo que corrio solo");
+    assert_eq!(r.descartados, antes.descartados + 2, "no cuenta lo descartado");
+
+    // Las dos fracciones existen y estan en su rango.
+    let sup = r.supervision().expect("con actividad tiene que haber supervision");
+    let acp = r.aceptacion().expect("con propuestas tiene que haber aceptacion");
+    assert!((0.0..=1.0).contains(&sup), "supervision fuera de rango: {sup}");
+    assert!((0.0..=1.0).contains(&acp), "aceptacion fuera de rango: {acp}");
+
+    // Y SE MUEVEN EN LA DIRECCION CORRECTA, que es lo que de verdad se prueba.
+    // Dos automaticos mas y ningun aprobado extra tienen que BAJAR la
+    // supervision; dos descartes mas, la aceptacion.
+    let base = lucy_core::audit::resumen(30).expect("resumen");
+    for _ in 0..20 {
+        lucy_core::audit::record(
+            &lucy_core::audit::Entry::nueva("Get-Date", "auto").resultado(true, 5, ""),
+        )
+        .expect("registrar");
+    }
+    let luego = lucy_core::audit::resumen(30).expect("resumen");
+    assert!(
+        luego.supervision().unwrap() < base.supervision().unwrap(),
+        "veinte comandos que nadie miro no bajaron la supervision"
+    );
+
+    // El desglose por origen distingue lo que fue bien de lo que fallo, y no
+    // cuenta como bueno lo que no se sabe.
+    lucy_core::audit::record(&lucy_core::audit::Entry::nueva("cmd-sin-final", "manual"))
+        .expect("registrar");
+    let r = lucy_core::audit::resumen(30).expect("resumen");
+    let (_, n, ok, mal) = r
+        .por_origen
+        .iter()
+        .find(|(o, ..)| o == "manual")
+        .expect("falta el origen manual")
+        .clone();
+    assert!(n > ok + mal, "un comando sin codigo de salida se conto como resuelto");
+}
+
+#[test]
+fn sin_actividad_las_fracciones_no_se_inventan() {
+    let _t = turno();
+    con_base();
+
+    // Cero de cero no es cero por ciento. Un `0 %` en la cabecera con la base
+    // vacia se lee como «nada de lo que corre esta supervisado», que es una
+    // acusacion falsa contra una instalacion recien puesta.
+    let vacio = lucy_core::audit::Resumen::default();
+    assert_eq!(vacio.supervision(), None);
+    assert_eq!(vacio.aceptacion(), None);
+}
