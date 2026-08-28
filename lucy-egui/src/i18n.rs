@@ -379,6 +379,13 @@ pub const FRASES: &[Frase] = &[
         "1 étape non approuvée devient caduque",
         "1 nicht freigegebener Schritt wird hinfällig",
     ),
+    f!(
+        "1 patrón descartado — no volverá",
+        "1 pattern discarded — it won't come back",
+        "1 padrão descartado — não voltará",
+        "1 motif écarté — il ne reviendra pas",
+        "1 Muster verworfen — es kommt nicht zurück",
+    ),
     f!("1 volumen", "1 volume", "1 volume", "1 volume", "1 Laufwerk"),
     f!(
         "192.168.1.10 ó servidor.empresa.local",
@@ -2773,6 +2780,13 @@ pub const FRASES: &[Frase] = &[
         "Ein Befehl, oder frag mich auf Deutsch…   ·   ↑↓ Verlauf",
     ),
     f!(
+        "Un patrón descartado deja su huella puesta, así que la reflexión de cada noche no puede volver a darlo de alta. Si este número sube deprisa, lo que falla es el agrupado, no los patrones.",
+        "A discarded pattern leaves its fingerprint in place, so the nightly reflection can't file it again. If this number climbs fast, what's failing is the grouping, not the patterns.",
+        "Um padrão descartado deixa a sua impressão posta, por isso a reflexão de cada noite não pode voltar a dá-lo de alta. Se este número sobe depressa, o que falha é o agrupamento, não os padrões.",
+        "Un motif écarté laisse son empreinte en place, si bien que la réflexion de chaque nuit ne peut plus le réinscrire. Si ce nombre grimpe vite, ce qui cloche c'est le regroupement, pas les motifs.",
+        "Ein verworfenes Muster lässt seinen Fingerabdruck stehen, sodass die nächtliche Reflexion es nicht erneut anlegen kann. Steigt diese Zahl schnell, liegt der Fehler bei der Gruppierung, nicht bei den Mustern.",
+    ),
+    f!(
         "Un patrón es lo que se repite entre memorias que nadie escribió juntas. Reencontrarlo lo refuerza: la confianza sube con cada vez.",
         "A pattern is what repeats across memories nobody wrote together. Finding it again reinforces it: confidence rises each time.",
         "Um padrão é o que se repete entre memórias que ninguém escreveu juntas. Reencontrá-lo reforça-o: a confiança sobe de cada vez.",
@@ -3503,6 +3517,13 @@ pub const FRASES: &[Frase] = &[
         "{n} Messwerte seit {plazo}",
     ),
     f!("{n} núcleos", "{n} cores", "{n} núcleos", "{n} cœurs", "{n} Kerne"),
+    f!(
+        "{n} patrones descartados — no volverán",
+        "{n} patterns discarded — they won't come back",
+        "{n} padrões descartados — não voltarão",
+        "{n} motifs écartés — ils ne reviendront pas",
+        "{n} Muster verworfen — sie kommen nicht zurück",
+    ),
     // SINGULAR Y PLURAL COMO DOS FRASES: en alemán el plural de «Laufwerk» es
     // «Laufwerke» y en francés cambia el artículo. Pegar una «s» al final solo
     // funciona en español.

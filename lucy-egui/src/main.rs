@@ -4058,6 +4058,10 @@ struct App {
     /// sería una consulta por repintado.
     cristales: Option<Result<Vec<lucy_core::crystals::Cristal>, String>>,
     insights_l: Option<Result<Vec<lucy_core::insights::Insight>, String>>,
+    /// Cuántos patrones ha desmentido el operador. Se refresca con la lista y no
+    /// en cada fotograma: el panel se repinta sesenta veces por segundo y esto
+    /// solo cambia cuando alguien pulsa el botón.
+    insights_desc: usize,
     docs_l: Option<Result<Vec<lucy_core::docs::Documento>, String>>,
     principios_l: Option<Result<Vec<lucy_core::principles::Principio>, String>>,
     /// Lo último que se sabe de cada trabajo de mantenimiento: (job, cuándo,
@@ -4690,6 +4694,7 @@ impl App {
             mem_tab: MemTab::Memorias,
             cristales: None,
             insights_l: None,
+            insights_desc: 0,
             docs_l: None,
             principios_l: None,
             mant_info: None,
@@ -17079,7 +17084,7 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
             }
             MemTab::Insights => {
                 if self.insights_l.is_none() {
-                    self.insights_l = Some(lucy_core::insights::list(100));
+                    self.recarga_insights();
                 }
             }
             MemTab::Documentos => {
@@ -17673,10 +17678,21 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
         }
     }
 
+    /// La lista de patrones y el recuento de desmentidos, de una vez.
+    ///
+    /// Van juntos porque cambian juntos: descartar uno lo saca de la lista y
+    /// sube el contador en el mismo gesto, y leerlos por separado deja una
+    /// ventana en la que el panel dice «cinco patrones, cero descartados»
+    /// después de haber descartado uno.
+    fn recarga_insights(&mut self) {
+        self.insights_l = Some(lucy_core::insights::list(100));
+        self.insights_desc = lucy_core::insights::descartados();
+    }
+
     fn mem_tab_insights(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             if ui.button(i18n::tr("↻ Recargar")).clicked() {
-                self.insights_l = Some(lucy_core::insights::list(100));
+                self.recarga_insights();
             }
             ui.label(
                 egui::RichText::new(
@@ -17687,6 +17703,34 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                 .color(theme::faint()),
             );
         });
+        // LOS QUE EL OPERADOR HA DESMENTIDO. Es la única señal de que la
+        // destilación está produciendo basura: las filas descartadas
+        // desaparecen de la lista por definición, así que sin este contador un
+        // corpus que genera diez perogrulladas por semana se ve exactamente
+        // igual que uno que genera un patrón bueno al mes. Si sube deprisa, lo
+        // que hay que tocar es el agrupado (`MIN_PARECIDO`, `MIN_GRUPO`), no
+        // seguir descartando a mano.
+        let n_desc = self.insights_desc;
+        if n_desc > 0 {
+            ui.add_space(2.0);
+            ui.label(
+                egui::RichText::new(if n_desc == 1 {
+                    i18n::tr("1 patrón descartado — no volverá").to_string()
+                } else {
+                    i18n::trf(
+                        "{n} patrones descartados — no volverán",
+                        &[("n", &n_desc.to_string())],
+                    )
+                })
+                .size(theme::FS_MICRO)
+                .color(theme::faint()),
+            )
+            .on_hover_text(i18n::tr(
+                "Un patrón descartado deja su huella puesta, así que la reflexión de cada noche \
+                 no puede volver a darlo de alta. Si este número sube deprisa, lo que falla es el \
+                 agrupado, no los patrones.",
+            ));
+        }
         ui.add_space(4.0);
         let mut borrar: Option<i64> = None;
         let mut armar: Option<i64> = None;
@@ -17800,8 +17844,15 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
         }
         if let Some(id) = borrar {
             self.mem_confirm = None;
-            match lucy_core::insights::delete(id) {
-                Ok(()) => self.insights_l = Some(lucy_core::insights::list(100)),
+            // DESCARTAR Y NO BORRAR. Lo que el operador quiere decir con este
+            // botón es «este patrón es falso», y borrar la fila no lo conseguía:
+            // sin ella no había choque de huella, así que la pasada de
+            // mantenimiento de esa misma noche destilaba el mismo grupo de
+            // memorias y lo volvía a meter a 0,50 como si fuera nuevo. Desde
+            // que los insights llegan al prompt, eso es un patrón desmentido
+            // dirigiendo cada turno otra vez.
+            match lucy_core::insights::descarta(id) {
+                Ok(()) => self.recarga_insights(),
                 Err(e) => self.insights_l = Some(Err(e)),
             }
         }
