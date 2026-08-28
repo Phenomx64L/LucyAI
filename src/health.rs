@@ -312,6 +312,52 @@ mod tests {
         }
     }
 
+    /// EL SCRIPT SE CORRE DE VERDAD, contra la máquina donde se está probando.
+    ///
+    /// Todo lo de arriba examina el TEXTO del script o parsea un JSON que
+    /// escribí yo. Ninguna de las dos cosas dice si el script funciona: un
+    /// nombre de propiedad mal puesto, una clase CIM que no responde, un
+    /// `[Math]::Round` que devuelve algo que `ConvertTo-Json` no serializa — todo
+    /// eso pasa esos tests y falla la primera vez que hay un servidor delante,
+    /// que es la peor hora para enterarse.
+    ///
+    /// LO QUE DE VERDAD COMPRA ES LA COMA DECIMAL. En un Windows en español,
+    /// `931,5` en vez de `931.5` no es un número mal formateado: es un JSON
+    /// inválido, y la sonda entera devuelve «no se entiende lo que devolvió el
+    /// equipo» contra CUALQUIER servidor. Que `parsea` acepte esto en esta
+    /// máquina —que está en español— es la comprobación.
+    ///
+    /// LA MITAD QUE ESTO NO CUBRE, dicha para que no se confunda con la que sí:
+    /// aquí se corre el script LOCAL, no el transporte. `hosts::run_remote`
+    /// —base64 en UTF-16LE, WinRM, la decodificación de la consola— no lo toca
+    /// nadie hasta que haya un equipo de verdad al otro lado. Y el de Linux, ni
+    /// eso.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn la_sonda_de_windows_contesta_algo_que_se_puede_leer() {
+        let (salida, err, ok) =
+            crate::shell::run_powershell_utf8(&script_windows()).expect("no arrancó PowerShell");
+        assert!(ok, "el script salió con error: {err}");
+        let s = parsea(&salida).unwrap_or_else(|e| panic!("{e}\n--- devolvió ---\n{salida}"));
+
+        assert!(!s.hostname.is_empty(), "sin nombre de equipo");
+        assert!(s.cpu_cores > 0, "cero núcleos");
+        assert!(s.mem_total_mb > 0, "cero memoria");
+        assert!(s.mem_used_mb <= s.mem_total_mb, "usa más memoria de la que hay");
+        assert!(s.cpu_pct.is_finite() && (0.0..=100.0).contains(&s.cpu_pct), "CPU: {}", s.cpu_pct);
+
+        // UN VOLUMEN DE TAMAÑO CERO ES NORMAL y por eso se comprueba aquí. En
+        // esta misma máquina, `D:` sale con `total_gb: 0` —montado y sin leer— y
+        // `Disco::pct` daría una división por cero. El vigilante los salta
+        // (`observa_remoto`), pero el que se cuela es el que acaba diciendo «el
+        // disco va al NaN %» en un globo de Windows.
+        for d in &s.discos {
+            assert!(d.pct().is_finite(), "{} da un porcentaje que no es un número", d.nombre);
+            assert!(d.usado_gb <= d.total_gb || d.total_gb == 0.0, "{} usa más de lo que mide", d.nombre);
+        }
+        assert!(s.discos.iter().any(|d| d.total_gb > 0.0), "ningún disco con tamaño");
+    }
+
     #[test]
     fn un_equipo_sin_discos_no_revienta() {
         // Un contenedor, una máquina donde el filtro no casó nada. Los campos

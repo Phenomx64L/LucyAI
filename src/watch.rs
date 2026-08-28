@@ -304,7 +304,11 @@ fn juzga(s: &Sintoma, previo: Option<(i64, Nivel, usize)>, ahora: i64) -> Motivo
 /// DEVUELVE TAMBIÉN LO QUE ESTÁ BIEN, y hace falta: sin un síntoma en `Ok` para
 /// el disco C:, `decide` no puede saber que aquel disco crítico de ayer ya no lo
 /// está, y la recuperación no se avisaría nunca.
-pub fn observa_local(s: &SysSnapshot, servicios: &[DownService], u: &Umbrales) -> Vec<Sintoma> {
+pub fn observa_local(
+    s: &SysSnapshot,
+    servicios: Option<&[DownService]>,
+    u: &Umbrales,
+) -> Vec<Sintoma> {
     let mut v = Vec::new();
 
     v.push(Sintoma {
@@ -362,6 +366,30 @@ pub fn observa_local(s: &SysSnapshot, servicios: &[DownService], u: &Umbrales) -
             equipo: String::new(),
         });
     }
+
+    // «TODAVÍA NO LO SÉ» NO ES «ESTÁ TODO BIEN», y con una lista pelada las dos
+    // cosas eran el mismo valor: `Vec::new()`.
+    //
+    // Lo que pasaba con eso es lo peor que puede hacer un vigilante. El shell
+    // arranca con la lista vacía y sondea los servicios cada treinta segundos en
+    // otro hilo, mientras que la pasada se dispara al primer refresco; así que la
+    // PRIMERA pasada de cada arranque veía cero servicios rotos, concluía `Ok`, y
+    // si la sesión anterior había avisado de una caída, lo primero que hacía Lucy
+    // al abrirse era anunciar una recuperación que no había ocurrido. Lo mismo al
+    // cambiar de equipo en el panel, que vacía la lista hasta la siguiente sonda.
+    //
+    // Un aviso de más se ignora; un «ya está arreglado» falso hace que alguien
+    // deje de mirar algo que sigue roto. Y encima se cobra dos veces: el nivel
+    // guardado pasa a `Ok`, así que la sonda siguiente vuelve a contar la caída
+    // como nueva.
+    //
+    // `None` = no hay medida, y entonces no se emite el síntoma: sin síntoma no
+    // hay decisión, el nivel guardado se queda como estaba, y cuando la sonda
+    // conteste se decide con lo que de verdad haya. Es la misma distinción que
+    // hace `workdir::carga` entre «no hay nada guardado» y «no pude preguntar».
+    let Some(servicios) = servicios else {
+        return v;
+    };
 
     // SOLO LOS QUE FALLARON, no los que están parados. Un servicio automático
     // detenido limpiamente es de lo más normal —`sppsvc` se para solo para
@@ -607,7 +635,7 @@ pub fn olvida_la_sesion() {
 /// Devuelve TODAS las decisiones, incluidas las de callarse: quien la llama las
 /// escribe en el carril de trace, que es donde se investiga un «me avisa
 /// demasiado» sin tener que adivinar.
-pub fn pasada(s: &SysSnapshot, servicios: &[DownService], ahora: i64) -> Vec<Decision> {
+pub fn pasada(s: &SysSnapshot, servicios: Option<&[DownService]>, ahora: i64) -> Vec<Decision> {
     let u = crate::thresholds::de("");
     manda(observa_local(s, servicios, &u), ahora)
 }
@@ -924,15 +952,60 @@ mod tests {
             DownService { name: "sppsvc".into(), exit_code: 0 },
             DownService { name: "MapsBroker".into(), exit_code: 0 },
         ];
-        let v = observa_local(&s, &limpios, &Umbrales::default());
+        let v = observa_local(&s, Some(&limpios), &Umbrales::default());
         let serv = v.iter().find(|x| x.clave == "servicios").expect("falta el síntoma");
         assert_eq!(serv.nivel, Nivel::Ok, "un servicio parado limpiamente salió como avería");
 
         let roto = vec![DownService { name: "w3svc".into(), exit_code: 1067 }];
-        let v = observa_local(&s, &roto, &Umbrales::default());
+        let v = observa_local(&s, Some(&roto), &Umbrales::default());
         let serv = v.iter().find(|x| x.clave == "servicios").expect("falta el síntoma");
         assert_eq!(serv.nivel, Nivel::Critico);
         assert!(serv.cuerpo.contains("w3svc"));
+    }
+
+    #[test]
+    fn sin_medida_de_servicios_no_se_inventa_que_estan_bien() {
+        // EL FALLO QUE ESTO CIERRA, y es el peor que puede tener un vigilante.
+        //
+        // El shell arranca con la lista de servicios vacía y la sonda tarda su
+        // primer ciclo en contestar, así que la PRIMERA pasada de cada arranque
+        // veía cero servicios rotos. Con una lista pelada, «todavía no lo sé» y
+        // «está todo bien» son el mismo valor, así que concluía `Ok` — y si la
+        // sesión anterior había avisado de una caída, lo primero que hacía Lucy
+        // al abrirse era anunciar una recuperación que no había ocurrido.
+        //
+        // Se cobra dos veces: el operador deja de mirar algo que sigue roto, y
+        // el nivel guardado pasa a `Ok`, así que la sonda siguiente vuelve a
+        // contar la misma caída como nueva.
+        let s = SysSnapshot {
+            host: String::new(),
+            os: String::new(),
+            kernel: String::new(),
+            cpu_brand: String::new(),
+            cpu_pct: 5.0,
+            per_core: vec![],
+            mem_used: 1,
+            mem_total: 100,
+            swap_used: 0,
+            swap_total: 0,
+            uptime_secs: 0,
+            cores: 4,
+            disks: vec![],
+        };
+        let sin_medir = observa_local(&s, None, &Umbrales::default());
+        assert!(
+            !sin_medir.iter().any(|x| x.clave == "servicios"),
+            "sin medida se emitió un síntoma de servicios, y eso es una recuperación falsa"
+        );
+        // Y lo que sí se mide sigue saliendo: no medir los servicios no ciega al
+        // vigilante para lo demás.
+        assert!(sin_medir.iter().any(|x| x.clave == "cpu"), "se perdió la CPU por el camino");
+
+        // Medido y vacío SÍ es «está todo bien», que es la otra mitad de la
+        // distinción: sin ella, una recuperación de verdad no se diría nunca.
+        let medido = observa_local(&s, Some(&[]), &Umbrales::default());
+        let serv = medido.iter().find(|x| x.clave == "servicios").expect("falta el síntoma");
+        assert_eq!(serv.nivel, Nivel::Ok);
     }
 
     #[test]
@@ -958,7 +1031,7 @@ mod tests {
             cores: 1,
             disks: vec![],
         };
-        let v = observa_local(&s, &[], &Umbrales::default());
+        let v = observa_local(&s, Some(&[]), &Umbrales::default());
         let serv = v.iter().find(|x| x.clave == "servicios").expect("falta el síntoma");
         let a = aviso_de(serv, Motivo::Recuperado);
         assert!(!a.titulo.contains('0'), "el título dice que cero han fallado: «{}»", a.titulo);
@@ -977,7 +1050,7 @@ mod tests {
             }],
             ..s
         };
-        let v = observa_local(&con_disco, &[], &Umbrales::default());
+        let v = observa_local(&con_disco, Some(&[]), &Umbrales::default());
         let d = v.iter().find(|x| x.clave.starts_with("disco:")).expect("falta el disco");
         let a = aviso_de(d, Motivo::Recuperado);
         assert!(a.titulo.contains("D:"), "la unidad se perdió: «{}»", a.titulo);
@@ -1008,7 +1081,7 @@ mod tests {
                 avail: 10,
             }],
         };
-        let v = observa_local(&s, &[], &Umbrales::default());
+        let v = observa_local(&s, Some(&[]), &Umbrales::default());
         assert!(v.iter().any(|x| x.clave == "disco:D:\\"), "claves: {:?}",
                 v.iter().map(|x| &x.clave).collect::<Vec<_>>());
         assert!(!v.iter().any(|x| x.clave.contains("Iván")));
@@ -1037,7 +1110,7 @@ mod tests {
                 avail: 0,
             }],
         };
-        let v = observa_local(&s, &[], &Umbrales::default());
+        let v = observa_local(&s, Some(&[]), &Umbrales::default());
         assert!(!v.iter().any(|x| x.clave.starts_with("disco:")));
     }
 
@@ -1087,7 +1160,7 @@ mod tests {
                     avail: 10,
                 }],
             },
-            &[],
+            Some(&[]),
             &Umbrales::default(),
         );
         let remoto = observa_remoto("SRV-04", &salud(5.0, 99.0), &Umbrales::default());
