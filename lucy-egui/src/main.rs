@@ -4066,7 +4066,13 @@ struct App {
     principios_l: Option<Result<Vec<lucy_core::principles::Principio>, String>>,
     /// Lo último que se sabe de cada trabajo de mantenimiento: (job, cuándo,
     /// nota). Cacheado por lo mismo: `ultima()` es una consulta.
-    mant_info: Option<Vec<(&'static str, Option<(i64, String)>)>>,
+    /// Por trabajo: cuándo corrió y qué dejó dicho, más la racha en blanco
+    /// —cuántas pasadas seguidas sin producir nada y desde cuándo.
+    ///
+    /// La racha va aquí y no se pide al pintar porque el panel se repinta
+    /// sesenta veces por segundo y esto solo cambia cuando corre una pasada.
+    #[allow(clippy::type_complexity)]
+    mant_info: Option<Vec<(&'static str, Option<(i64, String)>, (usize, i64))>>,
     /// Un borrado ARMADO: (pestaña, id). El primer clic arma, el segundo borra.
     /// Cualquier otro clic de borrado re-arma sobre otra fila.
     mem_confirm: Option<(MemTab, i64)>,
@@ -17099,16 +17105,21 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
             }
             MemTab::Mantenimiento => {
                 if self.mant_info.is_none() {
-                    self.mant_info = Some(vec![
-                        (
+                    self.mant_info = Some(
+                        [
                             lucy_core::maintenance::CONSOLIDAR,
-                            lucy_core::maintenance::ultima(lucy_core::maintenance::CONSOLIDAR),
-                        ),
-                        (
                             lucy_core::maintenance::INSIGHTS,
-                            lucy_core::maintenance::ultima(lucy_core::maintenance::INSIGHTS),
-                        ),
-                    ]);
+                        ]
+                        .into_iter()
+                        .map(|j| {
+                            (
+                                j,
+                                lucy_core::maintenance::ultima(j),
+                                lucy_core::maintenance::racha_en_blanco(j),
+                            )
+                        })
+                        .collect(),
+                    );
                 }
             }
         }
@@ -18233,7 +18244,7 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
         let corriendo = self.mant_rx.is_some();
         let mut forzar: Option<&'static str> = None;
         if let Some(info) = &self.mant_info {
-            for (job, ultima) in info {
+            for (job, ultima, racha) in info {
                 let (titulo, cada, boton, explica) = match *job {
                     lucy_core::maintenance::CONSOLIDAR => (
                         "Consolidación",
@@ -18311,6 +18322,33 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                                 );
                             }
                         }
+                    }
+                    // LA SERIE, QUE ES LO QUE LA NOTA SUELTA NO PUEDE DECIR.
+                    // «0 elegibles · corpus demasiado pequeño» se lee igual si
+                    // pasó ayer que si lleva pasando un mes, y son dos
+                    // diagnósticos opuestos: el primero no es nada, el segundo
+                    // dice que los umbrales del agrupado están mal calibrados
+                    // para este corpus y que la reflexión lleva semanas
+                    // gastando llamadas a Ollama para no producir nada.
+                    //
+                    // Desde TRES: una o dos pasadas en blanco son ruido normal
+                    // —hay días sin memorias nuevas— y avisar de eso enseñaría a
+                    // ignorar el aviso.
+                    let (veces, desde) = *racha;
+                    if veces >= 3 {
+                        ui.label(
+                            egui::RichText::new(i18n::trf(
+                                "Lleva {n} pasadas sin sacar nada, desde {cuando}",
+                                &[("n", &veces.to_string()), ("cuando", &rel_time(desde))],
+                            ))
+                            .small()
+                            .color(theme::amber()),
+                        )
+                        .on_hover_text(i18n::tr(
+                            "Una pasada en blanco no dice nada; muchas seguidas sí. Suele \
+                             significar que el corpus no da para agrupar todavía, o que los \
+                             umbrales de parecido están puestos para otro tamaño de corpus.",
+                        ));
                     }
                 });
                 ui.add_space(4.0);

@@ -1680,6 +1680,13 @@ pub const FRASES: &[Frase] = &[
         "Neuestes Llama",
     ),
     f!(
+        "Lleva {n} pasadas sin sacar nada, desde {cuando}",
+        "It has gone {n} passes without producing anything, since {cuando}",
+        "Leva {n} passagens sem produzir nada, desde {cuando}",
+        "Cela fait {n} passages sans rien produire, depuis {cuando}",
+        "Läuft seit {n} Durchgängen ohne Ergebnis, seit {cuando}",
+    ),
+    f!(
         "Llevas {gastado} en esta sesión y el tope está en {tope}. El automático se apaga; súbelo en Configuración o sigue paso a paso.",
         "You've spent {gastado} this session and the cap is {tope}. Auto mode turns off; raise it in Settings or go step by step.",
         "Já gastaste {gastado} nesta sessão e o limite está em {tope}. O automático desliga-se; aumenta-o em Configuração ou segue passo a passo.",
@@ -2848,6 +2855,13 @@ pub const FRASES: &[Frase] = &[
         "Eine Momentaufnahme dieses Rechners: offene Ports, Dienste, installierte Software, \
          Zertifikate und geplante Aufgaben. Er schaut nicht von selbst — du musst auf Scannen \
          drücken, bis dahin bleiben die Zahlen leer.",
+    ),
+    f!(
+        "Una pasada en blanco no dice nada; muchas seguidas sí. Suele significar que el corpus no da para agrupar todavía, o que los umbrales de parecido están puestos para otro tamaño de corpus.",
+        "One empty pass says nothing; many in a row do. It usually means the corpus isn't big enough to group yet, or that the similarity thresholds are set for a different corpus size.",
+        "Uma passagem em branco não diz nada; muitas seguidas dizem. Costuma significar que o corpus ainda não dá para agrupar, ou que os limiares de semelhança estão postos para outro tamanho de corpus.",
+        "Un passage à vide ne dit rien ; beaucoup à la suite, si. Cela signifie d'ordinaire que le corpus ne suffit pas encore à regrouper, ou que les seuils de similarité sont réglés pour une autre taille de corpus.",
+        "Ein leerer Durchgang sagt nichts; viele hintereinander schon. Meist heißt das, dass der Korpus zum Gruppieren noch nicht reicht, oder dass die Ähnlichkeitsschwellen für eine andere Korpusgröße gesetzt sind.",
     ),
     f!(
         "Usar mi carpeta personal",
