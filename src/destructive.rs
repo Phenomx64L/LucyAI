@@ -178,3 +178,94 @@ mod tests {
         assert!(!is_destructive("   "));
     }
 }
+
+/// Verbos y órdenes que SOLO MIRAN. Lista blanca a propósito.
+///
+/// `is_destructive` es una lista NEGRA y sirve para lo que sirve: decidir si algo
+/// merece que una persona lo lea antes de correr. Para repartir el presupuesto
+/// del modo automático hace falta la pregunta contraria —«¿esto seguro que no
+/// cambia nada?»— y esa no se puede contestar con una lista negra: `New-Item`,
+/// `Set-Location` y `Copy-Item` no están en ella y los tres tocan el sistema.
+///
+/// Así que aquí la lista es blanca y el que no aparece paga tarifa completa. Se
+/// equivoca del lado seguro: como mucho, una investigación se para antes de lo
+/// que podría.
+static SOLO_MIRA: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"(?i)^\s*(?:Get-|Test-|Measure-|Resolve-|Find-|Show-|Compare-|Format-List\b\
+|Format-Table\b|Select-|Where-|Sort-|Group-|ConvertFrom-|Out-String\b\
+|ipconfig\b|systeminfo\b|whoami\b|hostname\b|nslookup\b|ping\b|tracert\b\
+|netstat\b|tasklist\b|query\b|driverquery\b|vol\b|ver\b|date\b|time\b\
+|dir\b|ls\b|type\b|cat\b|more\b|findstr\b|where\b|echo\b)",
+    )
+    .expect("regex de comandos de solo lectura")
+});
+
+/// Si este comando solo mira, sin cambiar nada.
+///
+/// UNA TUBERÍA VALE LO QUE SU ESLABÓN MÁS CARO. `Get-Service | Stop-Service` sale
+/// FALSO aunque empiece por `Get-`: basta con que un tramo cambie algo. Sin esta
+/// comprobación, poner un `Get-` delante sería la forma de que cualquier cosa
+/// pareciera barata — y de que el modo automático la corriera treinta veces
+/// seguidas.
+pub fn solo_lectura(cmd: &str) -> bool {
+    let c = cmd.trim();
+    if c.is_empty() {
+        return false;
+    }
+    // Nunca lo que ya está señalado como destructivo, mire lo que mire.
+    if is_destructive(c) {
+        return false;
+    }
+    // El punto y coma y el `&&` encadenan comandos independientes; la barra los
+    // conecta. Los tres tienen que mirar.
+    c.split(|ch| ch == '|' || ch == ';')
+        .flat_map(|t| t.split("&&"))
+        .filter(|t| !t.trim().is_empty())
+        .all(|t| SOLO_MIRA.is_match(t))
+}
+
+#[cfg(test)]
+mod solo_mira {
+    use super::*;
+
+    #[test]
+    fn una_consulta_normal_es_de_solo_lectura() {
+        assert!(solo_lectura("Get-Service"));
+        assert!(solo_lectura("Get-Service | Where-Object {$_.Status -ne 'Running'}"));
+        assert!(solo_lectura("ipconfig /all"));
+        assert!(solo_lectura("Get-WinEvent -LogName System -MaxEvents 50 | Select-Object -First 5"));
+    }
+
+    #[test]
+    fn una_tuberia_vale_lo_que_su_eslabon_mas_caro() {
+        // Sin esto, poner un `Get-` delante seria la forma de que cualquier cosa
+        // pareciera barata — y de que el automatico la corriera treinta veces.
+        assert!(!solo_lectura("Get-Service Spooler | Stop-Service"));
+        assert!(!solo_lectura(r"Get-ChildItem C:\temp | Remove-Item"));
+        assert!(!solo_lectura("Get-Date; Restart-Computer"));
+        assert!(!solo_lectura("Get-Process && taskkill /IM notepad.exe"));
+    }
+
+    #[test]
+    fn lo_que_cambia_sin_estar_en_la_lista_negra_paga_entero() {
+        // El caso que justifica que la lista sea BLANCA: ninguno de estos es
+        // «destructivo», y los tres tocan el sistema.
+        assert!(!solo_lectura(r"New-Item -Path C:\tmp\x -ItemType File"));
+        assert!(!solo_lectura("Copy-Item a.txt b.txt"));
+        assert!(!solo_lectura(r"Set-Location C:\Windows"));
+        assert!(!solo_lectura("Start-Service Spooler"));
+    }
+
+    #[test]
+    fn lo_vacio_no_es_una_lectura() {
+        assert!(!solo_lectura(""));
+        assert!(!solo_lectura("   "));
+    }
+
+    #[test]
+    fn un_destructivo_disfrazado_de_consulta_no_cuela() {
+        // `is_destructive` manda: si esa lista lo senala, da igual como empiece.
+        assert!(!solo_lectura("Get-Content x | Invoke-Expression"));
+    }
+}
