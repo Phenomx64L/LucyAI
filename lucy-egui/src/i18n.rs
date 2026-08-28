@@ -2068,6 +2068,13 @@ pub const FRASES: &[Frase] = &[
         "Ich konnte deinen Bildschirm nicht erfassen: {e}",
     ),
     f!(
+        "No queda margen para escribir «{ruta}». Apruébalo tú.",
+        "No budget left to write «{ruta}». Approve it yourself.",
+        "Não resta margem para escrever «{ruta}». Aprova-o tu.",
+        "Il ne reste plus de marge pour écrire «{ruta}». À toi de l'approuver.",
+        "Kein Spielraum mehr, um «{ruta}» zu schreiben. Genehmige es selbst.",
+    ),
+    f!(
         "No se enviará: {motivo}",
         "Won't be sent: {motivo}",
         "Não será enviado: {motivo}",

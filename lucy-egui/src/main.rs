@@ -8958,6 +8958,16 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
         // Los sub-agentes que un `wait_task` de este turno pidió y todavía no
         // han terminado. Si al final queda alguno, el lote entero se retiene.
         let mut pendientes: Vec<String> = Vec::new();
+        // Los artefactos que ha propuesto ESTE turno, por si el automático puede
+        // escribirlos. Se apuntan aquí y se deciden al final del bucle, no al
+        // vuelo: ver `escribe_lo_que_pueda`.
+        //
+        // POR ID Y NO POR ÍNDICE. El carril se queda con los sesenta últimos
+        // artefactos y tira por delante, así que en un turno con varias
+        // propuestas —justo el caso que esto viene a resolver— un recorte entre
+        // dos `push` correría todos los índices apuntados una posición, y lo que
+        // se escribiría sin preguntar sería el artefacto de al lado.
+        let mut propuestos: Vec<String> = Vec::new();
 
         // EL CUERPO QUE VIENE APARTE, EN SU PROPIA ETIQUETA.
         //
@@ -9202,6 +9212,9 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                             );
                         }
                         self.tabs[ti].ws.artifact_push(a);
+                        if let Some(ultimo) = self.tabs[ti].ws.artifacts.last() {
+                            propuestos.push(ultimo.id.clone());
+                        }
                     }
                 }
                 k if k.is_execute() => {
@@ -9321,10 +9334,105 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
         // terminaron. Mandar ahora la mitad y luego la otra haría que Lucy
         // contestara con lo primero que le llegó y volviera a preguntar por lo
         // demás — dos turnos pagados para lo que cabe en uno.
+        // LAS ESCRITURAS, AQUÍ Y NO EN EL BUCLE. Ver `escribe_lo_que_pueda`: el
+        // orden de las etiquetas dentro de una respuesta lo elige el modelo, y
+        // decidir al vuelo dejaría que un `writefile` puesto ANTES de la lectura
+        // envenenada se escribiera antes de que esa lectura apagara el
+        // automático. Aquí ya han pasado todas.
+        self.escribe_lo_que_pueda(ti, &propuestos, &mut herramientas);
+
         if !pendientes.is_empty() {
             self.tabs[ti].espera = Some(Espera { ids: pendientes, resultados: herramientas });
         } else if !herramientas.is_empty() {
             self.mandar_resultados(ti, herramientas);
+        }
+    }
+
+    /// Escribe solos los artefactos de este turno que se puedan escribir solos.
+    ///
+    /// LA PUERTA QUE FALTABA. El modo automático encadenaba comandos —lo caro y
+    /// lo peligroso— y paraba en cada escritura a pedir un clic, que es la única
+    /// parte que no toca el sistema. Una tarea normal («mira esto y déjame el
+    /// informe») corría sola hasta el final y se quedaba esperando en el último
+    /// paso: el operador volvía a un trabajo terminado y un fichero sin escribir.
+    ///
+    /// QUIÉN DECIDE ESTÁ EN EL NÚCLEO (`tools::sin_supervision`), y aquí solo se
+    /// actúa —igual que `auto_step` con `next_auto`—. Un bucle que escribe en el
+    /// disco de alguien sin que nadie lo lea no es sitio para «se ve que
+    /// funciona»: la decisión tiene que poder probarse sin abrir la ventana.
+    ///
+    /// CUESTA COMO UN CAMBIO, del mismo presupuesto que los comandos y no de uno
+    /// aparte. Un presupuesto propio sería otro tope que calibrar y, peor, dos
+    /// contadores que se pueden gastar a la vez: la cadena podría correr sus
+    /// veinticuatro puntos de comandos Y escribir ocho ficheros. Es un solo
+    /// presupuesto porque es una sola cadena.
+    ///
+    /// LO QUE NO PASA, SE LE DICE A LUCY. Sin eso, Lucy cree que el fichero está
+    /// escrito —porque a veces lo está— y sigue construyendo encima. Con el
+    /// motivo delante puede corregirlo: casi siempre es una ruta fuera del
+    /// directorio de trabajo, y eso lo arregla ella sola en el turno siguiente.
+    fn escribe_lo_que_pueda(&mut self, ti: usize, ids: &[String], avisos: &mut Vec<String>) {
+        if ids.is_empty() || !self.tabs[ti].auto {
+            return;
+        }
+        // El de trabajo se pregunta UNA VEZ por lote y no por artefacto: es una
+        // lectura cacheada, pero también es la referencia contra la que se
+        // comparan todos, y preguntarlo dos veces abre la puerta a que cambie a
+        // media pasada.
+        let trabajo = lucy_core::workdir::actual();
+        for id in ids {
+            let Some(i) = self.tabs[ti].ws.artifacts.iter().position(|a| &a.id == id) else {
+                continue;
+            };
+            // EL TOPE SE MIRA POR ARTEFACTO, dentro del bucle: si Lucy propone
+            // diez ficheros en una respuesta, los que quepan se escriben y el
+            // resto espera. Mirarlo una vez fuera dejaría pasar los diez.
+            if self.tabs[ti].loops + COSTE_CAMBIO > self.max_loops {
+                let ruta = self.tabs[ti].ws.artifacts[i].path.clone();
+                self.tabs[ti].ws.trace_push(lucy_core::agent::TraceEntry {
+                    phase: "info".into(),
+                    label: i18n::tr("Automático en pausa").into(),
+                    detail: i18n::trf(
+                        "No queda margen para escribir «{ruta}». Apruébalo tú.",
+                        &[("ruta", &ruta)],
+                    ),
+                    ..Default::default()
+                });
+                continue;
+            }
+            // POR LA PUERTA ÚNICA, como el resto de los resultados de este lote.
+            // La ruta la escribió el modelo, así que el sobre la escapa; y de
+            // paso Lucy lee esto con la misma forma con la que lee todo lo demás
+            // que le vuelve, en vez de con una frase suelta en medio.
+            let nombre = match self.tabs[ti].ws.artifacts[i].kind {
+                lucy_core::agent::ArtifactKind::Edit => "editfile",
+                _ => "writefile",
+            };
+            let ruta = self.tabs[ti].ws.artifacts[i].path.clone();
+            match lucy_core::tools::sin_supervision(&self.tabs[ti].ws.artifacts[i], &trabajo) {
+                Ok(()) => {
+                    self.tabs[ti].loops += COSTE_CAMBIO;
+                    let (_, aviso) = self.escribe_artefacto(ti, i, "auto");
+                    avisos.push(lucy_core::guard::tool_result(nombre, &ruta, &aviso).block);
+                }
+                // Un artefacto que ya venía roto no se comenta: `absorb_tags` ya
+                // le ha contado a Lucy por qué, y decírselo dos veces en el mismo
+                // turno la manda a arreglar algo que ya sabe.
+                Err(_) if !self.tabs[ti].ws.artifacts[i].blocked.is_empty() => {}
+                Err(motivo) => {
+                    self.tabs[ti].ws.trace_push(lucy_core::agent::TraceEntry {
+                        phase: "info".into(),
+                        label: i18n::tr("Automático en pausa").into(),
+                        detail: motivo.clone(),
+                        ..Default::default()
+                    });
+                    let cuerpo = format!(
+                        "NO se ha escrito: {motivo} Queda propuesto en Artefactos, esperando \
+                         al operador."
+                    );
+                    avisos.push(lucy_core::guard::tool_result(nombre, &ruta, &cuerpo).block);
+                }
+            }
         }
     }
 
@@ -10850,19 +10958,48 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
         }
     }
 
-    /// Escribe un artefacto aprobado y le cuenta a Lucy cómo fue.
+    /// Escribe un artefacto aprobado A MANO y le cuenta a Lucy cómo fue.
     fn aplicar_artefacto(&mut self, id: &str) {
         let ti = self.tab;
         let Some(i) = self.tabs[ti].ws.artifacts.iter().position(|a| a.id == id) else {
             return;
         };
+        let (_, aviso) = self.escribe_artefacto(ti, i, "manual");
+        // Y VUELVE A LUCY, como la salida de un comando. Sin esto, el operador
+        // aprueba el cambio y Lucy sigue creyendo que está pendiente.
+        //
+        // Con `send_raw` y no metiéndolo en un lote, porque aquí no hay lote: el
+        // turno ya cerró y lo que abre este es el clic. La escritura automática
+        // va por el otro camino —dentro de `absorb_tags`, con los resultados de
+        // las herramientas— para no pagar un turno por fichero.
+        self.send_raw(ti, aviso);
+    }
+
+    /// Escribe un artefacto y devuelve `(salió bien, qué decirle a Lucy)`.
+    ///
+    /// SIN MANDAR NADA, y por eso está separada de `aplicar_artefacto`. Los dos
+    /// caminos que escriben —el botón y el automático— hacen lo mismo con el
+    /// disco y cosas distintas con el turno: el botón abre uno, y el automático
+    /// mete su frase en el lote de resultados que ya iba a salir. Duplicar el
+    /// cuerpo para eso era garantizar que uno de los dos se olvidara de recargar
+    /// los skills o de anotar en la auditoría.
+    fn escribe_artefacto(&mut self, ti: usize, i: usize, origen: &'static str) -> (bool, String) {
+        let t0 = Instant::now();
         let r = lucy_core::tools::apply(&self.tabs[ti].ws.artifacts[i]);
         let (path, ok) = (self.tabs[ti].ws.artifacts[i].path.clone(), r.is_ok());
+        let kind = self.tabs[ti].ws.artifacts[i].kind;
         match r {
             Ok(()) => {
                 self.tabs[ti].ws.artifacts[i].applied = true;
-                self.tabs[ti].ws.artifacts[i].summary =
-                    format!("{} · escrito", self.tabs[ti].ws.artifacts[i].summary);
+                // EL ORIGEN SE VE EN LA FICHA. «escrito» a secas deja al operador
+                // sin saber si lo aprobó él hace diez minutos o si el bucle lo
+                // hizo mientras miraba otra pestaña, y ésa es justo la pregunta
+                // que se hace al encontrarse un fichero que no recuerda.
+                self.tabs[ti].ws.artifacts[i].summary = format!(
+                    "{} · {}",
+                    self.tabs[ti].ws.artifacts[i].summary,
+                    if origen == "auto" { "escrito por el automático" } else { "escrito" }
+                );
                 // Si lo escrito era un SKILL, se recarga el catálogo. Sin esto,
                 // aprobar algo aprendido lo dejaría en disco y fuera del alcance
                 // de Lucy hasta el siguiente arranque — que es la mitad de la
@@ -10882,19 +11019,36 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
             detail: path.clone(),
             ..Default::default()
         });
-        // Y VUELVE A LUCY, como la salida de un comando. Sin esto, el operador
-        // aprueba el cambio y Lucy sigue creyendo que está pendiente.
-        self.send_raw(
-            ti,
-            if ok {
-                format!("El operador aprobó tu cambio y '{path}' ya está escrito en disco.")
-            } else {
-                format!(
-                    "Tu cambio en '{path}' NO se aplicó: {}. Corrígelo o dilo.",
-                    self.tabs[ti].ws.artifacts[i].blocked
-                )
-            },
+        // A LA AUDITORÍA TAMBIÉN, y hasta hoy no iba. El carril de Trace se
+        // vacía con la pestaña y no lo lee nadie mañana; escribir en el disco de
+        // alguien es exactamente lo que un registro de auditoría está para
+        // contar, y con el automático encendido puede pasar sin que haya nadie
+        // delante. La fila dice `writefile:RUTA` para que se pueda buscar por
+        // ruta, y `source` separa el clic del bucle — que es la columna por la
+        // que se filtra cuando la pregunta es «¿esto lo aprobé yo?».
+        let etiqueta = format!(
+            "{}:{path}",
+            match kind {
+                lucy_core::agent::ArtifactKind::Edit => "editfile",
+                lucy_core::agent::ArtifactKind::Skill => "skill",
+                lucy_core::agent::ArtifactKind::Memory => "memory",
+                lucy_core::agent::ArtifactKind::Write => "writefile",
+            }
         );
+        let detalle = if ok { String::new() } else { self.tabs[ti].ws.artifacts[i].blocked.clone() };
+        self.auditar(Some(ti), &etiqueta, "", origen, ok, t0.elapsed().as_millis() as u64, &detalle);
+        let aviso = if ok {
+            match origen {
+                "auto" => format!("'{path}' ya está escrito en disco."),
+                _ => format!("El operador aprobó tu cambio y '{path}' ya está escrito en disco."),
+            }
+        } else {
+            format!(
+                "Tu cambio en '{path}' NO se aplicó: {}. Corrígelo o dilo.",
+                self.tabs[ti].ws.artifacts[i].blocked
+            )
+        };
+        (ok, aviso)
     }
 
     /// El run en texto plano, para el portapapeles.
@@ -21760,6 +21914,35 @@ mod presupuesto {
         // Y lo que no se reconoce paga entero: la lista es blanca a propósito.
         assert_eq!(coste_de_paso("New-Item -Path x -ItemType File"), COSTE_CAMBIO);
         assert!(COSTE_CAMBIO > 1, "si cambiar costara lo mismo que mirar, esto no separa nada");
+    }
+
+    /// Escribir un fichero sale del MISMO presupuesto que cambiar algo.
+    ///
+    /// La aserción es contra un presupuesto aparte para las escrituras, que es lo
+    /// que pediría el código si alguien lo mirara solo por encima. Dos
+    /// contadores se gastan a la vez: la cadena correría sus veinticuatro puntos
+    /// de comandos Y escribiría ocho ficheros encima. Es una sola cadena, así que
+    /// es un solo presupuesto — y el número que gasta una escritura es el mismo
+    /// que gasta un `Restart-Service`, porque las dos cosas cambian la máquina.
+    #[test]
+    fn escribir_un_fichero_cuesta_lo_que_cambiar_algo() {
+        assert_eq!(coste_de_paso("Restart-Service Spooler"), COSTE_CAMBIO);
+        // Y con el tope de fábrica, el automático escribe como mucho ocho
+        // ficheros seguidos si no hace nada más — el mismo techo que los cambios.
+        assert_eq!(MAX_LOOPS_DEF / COSTE_CAMBIO, 8);
+    }
+
+    /// Con el margen justo, no se escribe.
+    ///
+    /// Es la misma regla que `next_auto`: se mira si el SIGUIENTE cabe, no si ya
+    /// se pasó. Comprobar solo lo gastado dejaría arrancar una escritura teniendo
+    /// un punto de margen, y el tope se rebasaría después de escribir — que es
+    /// cuando ya da igual.
+    #[test]
+    fn una_escritura_que_no_cabe_no_se_empieza() {
+        let cabe = |gastado: u32| gastado + COSTE_CAMBIO <= MAX_LOOPS_DEF;
+        assert!(cabe(MAX_LOOPS_DEF - COSTE_CAMBIO), "con el margen exacto sí");
+        assert!(!cabe(MAX_LOOPS_DEF - COSTE_CAMBIO + 1), "con uno menos, no");
     }
 
     fn paso(cmd: &str) -> lucy_core::agent::PlanStep {
