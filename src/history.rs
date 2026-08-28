@@ -136,8 +136,72 @@ pub fn ensure_schema() -> Result<(), String> {
             "ALTER TABLE metrics_samples ADD COLUMN discos TEXT NOT NULL DEFAULT ''",
             [],
         );
+        rescata_las_huerfanas(c)?;
         Ok(())
     })
+}
+
+/// Se trae las muestras que quedaron en la tabla equivocada y la borra.
+///
+/// EL RESTO DE LA CORRECCIÓN DE ARRIBA. Cambiar a qué tabla se escribe arregló el
+/// futuro y dejó el pasado tirado: en esta instalación quedaron 43 muestras
+/// dentro de `metric_samples` —singular— que son mediciones de verdad, de un día
+/// entero, y que ninguna consulta vuelve a mirar. Un módulo cuya razón de ser es
+/// «¿esto es nuevo?» no puede permitirse tirar un día de historial por un
+/// renombrado suyo.
+///
+/// EL MAPEO ES DIRECTO menos en una cosa: la tabla vieja guardaba `mem` y el
+/// detalle por punto de montaje, pero no un porcentaje de disco suelto. Se saca
+/// del propio detalle —`C:\=43.0`— porque está ahí, y ponerlo a cero habría
+/// metido en la serie cuarenta y tres puntos de «disco al 0 %» que son mentira y
+/// que además hundirían cualquier media.
+///
+/// CORRE UNA VEZ Y SE NOTA QUE CORRIÓ: al terminar, la tabla vieja se borra, así
+/// que la segunda vez el `SELECT name FROM sqlite_master` no encuentra nada y
+/// esto no hace ni una consulta. Sin ese borrado haría falta una marca aparte
+/// para saber si ya se hizo, y la marca sería otra cosa que mantener.
+///
+/// LA DUPLICIDAD SE EVITA CON UN `WHERE NOT EXISTS` y no con un índice único
+/// sobre `(host_id, ts)`. El índice sería más limpio, pero añadirlo ahora es
+/// tocar el esquema de una tabla que lleva meses escribiendo la V1, y podría
+/// fallar sobre filas suyas que no son mías. Esto hace lo mismo y no le cambia
+/// la tabla a nadie.
+fn rescata_las_huerfanas(c: &rusqlite::Connection) -> Result<(), String> {
+    let existe: bool = c
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'metric_samples'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .map(|n| n > 0)
+        .unwrap_or(false);
+    if !existe {
+        return Ok(());
+    }
+    // El porcentaje del disco sale del texto `C:\=43.0`: se corta por el `=` y
+    // se lee lo que va hasta la coma del siguiente punto de montaje, si lo hay.
+    // `CAST` de un texto que no empiece por un número da 0.0 en SQLite, que es
+    // lo mismo que había antes y no es peor.
+    c.execute(
+        "INSERT INTO metrics_samples (host_id, ts, cpu, ram, disk, discos)
+         SELECT v.host_id, v.ts, v.cpu, v.mem,
+                CAST(
+                    CASE WHEN instr(v.discos, '=') > 0
+                         THEN substr(v.discos, instr(v.discos, '=') + 1)
+                         ELSE '0' END
+                AS REAL),
+                v.discos
+         FROM metric_samples v
+         WHERE NOT EXISTS (
+             SELECT 1 FROM metrics_samples n
+             WHERE n.ts = v.ts AND n.host_id = v.host_id
+         )",
+        [],
+    )
+    .map_err(|e| format!("history: rescatar muestras: {e}"))?;
+    c.execute("DROP TABLE metric_samples", [])
+        .map_err(|e| format!("history: borrar la tabla vieja: {e}"))?;
+    Ok(())
 }
 
 /// Los discos, en una línea. `C:\=91.2` separados por tabulador.
