@@ -95,6 +95,8 @@ pub mod models;
 pub mod pricing;
 /// Lo que cuesta Lucy, apuntado en disco en vez de tirado al cerrar.
 pub mod usage;
+/// Por dónde Lucy te dice algo cuando no la estás mirando.
+pub mod notify;
 /// El prompt de sistema, por secciones. Port de la ARQUITECTURA de
 /// `commands/prompt_sections.rs`, no de su texto: allí se describen herramientas
 /// que este shell todavía no tiene.
