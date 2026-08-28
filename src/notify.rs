@@ -19,14 +19,20 @@
 //!
 //! Porque un toast se pierde por motivos que no son culpa de nadie: el Asistente
 //! de concentración está puesto, las notificaciones de la aplicación están
-//! apagadas, la sesión está bloqueada, el equipo estaba suspendido, o el AUMID
-//! todavía no está registrado porque se está corriendo desde `cargo run` y no
-//! desde la instalación. Si el toast fuera el único registro, «Lucy no avisó» y
-//! «Lucy avisó y Windows se lo tragó» serían indistinguibles — y la primera vez
-//! que pasara lo segundo, el operador dejaría de fiarse del vigilante entero.
+//! apagadas, la sesión está bloqueada, o el operador no estaba delante. Si el
+//! toast fuera el único registro, «Lucy no avisó» y «Lucy avisó y no había nadie
+//! mirando» serían indistinguibles — y la primera vez que pasara lo segundo, el
+//! operador dejaría de fiarse del vigilante entero.
 //!
-//! Con la fila puesta, un aviso que no salió en pantalla sigue estando, con su
-//! hora y con el motivo por el que no se vio.
+//! Y HAY UN MOTIVO MEDIDO QUE LO HACE IMPRESCINDIBLE. Un toast lanzado con un
+//! AUMID que no está registrado por un acceso directo del menú de inicio SÍ SE
+//! MUESTRA, pero NO SE ARCHIVA: no deja rastro en el centro de notificaciones de
+//! Windows. O sea que, sin esta tabla, un aviso que el operador no pilla en los
+//! segundos que dura el globo desaparece para siempre — no está ni siquiera
+//! donde uno iría a buscarlo. Comprobado leyendo `wpndatabase.db`: ni una fila,
+//! ni el handler.
+//!
+//! Con la fila puesta, un aviso sigue estando aunque nadie lo viera pasar.
 //!
 //! ── POR QUÉ POWERSHELL Y NO UN CRATE DE WINRT ───────────────────────────────
 //!
@@ -113,8 +119,8 @@ impl Aviso {
 
 /// Cómo acabó el intento de enseñarlo.
 ///
-/// NO HAY UN «ENSEÑADO» Y ES A PROPÓSITO. Windows no dice si un toast se
-/// entregó, y lo he comprobado de las tres maneras que hay:
+/// NO HAY UN «ENSEÑADO» Y ES A PROPÓSITO. Windows no dice si un toast apareció
+/// en pantalla, y lo he comprobado de las tres maneras que hay:
 ///
 /// ```text
 ///   CreateToastNotifier con un AUMID que no existe   NO lanza
@@ -122,14 +128,16 @@ impl Aviso {
 ///   .Show(toast)                                     vuelve sin error
 /// ```
 ///
-/// …y el aviso no llega a ninguna parte. Un `Enseñado` en este enum sería una
-/// afirmación que nadie ha comprobado, y en un canal de avisos esa mentira es
-/// cara: el operador dejaría de mirar el registro creyendo que ya se le avisó.
+/// Las tres dicen lo mismo pase lo que pase, así que ninguna sirve para
+/// distinguir un aviso que salió de uno que no. Un `Enseñado` en este enum sería
+/// una afirmación que nadie ha comprobado, y en un canal de avisos esa mentira
+/// es cara: el operador dejaría de mirar el registro creyendo que ya se le
+/// avisó.
 ///
-/// Lo único que se puede afirmar es que la llamada se hizo. Para saber si de
-/// verdad llega, `diagnostico` mira el centro de notificaciones de Windows —que
-/// es la única fuente que no miente— y esa comprobación es demasiado cara para
-/// hacerla en cada aviso.
+/// Lo único que se puede afirmar es que la llamada se hizo, y eso es lo que dice
+/// `Intentado`. Si además el aviso QUEDA en el centro de notificaciones lo
+/// contesta `diagnostico`, que es otra pregunta —ver su cabecera— y demasiado
+/// cara para hacerla en cada aviso.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Entrega {
     /// El sistema aceptó la llamada sin quejarse. NO garantiza que se viera.
@@ -454,12 +462,37 @@ fn enseña(_a: &Aviso) -> Entrega {
 
 // ── ¿De verdad llega? ───────────────────────────────────────────────────────
 
-/// Lo que se pudo averiguar sobre si el canal entrega.
+/// Lo que se pudo averiguar sobre el canal.
+///
+/// DOS COSAS DISTINTAS QUE YO CONFUNDÍ, y conviene que quede escrito porque el
+/// error costó una conclusión entera:
+///
+/// ```text
+///   SE MUESTRA     el globo aparece en pantalla unos segundos
+///   SE ARCHIVA     además queda en el centro de notificaciones, para mirarlo luego
+/// ```
+///
+/// Son independientes. Un toast lanzado con un AUMID que no está registrado por
+/// un acceso directo del menú de inicio SÍ SE MUESTRA —comprobado por el
+/// operador, que lo vio— y NO se archiva: no deja fila en `wpndatabase.db` ni
+/// crea su handler. Yo medí lo segundo y lo reporté como lo primero, y este
+/// módulo llegó a afirmar que Windows no entregaba. Entregaba.
+///
+/// Lo único verificable desde aquí es el archivado. Que el globo aparezca solo
+/// lo puede confirmar quien está delante de la pantalla, y por eso el
+/// diagnóstico completo termina en una pregunta al operador y no en un booleano.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Diagnostico {
-    /// La única respuesta que vale: el aviso de prueba apareció en el centro de
-    /// notificaciones de Windows.
-    pub entrega: bool,
+    /// Se pudo lanzar la llamada sin que el sistema se quejara.
+    pub se_lanzo: bool,
+    /// El aviso quedó GUARDADO en el centro de notificaciones. VERIFICADO
+    /// leyendo la base de Windows.
+    ///
+    /// `false` NO significa que no se viera: significa que se pierde en cuanto
+    /// se va de pantalla, y que el operador no lo va a encontrar después
+    /// buscándolo ahí. Es justo lo que hace que el registro de `avisos` de este
+    /// módulo sea imprescindible y no un lujo.
+    pub queda_en_el_centro: bool,
     /// Qué se vio, en una línea que se pueda enseñar.
     pub detalle: String,
 }
@@ -490,30 +523,54 @@ pub fn diagnostico() -> Diagnostico {
     let a = Aviso::nuevo(MARCA, "Si ves esto, los avisos de Lucy llegan a la pantalla.")
         .con_clave("diagnostico");
     if let Entrega::NoSePudo(e) = enseña(&a) {
-        return Diagnostico { entrega: false, detalle: format!("no se pudo lanzar: {e}") };
+        return Diagnostico {
+            se_lanzo: false,
+            queda_en_el_centro: false,
+            detalle: format!("no se pudo ni lanzar: {e}"),
+        };
     }
-    // El sistema escribe la fila de forma asíncrona. Sin esta espera, un canal
-    // que SÍ funciona se diagnosticaría como roto la mitad de las veces.
+    // El sistema escribe la fila de forma asíncrona. Sin esta espera, un aviso
+    // que SÍ se archiva se diagnosticaría como perdido la mitad de las veces.
     std::thread::sleep(std::time::Duration::from_millis(2_500));
-    match busca_en_el_centro(MARCA) {
-        Ok(true) => Diagnostico {
-            entrega: true,
-            detalle: "el aviso de prueba apareció en el centro de notificaciones".into(),
-        },
-        Ok(false) => Diagnostico {
-            entrega: false,
-            detalle: "Windows aceptó la llamada sin quejarse y el aviso no llegó al centro de \
-                      notificaciones. Es lo que pasa cuando el AUMID no está registrado por un \
-                      acceso directo del menú de inicio que lo declare."
-                .into(),
-        },
-        Err(e) => Diagnostico { entrega: false, detalle: format!("no se pudo comprobar: {e}") },
+    let (queda, nota) = match busca_en_el_centro(MARCA) {
+        Ok(true) => (
+            true,
+            "y queda archivado en el centro de notificaciones, así que se puede volver a mirar."
+                .to_string(),
+        ),
+        Ok(false) => (
+            false,
+            "PERO NO QUEDA ARCHIVADO: se pierde en cuanto se va de pantalla, y no lo vas a \
+             encontrar después en el centro de notificaciones. Es lo que pasa mientras el AUMID \
+             no lo registre un acceso directo del menú de inicio. El registro de avisos de Lucy \
+             sí lo conserva."
+                .to_string(),
+        ),
+        Err(e) => (false, format!("y no se pudo comprobar si queda archivado: {e}")),
+    };
+    Diagnostico {
+        se_lanzo: true,
+        queda_en_el_centro: queda,
+        // LA PREGUNTA AL FINAL NO ES CORTESÍA. Que el globo aparezca en pantalla
+        // no se puede comprobar desde aquí por ninguna vía —lo intenté por tres—
+        // y el único observador es quien está delante. Un diagnóstico que
+        // afirmara «entrega: false» sin haberlo mirado sería exactamente el
+        // error que este texto documenta.
+        detalle: format!(
+            "Se lanzó el aviso de prueba {nota}\n\
+             ¿Lo has visto aparecer? Eso es lo único que confirma que se muestra: Windows no lo \
+             dice por ninguna vía."
+        ),
     }
 }
 
 #[cfg(not(windows))]
 pub fn diagnostico() -> Diagnostico {
-    Diagnostico { entrega: false, detalle: "este sistema no tiene notificaciones de Windows".into() }
+    Diagnostico {
+        se_lanzo: false,
+        queda_en_el_centro: false,
+        detalle: "este sistema no tiene notificaciones de Windows".into(),
+    }
 }
 
 /// Busca el texto en la base de notificaciones de Windows.
