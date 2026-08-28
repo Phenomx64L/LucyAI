@@ -4105,6 +4105,12 @@ struct App {
     /// un equipo caído son información útil, y dejar la lista vacía sin decir
     /// nada hace que el operador crea que el log está limpio.
     lv_error: String,
+    /// El resumen de supervisión y aceptación de los últimos 30 días. `None`
+    /// hasta la primera carga de la auditoría.
+    ///
+    /// Se refresca con las filas y no en cada fotograma: es una consulta de
+    /// agregación y la cabecera se repinta sesenta veces por segundo.
+    lv_resumen: Option<lucy_core::audit::Resumen>,
     lv_filter: Option<lucy_core::logs::Level>,
     lv_query: String,
     lv_paused: bool,
@@ -4727,6 +4733,7 @@ impl App {
             lv_path: String::new(),
             lv_rows: Vec::new(),
             lv_error: String::new(),
+            lv_resumen: None,
             // Todos, no «solo errores». Un visor que arranca filtrado enseña una
             // lista corta que parece la lista entera, y el operador concluye que
             // no pasó nada más.
@@ -10817,12 +10824,57 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
 
             match self.lv_mode {
                 LvMode::Auditoria => {
-                    ui.add(egui::Label::new(
-                        egui::RichText::new(i18n::tr("audit trail"))
-                            .monospace()
-                            .size(theme::FS_FOOTNOTE)
-                            .color(theme::txt3()),
-                    ));
+                    // LAS DOS PREGUNTAS QUE LA LISTA NO CONTESTA. Aquí ponía
+                    // «audit trail» —el nombre de la tabla, que el operador ya
+                    // sabe— en el único sitio de la aplicación donde caben las
+                    // dos cifras que hacen falta:
+                    //
+                    //   supervisión  de lo que CORRIÓ, qué fracción miró alguien
+                    //   aceptación   de lo que Lucy PROPUSO, cuánto se ejecutó
+                    //
+                    // La primera es la pregunta de auditoría de verdad y con el
+                    // automático encendido es la única forma de notar que está
+                    // haciendo cosas que nadie habría dejado pasar. La segunda
+                    // es la medida más barata de si lo que Lucy sugiere sirve.
+                    //
+                    // Los orígenes se separaron ayer y hasta ahora no los
+                    // agregaba nadie: escribir la señal y no leerla es el mismo
+                    // fallo que se ha ido cerrando por toda la casa, y este me
+                    // lo hice yo al añadir las fuentes.
+                    if let Some(r) = &self.lv_resumen {
+                        let mut partes: Vec<String> = Vec::new();
+                        if let Some(s) = r.supervision() {
+                            partes.push(i18n::trf(
+                                "{pct}% supervisado",
+                                &[("pct", &format!("{:.0}", s * 100.0))],
+                            ));
+                        }
+                        if let Some(a) = r.aceptacion() {
+                            partes.push(i18n::trf(
+                                "{pct}% de lo propuesto se ejecutó",
+                                &[("pct", &format!("{:.0}", a * 100.0))],
+                            ));
+                        }
+                        let texto = if partes.is_empty() {
+                            i18n::tr("sin actividad en 30 días").to_string()
+                        } else {
+                            partes.join(" · ")
+                        };
+                        ui.add(egui::Label::new(
+                            egui::RichText::new(texto)
+                                .size(theme::FS_FOOTNOTE)
+                                .color(theme::txt3()),
+                        ))
+                        .on_hover_text(i18n::trf(
+                            "Últimos 30 días: {apr} comandos los aprobó una persona, {solos} \
+                             los lanzó el automático, {desc} se propusieron y no se ejecutaron.",
+                            &[
+                                ("apr", &r.aprobados.to_string()),
+                                ("solos", &r.solos.to_string()),
+                                ("desc", &r.descartados.to_string()),
+                            ],
+                        ));
+                    }
                 }
                 LvMode::Archivo => {
                     if self.lv_host_picker(ui) {
@@ -12846,6 +12898,9 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
             self.lv_error = e;
             return;
         }
+        // El resumen viaja con las filas: son la misma carga y separarlos dejaría
+        // una ventana en la que la cabecera habla de una lista que ya cambió.
+        self.lv_resumen = lucy_core::audit::resumen(30).ok();
         match lucy_core::audit::query(&lucy_core::audit::Filter::default()) {
             Ok(filas) => {
                 self.lv_rows = filas

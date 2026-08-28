@@ -3306,6 +3306,13 @@ pub const FRASES: &[Frase] = &[
         "suit Windows — regarde le réglage des APPLICATIONS, pas celui de la barre des tâches : beaucoup de gens les ont inversés",
         "folgt Windows — sieh in der Einstellung für APPS nach, nicht in der für die Taskleiste: bei vielen stehen die überkreuz",
     ),
+    f!(
+        "sin actividad en 30 días",
+        "no activity in 30 days",
+        "sem atividade em 30 dias",
+        "aucune activité en 30 jours",
+        "keine Aktivität in 30 Tagen",
+    ),
     f!("sin clave", "no key", "sem chave", "sans clé", "ohne Schlüssel"),
     f!(
         "sin dirección aún",
@@ -3593,6 +3600,20 @@ pub const FRASES: &[Frase] = &[
         "{paso} — nicht zu dieser Shell migriert",
     ),
     f!(
+        "{pct}% de lo propuesto se ejecutó",
+        "{pct}% of what was proposed ran",
+        "{pct}% do proposto executou-se",
+        "{pct}% de ce qui a été proposé a été exécuté",
+        "{pct}% des Vorgeschlagenen lief",
+    ),
+    f!(
+        "{pct}% supervisado",
+        "{pct}% supervised",
+        "{pct}% supervisionado",
+        "{pct}% supervisé",
+        "{pct}% überwacht",
+    ),
+    f!(
         "{pct}% · {usado} de {total} GB",
         "{pct}% · {usado} of {total} GB",
         "{pct}% · {usado} de {total} GB",
@@ -3704,6 +3725,13 @@ pub const FRASES: &[Frase] = &[
         "Zuletzt {cuando} · {plazo}",
     ),
     f!("Última vuelta", "Last lap", "Última volta", "Dernier tour", "Letzte Runde"),
+    f!(
+        "Últimos 30 días: {apr} comandos los aprobó una persona, {solos} los lanzó el automático, {desc} se propusieron y no se ejecutaron.",
+        "Last 30 days: {apr} commands were approved by a person, {solos} were launched by auto mode, {desc} were proposed and never ran.",
+        "Últimos 30 dias: {apr} comandos foram aprovados por uma pessoa, {solos} lançou-os o automático, {desc} foram propostos e não se executaram.",
+        "30 derniers jours : {apr} commandes ont été approuvées par une personne, {solos} lancées par le mode automatique, {desc} proposées et jamais exécutées.",
+        "Letzte 30 Tage: {apr} Befehle hat eine Person freigegeben, {solos} hat der Automatikmodus gestartet, {desc} wurden vorgeschlagen und liefen nie.",
+    ),
     f!(
         "… y {sobran} líneas más",
         "… and {sobran} more lines",
