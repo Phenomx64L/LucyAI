@@ -61,12 +61,36 @@
               Source="$(var.ExeRuta)"
               Name="lucy-egui.exe"
               KeyPath="yes">
+          <!--
+            EL DEL MENÚ DE INICIO LLEVA EL AppUserModelId, y por eso es el único
+            que deja de ser anunciado.
+
+            Windows atribuye un aviso de escritorio al AUMID que lo manda, y solo
+            lo reconoce como propio de una aplicación si hay un acceso directo
+            del menú de inicio que lo declare. Sin esta propiedad la
+            notificación sigue saliendo —está medido— pero su identidad depende
+            de lo que Windows deduzca, y eso no es algo sobre lo que construir
+            una función de vigilancia.
+
+            La cadena tiene que ser LETRA POR LETRA la de `lucy_core::notify::AUMID`.
+            Si las dos dejan de coincidir no hay ningún error que lo explique: el
+            aviso simplemente sale con otro nombre. Hay un test que las compara.
+
+            `Advertise="no"` es obligado: MSI no admite propiedades en un acceso
+            directo anunciado. Lo que se pierde es la auto-reparación al
+            lanzarlo desde el menú —Windows Installer deja de comprobar el
+            componente en cada arranque— y a cambio se gana una identidad
+            estable para los avisos. Para un ejecutable de un solo fichero, ese
+            cambio es barato. El del escritorio se queda anunciado.
+          -->
           <Shortcut Id="AccesoMenu"
                     Directory="MenuLucy"
                     Name="!(loc.NombreProducto)"
                     Icon="LucyIcon"
                     WorkingDirectory="INSTALLFOLDER"
-                    Advertise="yes" />
+                    Advertise="no">
+            <ShortcutProperty Key="System.AppUserModel.ID" Value="IvanEduardoLuna.Lucy" />
+          </Shortcut>
           <Shortcut Id="AccesoEscritorio"
                     Directory="DesktopFolder"
                     Name="!(loc.NombreProducto)"

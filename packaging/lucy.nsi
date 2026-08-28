@@ -122,6 +122,20 @@ Section "Lucy" SecPrincipal
     WriteRegStr HKLM "Software\Lucy" "InstallDir" "$INSTDIR"
     WriteRegStr HKLM "Software\Lucy" "Version"    "${VERSION}"
 
+    ; ESTE ACCESO DIRECTO NO LLEVA EL AppUserModelId Y EL DEL MSI SÍ.
+    ;
+    ; `CreateShortcut` de NSIS no sabe escribir propiedades en un .lnk: para eso
+    ; hace falta IPropertyStore por COM, o sea un plugin externo. Se deja dicho
+    ; en vez de fingir que están al mismo nivel.
+    ;
+    ; QUÉ SE PIERDE, exactamente: los avisos de Lucy SIGUEN SALIENDO —está
+    ; medido, el globo aparece y hasta queda archivado en el centro de
+    ; notificaciones— pero su identidad depende de lo que Windows deduzca del
+    ; AUMID en vez de estar declarada. En el MSI está declarada.
+    ;
+    ; Si esta rama pasa a ser la principal, esto hay que resolverlo: el plugin
+    ; WinShell tiene `SHSetProperty`, y el AUMID que tiene que escribir es el de
+    ; `lucy_core::notify::AUMID`.
     CreateDirectory "$SMPROGRAMS\Lucy"
     CreateShortcut  "$SMPROGRAMS\Lucy\Lucy.lnk" "$INSTDIR\${EXE}"
     CreateShortcut  "$DESKTOP\Lucy.lnk"         "$INSTDIR\${EXE}"

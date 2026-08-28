@@ -21096,3 +21096,58 @@ fn cargar_skills() -> Vec<lucy_core::skills::Skill> {
     out.sort_by(|a, b| a.name.cmp(&b.name));
     out
 }
+
+#[cfg(test)]
+mod empaquetado {
+    /// Que el instalador siga declarando el mismo AUMID que el código.
+    ///
+    /// SI LAS DOS CADENAS DERIVAN NO HAY NINGÚN ERROR QUE LO EXPLIQUE. Windows
+    /// atribuye el aviso al AUMID que se le pasa y reconoce ese AUMID como
+    /// propio de una aplicación por el acceso directo del menú de inicio que lo
+    /// declara. Con las dos distintas, la notificación sale igual —eso está
+    /// medido— pero con la identidad equivocada, y nadie lo nota hasta que
+    /// alguien se fija en el nombre del remitente semanas después.
+    ///
+    /// Es la misma clase de guardia que los cuatro que miran a la V1: leen un
+    /// fichero de otro sitio del árbol para que dos mitades no se separen en
+    /// silencio.
+    #[test]
+    fn el_msi_declara_el_aumid_que_usa_el_codigo() {
+        let wxs = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("packaging")
+            .join("lucy.wxs");
+        // Si el empaquetado no está al lado, esto no vigila nada — y lo dice en
+        // vez de pasar en verde, que es el fallo que ya costó cinco tests
+        // saliendo de CI al cruzar una frontera de crate.
+        let Ok(texto) = std::fs::read_to_string(&wxs) else {
+            eprintln!("AVISO: no encuentro {}; este guardia no ha comprobado nada", wxs.display());
+            return;
+        };
+        assert!(
+            texto.contains("System.AppUserModel.ID"),
+            "el acceso directo del menú de inicio ya no declara el AUMID: los avisos saldrán con \
+             la identidad que Windows deduzca"
+        );
+        assert!(
+            texto.contains(lucy_core::notify::AUMID),
+            "el MSI declara un AUMID distinto del de `notify::AUMID` ({}). Con los dos distintos \
+             el aviso sale igual, pero con otro nombre, y nada falla.",
+            lucy_core::notify::AUMID
+        );
+        // La propiedad NO cabe en un acceso directo anunciado: si alguien
+        // devuelve `Advertise="yes"` al del menú, WiX falla al compilar o —peor—
+        // la propiedad se ignora. Se comprueba aquí para que el aviso llegue
+        // antes de empaquetar.
+        let menu = texto
+            .split("Id=\"AccesoMenu\"")
+            .nth(1)
+            .and_then(|t| t.split("</Shortcut>").next())
+            .unwrap_or("");
+        assert!(
+            menu.contains("Advertise=\"no\""),
+            "el acceso directo del menú volvió a ser anunciado y MSI no admite propiedades en uno \
+             anunciado: el AUMID se perdería sin decir nada"
+        );
+    }
+}
