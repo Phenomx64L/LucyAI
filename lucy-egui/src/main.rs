@@ -4412,6 +4412,10 @@ struct App {
     /// Cuándo corrió la última, en epoch. En disco no: si Lucy se cierra y se
     /// abre, que el vigilante mire enseguida es lo correcto.
     vigilante_ultima: i64,
+    /// La ronda por los equipos remotos, que va a su propio ritmo: cada sonda es
+    /// una sesión WinRM contra la red.
+    vigilante_remoto_rx: Option<std::sync::mpsc::Receiver<Vec<lucy_core::watch::Decision>>>,
+    vigilante_remoto_ultima: i64,
     /// Historial de las líneas de tendencia de CPU y RAM.
     cpu_hist: Vec<f32>,
     ram_hist: Vec<f32>,
@@ -4455,6 +4459,13 @@ const K_WS_WIDTH: &str = "lucy.ws_width";
 const K_PRIVACY: &str = "lucy.privacy";
 /// Tope de gasto de la sesión, en dólares. `0` = sin límite.
 const K_SPEND: &str = "lucy.spend_limit";
+/// Si el modelo local reescribe los avisos del vigilante.
+///
+/// SE PERSISTE AUNQUE EL ESTADO VIVA EN EL NÚCLEO. `redacta::ACTIVA` es un
+/// atómico de proceso —lo consulta un hilo de fondo, no la interfaz— y sin esta
+/// clave el interruptor volvería a apagarse en cada arranque. Un ajuste que no
+/// se recuerda no es un ajuste: es un botón que engaña.
+const K_REDACTA: &str = "lucy.redacta_avisos";
 /// Cuánto se extiende Lucy al contestar.
 /// El idioma de la interfaz.
 ///
@@ -4572,6 +4583,17 @@ fn idioma_del_instalador() -> Option<i18n::Lang> {
 
 impl App {
     fn new(storage: Option<&dyn eframe::Storage>) -> Self {
+        // LA REDACCIÓN DE AVISOS SE RESTAURA CON UN EFECTO Y NO CON UN CAMPO,
+        // porque su estado vive en `lucy_core::redacta` y no aquí: lo consulta
+        // el hilo del vigilante, que no tiene acceso a esta estructura. Sin esta
+        // línea el interruptor de Configuración volvería a apagarse en cada
+        // arranque — un botón que engaña.
+        lucy_core::redacta::pon_activa(
+            storage
+                .and_then(|s| s.get_string(K_REDACTA))
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(false),
+        );
         // EL IDIOMA, LO PRIMERO DE TODO. Va antes que cualquier otra cosa porque
         // el resto del constructor y el primer frame ya piden textos: puesto más
         // abajo, la primera pantalla saldría en español y cambiaría sola al
@@ -4859,6 +4881,8 @@ impl App {
             svc_rx: None,
             vigilante_rx: None,
             vigilante_ultima: 0,
+            vigilante_remoto_rx: None,
+            vigilante_remoto_ultima: 0,
             cpu_hist: Vec::new(),
             ram_hist: Vec::new(),
             remote_hosts: lucy_core::hosts::load(),
@@ -5417,6 +5441,7 @@ impl eframe::App for App {
         storage.set_string(K_WS_WIDTH, self.ws_width.to_string());
         storage.set_string(K_PRIVACY, self.privacy.to_string());
         storage.set_string(K_SPEND, self.spend_limit.to_string());
+        storage.set_string(K_REDACTA, lucy_core::redacta::activa().to_string());
         storage.set_string(K_LANG, i18n::lang().clave().to_string());
         if let Some(t) = self.chips_ts {
             storage.set_string(K_CHIPS_TS, t.to_string());
@@ -13190,6 +13215,27 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                 });
                 self.vigilante_rx = Some(rx);
             }
+
+            // LA RONDA REMOTA VA APARTE Y MÁS DESPACIO. Cada equipo es una
+            // sesión WinRM contra la red: al ritmo del vigilante local, veinte
+            // servidores serían veinte sesiones por minuto y el vigilante sería
+            // carga para lo que vigila.
+            //
+            // Y en su propio hilo, distinto del local: una sonda que se cuelga
+            // en un equipo apagado tarda su plazo entero, y bloquear con eso la
+            // vigilancia de ESTA máquina sería dejar de mirar lo que sí se ve.
+            if self.vigilante_remoto_rx.is_none()
+                && !self.remote_hosts.is_empty()
+                && ahora - self.vigilante_remoto_ultima >= lucy_core::watch::REMOTO_CADA_SECS
+            {
+                self.vigilante_remoto_ultima = ahora;
+                let hosts = self.remote_hosts.clone();
+                let (tx, rx) = std::sync::mpsc::channel();
+                std::thread::spawn(move || {
+                    let _ = tx.send(lucy_core::watch::pasada_remota(&hosts, ahora));
+                });
+                self.vigilante_remoto_rx = Some(rx);
+            }
         }
 
         // El resumen del historial, cada cinco minutos. Lee hasta cuarenta y
@@ -13286,16 +13332,23 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
     /// En una línea plegada y solo cuando hubo algo: seis «nada que decir» por
     /// minuto llenarían el carril y taparían lo que se está mirando.
     fn pump_vigilante(&mut self) {
-        let Some(rx) = &self.vigilante_rx else { return };
+        self.recoge_vigilante(false);
+        self.recoge_vigilante(true);
+    }
+
+    /// Recoge una de las dos rondas. `remota` elige cuál.
+    fn recoge_vigilante(&mut self, remota: bool) {
+        let canal = if remota { &self.vigilante_remoto_rx } else { &self.vigilante_rx };
+        let Some(rx) = canal else { return };
         let d = match rx.try_recv() {
             Ok(d) => d,
             Err(std::sync::mpsc::TryRecvError::Empty) => return,
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                self.vigilante_rx = None;
+                if remota { self.vigilante_remoto_rx = None } else { self.vigilante_rx = None }
                 return;
             }
         };
-        self.vigilante_rx = None;
+        if remota { self.vigilante_remoto_rx = None } else { self.vigilante_rx = None }
         let avisados: Vec<&lucy_core::watch::Sintoma> = d
             .iter()
             .filter_map(|x| match x {
@@ -13335,13 +13388,17 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
         let ti = self.tab;
         self.tabs[ti].ws.trace_push(lucy_core::agent::TraceEntry {
             phase: if avisados.is_empty() { "info".into() } else { "obs".into() },
-            label: if avisados.is_empty() {
-                i18n::tr("El vigilante miró y se calló").into()
-            } else {
-                i18n::trf(
+            label: match (remota, avisados.is_empty()) {
+                (false, true) => i18n::tr("El vigilante miró y se calló").into(),
+                (true, true) => i18n::tr("La ronda por los equipos no dio nada").into(),
+                (false, false) => i18n::trf(
                     "El vigilante avisó de {n}",
                     &[("n", &avisados.len().to_string())],
-                )
+                ),
+                (true, false) => i18n::trf(
+                    "La ronda por los equipos avisó de {n}",
+                    &[("n", &avisados.len().to_string())],
+                ),
             },
             detail: detalle,
             ..Default::default()
@@ -13699,6 +13756,59 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                         );
                     },
                 );
+                // ── EL VIGILANTE ────────────────────────────────────────
+                //
+                // Los avisos sin leer van AQUÍ y no en un icono aparte, porque
+                // aquí es donde el operador viene a decidir cuánto habla Lucy.
+                // Ver `lucy_core::notify`: el globo de Windows se pierde en
+                // cuanto se va de pantalla, así que este recuento es la única
+                // memoria fiable de lo que se dijo.
+                let sin_ver = lucy_core::notify::cuantos_sin_ver();
+                fila(
+                    ui,
+                    "Avisos sin leer",
+                    Some(if sin_ver == 0 {
+                        i18n::tr("nada pendiente").to_string()
+                    } else {
+                        i18n::tr("el globo de Windows se va; esto no").to_string()
+                    })
+                    .as_deref(),
+                    false,
+                    |ui| {
+                        ui.label(
+                            egui::RichText::new(sin_ver.to_string())
+                                .strong()
+                                .color(if sin_ver > 0 { theme::amber() } else { theme::txt3() }),
+                        );
+                        if ui
+                            .add_enabled(sin_ver > 0, egui::Button::new(i18n::tr("Marcar leídos")))
+                            .clicked()
+                        {
+                            let _ = lucy_core::notify::marca_visto(None);
+                        }
+                    },
+                );
+
+                // EL INTERRUPTOR DE LA REDACCIÓN, con lo medido al lado y no una
+                // etiqueta neutra. Un ajuste que no dice qué hace se deja como
+                // viene o se enciende a ciegas; éste tiene una respuesta medida
+                // —hoy la plantilla gana— y esa respuesta cambia el día que el
+                // vigilante tenga cosas más difíciles que decir.
+                let mut redactar = lucy_core::redacta::activa();
+                fila(
+                    ui,
+                    "Que un modelo local reescriba los avisos",
+                    Some(
+                        "las cifras se comprueban una a una contra la medición; hoy con un modelo                          pequeño la plantilla suele salir mejor",
+                    ),
+                    false,
+                    |ui| {
+                        if ui.checkbox(&mut redactar, "").changed() {
+                            lucy_core::redacta::pon_activa(redactar);
+                        }
+                    },
+                );
+
                 // LO QUE COSTÓ DE VERDAD, Y NO SOLO ESTA SESIÓN.
                 //
                 // El tope de arriba es POR SESIÓN y se reinicia en cada

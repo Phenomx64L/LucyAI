@@ -523,6 +523,7 @@ pub const FRASES: &[Frase] = &[
     ),
     f!("Aviso", "Warning", "Aviso", "Avertissement", "Warnung"),
     f!("Avisos", "Warnings", "Avisos", "Avertissements", "Warnungen"),
+    f!("Avisos sin leer", "Unread alerts", "Avisos por ler", "Alertes non lues", "Ungelesene Hinweise"),
     f!(
         "Añadir el primero",
         "Add the first one",
@@ -1614,6 +1615,20 @@ pub const FRASES: &[Frase] = &[
         "Die Prüfung brach ab, ohne etwas zurückzugeben.",
     ),
     f!(
+        "La ronda por los equipos avisó de {n}",
+        "The round of machines raised {n}",
+        "A ronda pelos equipamentos avisou de {n}",
+        "La tournée des machines a signalé {n}",
+        "Die Runde über die Rechner hat {n} gemeldet",
+    ),
+    f!(
+        "La ronda por los equipos no dio nada",
+        "The round of machines found nothing",
+        "A ronda pelos equipamentos não deu nada",
+        "La tournée des machines n'a rien donné",
+        "Die Runde über die Rechner ergab nichts",
+    ),
+    f!(
         "La salida de cada comando aparece aquí en vivo mientras el agente trabaja.",
         "Each command's output appears here live while the agent works.",
         "A saída de cada comando aparece aqui em direto enquanto o agente trabalha.",
@@ -1812,6 +1827,7 @@ pub const FRASES: &[Frase] = &[
         "Baseline: {etiqueta} · {cuando}",
     ),
     f!("Mantenimiento", "Maintenance", "Manutenção", "Maintenance", "Wartung"),
+    f!("Marcar leídos", "Mark as read", "Marcar como lidos", "Marquer comme lus", "Als gelesen markieren"),
     f!(
         "Max (problemas frontera)",
         "Max (frontier problems)",
@@ -2371,6 +2387,13 @@ pub const FRASES: &[Frase] = &[
         "Que a Lucy se esqueça",
         "Que Lucy l'oublie",
         "Lucy soll es vergessen",
+    ),
+    f!(
+        "Que un modelo local reescriba los avisos",
+        "Let a local model rewrite the alerts",
+        "Que um modelo local reescreva os avisos",
+        "Qu'un modèle local réécrive les alertes",
+        "Ein lokales Modell die Hinweise umschreiben lassen",
     ),
     f!("Quitar", "Remove", "Remover", "Retirer", "Entfernen"),
     f!("Quitar en lote", "Bulk remove", "Remover em lote", "Retirer en lot", "Mehrere entfernen"),
@@ -3109,6 +3132,13 @@ pub const FRASES: &[Frase] = &[
         "läuft… {s}s",
     ),
     f!(
+        "el globo de Windows se va; esto no",
+        "the Windows toast goes away; this doesn't",
+        "o balão do Windows desaparece; isto não",
+        "la bulle Windows disparaît ; pas ceci",
+        "die Windows-Blase verschwindet; das hier nicht",
+    ),
+    f!(
         "en producción avisa antes de reiniciar un servicio",
         "in production, warn before restarting a service",
         "em produção avisa antes de reiniciar um serviço",
@@ -3224,6 +3254,13 @@ pub const FRASES: &[Frase] = &[
         "inclus dans le prompt",
         "im Prompt enthalten",
     ),
+    f!(
+        "las cifras se comprueban una a una contra la medición; hoy con un modelo pequeño la plantilla suele salir mejor",
+        "every figure is checked against the measurement; today, with a small model, the template usually reads better",
+        "os números são verificados um a um contra a medição; hoje, com um modelo pequeno, a plantilha costuma sair melhor",
+        "chaque chiffre est vérifié face à la mesure ; aujourd'hui, avec un petit modèle, le gabarit se lit mieux",
+        "jede Zahl wird gegen die Messung geprüft; heute liest sich mit einem kleinen Modell die Vorlage besser",
+    ),
     f!("leyendo… {s}s", "reading… {s}s", "a ler… {s}s", "lecture… {s}s", "lese… {s}s"),
     // ── Servicios detenidos, ya accionables ─────────────────────────────────
     f!(
@@ -3278,6 +3315,7 @@ pub const FRASES: &[Frase] = &[
     f!("media", "medium", "média", "moyenne", "mittel"),
     f!("memoria", "memory", "memória", "mémoire", "Gedächtnis"),
     f!("modo {p}", "{p} mode", "modo {p}", "mode {p}", "Modus {p}"),
+    f!("nada pendiente", "nothing pending", "nada pendente", "rien en attente", "nichts offen"),
     f!("no responde", "not responding", "não responde", "ne répond pas", "antwortet nicht"),
     f!("no vale", "not valid", "não serve", "invalide", "ungültig"),
     f!("nombre", "name", "nome", "nom", "Name"),
