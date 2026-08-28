@@ -276,7 +276,14 @@ pub fn ensure_schema() -> Result<(), String> {
              CREATE INDEX IF NOT EXISTS idx_agent_insights_updated
                  ON agent_insights(updated_at DESC);",
         )
-        .map_err(|e| format!("insights: esquema: {e}"))
+        .map_err(|e| format!("insights: esquema: {e}"))?;
+        // LA LÁPIDA. Ver `descarta`: 0 = vivo, cualquier otra cosa es la fecha en
+        // que el operador dijo que ese patrón era falso.
+        let _ = c.execute(
+            "ALTER TABLE agent_insights ADD COLUMN rejected_at INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
+        Ok(())
     })
 }
 
@@ -438,6 +445,12 @@ pub fn guarda(c: &Crudo, fuentes: usize) -> Result<bool, String> {
             Err(rusqlite::Error::SqliteFailure(_, ref m))
                 if m.as_deref().unwrap_or("").contains("UNIQUE") =>
             {
+                // `rejected_at = 0` EN EL WHERE, y es media razón de ser de la
+                // lápida. Sin esa condición, un patrón que el operador marcó
+                // como falso se REFORZARÍA cada noche que el modelo lo volviera
+                // a destilar: subiendo de confianza, callado, hasta cruzar el
+                // listón del prompt y volver a dirigir cada turno. El rechazo
+                // tiene que ganar a la repetición, porque lo dijo una persona.
                 conn.execute(
                     "UPDATE agent_insights SET
                          confidence = confidence + ?4 * (1.0 - confidence),
@@ -445,7 +458,7 @@ pub fn guarda(c: &Crudo, fuentes: usize) -> Result<bool, String> {
                          source_count = source_count + ?2,
                          last_reinforced_at = ?3,
                          updated_at = ?3
-                     WHERE fingerprint = ?1",
+                     WHERE fingerprint = ?1 AND rejected_at = 0",
                     rusqlite::params![fp, fuentes as i64, now, REFUERZO],
                 )
                 .map_err(|e| format!("insights: refuerzo: {e}"))?;
@@ -523,6 +536,7 @@ pub fn list(limite: usize) -> Result<Vec<Insight>, String> {
                 "SELECT id, content, fingerprint, confidence, reinforcements, concepts,
                         source_count, created_at, updated_at
                  FROM agent_insights
+                 WHERE rejected_at = 0
                  ORDER BY confidence DESC, reinforcements DESC LIMIT ?1",
             )
             .map_err(|e| format!("insights: listar: {e}"))?;
@@ -664,12 +678,58 @@ pub fn seleccion() -> Vec<(i64, String)> {
     v
 }
 
-pub fn delete(id: i64) -> Result<(), String> {
+/// «Este patrón es falso»: se retira y NO puede volver.
+///
+/// ANTES ESTO BORRABA LA FILA, Y NO SERVÍA. `guarda` da de alta por INSERT y
+/// resuelve el choque de huella reforzando; con la fila borrada no hay choque,
+/// así que la siguiente pasada de mantenimiento destilaba el mismo grupo de
+/// memorias, escribía la misma frase, y el patrón que el operador acababa de
+/// rechazar volvía a entrar a 0,50 como si fuera nuevo. Una vez por noche,
+/// indefinidamente.
+///
+/// Mientras los insights no llegaban al prompt eso era un incordio. Desde que
+/// llegan, es un patrón equivocado dirigiendo cada turno, que el operador ya
+/// había señalado y que no tenía forma de quitar.
+///
+/// LA HUELLA SE QUEDA, que es todo el truco: la fila sigue ocupando su hueco en
+/// el UNIQUE, así que la próxima destilación choca contra ella — y el `WHERE
+/// rejected_at = 0` del refuerzo hace que ese choque no haga nada. El patrón
+/// queda absorbido en silencio.
+///
+/// LA ÚNICA FORMA DE BAJAR LA CONFIANZA DE UN INSIGHT, dicho de otra manera. El
+/// refuerzo solo sube (`c += 0,10 · (1 − c)`, asintótico y sin vuelta atrás), de
+/// modo que sin esto la opinión de Lucy sobre sus propias conclusiones no podía
+/// ir más que en una dirección. Y no se implementa como una bajada de confianza
+/// sino como un corte, a propósito: «esto es falso» no es «esto es un poco menos
+/// probable», y un patrón que el operador desmintió no debe poder volver a subir
+/// hasta el listón por acumulación.
+pub fn descarta(id: i64) -> Result<(), String> {
+    ensure_schema()?;
     crate::with_db(|c| {
-        c.execute("DELETE FROM agent_insights WHERE id = ?1", rusqlite::params![id])
-            .map_err(|e| format!("insights: borrar: {e}"))?;
+        c.execute(
+            "UPDATE agent_insights SET rejected_at = ?2, updated_at = ?2 WHERE id = ?1",
+            rusqlite::params![id, ahora()],
+        )
+        .map_err(|e| format!("insights: descartar: {e}"))?;
         Ok(())
     })
+}
+
+/// Cuántos patrones ha desmentido el operador.
+///
+/// No es curiosidad: es la única señal de que la destilación está produciendo
+/// basura. Un contador que sube dice que `MIN_PARECIDO` o `MIN_GRUPO` están mal
+/// calibrados para este corpus, y eso no se ve en ningún otro sitio — las filas
+/// descartadas desaparecen de `list` por definición.
+pub fn descartados() -> usize {
+    crate::with_db(|c| {
+        c.query_row("SELECT COUNT(*) FROM agent_insights WHERE rejected_at != 0", [], |r| {
+            r.get::<_, i64>(0)
+        })
+        .map_err(|e| e.to_string())
+    })
+    .map(|n| n as usize)
+    .unwrap_or(0)
 }
 
 #[cfg(test)]

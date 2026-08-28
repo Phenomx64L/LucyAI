@@ -40,6 +40,23 @@ fn mete(titulo: &str, contenido: &str, tags: &str, sesion: &str, edad_dias: i64)
     .expect("insert");
 }
 
+/// Lee la fila EN CRUDO, saltándose `list`.
+///
+/// Hace falta justamente porque `list` esconde las descartadas: para comprobar
+/// que a una lápida no le sube la confianza por debajo hay que mirarla por
+/// dentro.
+fn confianza_y_refuerzos(id: i64) -> (f64, i64) {
+    lucy_core::with_db(|c| {
+        c.query_row(
+            "SELECT confidence, reinforcements FROM agent_insights WHERE id = ?1",
+            [id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(|e| e.to_string())
+    })
+    .expect("leer la fila descartada")
+}
+
 fn supersede(titulo: &str) {
     lucy_core::with_db(|c| {
         c.execute(
@@ -137,11 +154,55 @@ fn insights_y_el_reloj_del_mantenimiento() {
         "un patrón con una contraseña dentro: {l:?}"
     );
 
-    // ── 5. Borrar uno deja los demás ────────────────────────────────────────
-    let id = insights::list(10).expect("listar")[0].id;
+    // ── 5. Descartar uno lo retira y deja los demás ─────────────────────────
+    let primero = insights::list(10).expect("listar")[0].clone();
+    let id = primero.id;
+    let contenido_descartado = primero.contenido.clone();
     let antes = insights::list(50).expect("listar").len();
-    insights::delete(id).expect("borrar");
+    let (conf_antes, refuerzos_antes) = confianza_y_refuerzos(id);
+    insights::descarta(id).expect("descartar");
     assert_eq!(insights::list(50).expect("listar").len(), antes - 1);
+    assert_eq!(insights::descartados(), 1, "no se contó el patrón desmentido");
+
+    // ── 5b. Y NO PUEDE VOLVER ───────────────────────────────────────────────
+    //
+    // Es el fallo entero que la lápida arregla. `guarda` da de alta por INSERT
+    // y resuelve el choque de huella reforzando; con la fila BORRADA no había
+    // choque, así que la siguiente pasada destilaba el mismo grupo, escribía la
+    // misma frase, y el patrón que el operador acababa de rechazar volvía a
+    // entrar a 0,50 como si fuera nuevo. Una vez por noche, indefinidamente.
+    assert!(
+        insights::list(50).expect("listar").iter().all(|i| i.id != id),
+        "el descartado sigue en la lista"
+    );
+    // Se vuelve a destilar exactamente lo mismo, que es lo que hace el modelo
+    // local cuando el corpus no ha cambiado.
+    let repetido = insights::Crudo {
+        contenido: contenido_descartado.clone(),
+        conceptos: vec![],
+    };
+    insights::guarda(&repetido, 4).expect("guarda");
+    assert!(
+        insights::list(50).expect("listar").iter().all(|i| i.contenido != contenido_descartado),
+        "un patrón que el operador desmintió volvió a entrar en la lista"
+    );
+    // Y tampoco se ha reforzado por debajo: sin el `rejected_at = 0` del WHERE
+    // subiría de confianza cada noche, callado, hasta cruzar el listón del
+    // prompt y volver a dirigir cada turno.
+    // SE COMPARA CONTRA LO QUE TENÍA, no contra un número escrito a mano: esta
+    // fila ya llevaba refuerzos de las secciones de arriba, y afirmar «tiene que
+    // valer 1» sería probar el estado del test en vez del comportamiento.
+    let (conf, rej) = confianza_y_refuerzos(id);
+    assert_eq!(
+        rej, refuerzos_antes,
+        "se reforzó un patrón desmentido: la repetición ganó a la persona"
+    );
+    assert!(
+        (conf - conf_antes).abs() < 1e-9,
+        "le subió la confianza a un patrón desmentido: {conf_antes} → {conf}. Sin el \
+         `rejected_at = 0` del WHERE subiría cada noche, callado, hasta cruzar el listón del \
+         prompt y volver a dirigir cada turno."
+    );
 
     // ── 6. El reloj sobrevive a cerrar el programa ──────────────────────────
     // ES LA PIEZA ENTERA. La V2 dormía cuarenta y ocho horas en un hilo: en un
