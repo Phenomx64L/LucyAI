@@ -1,4 +1,4 @@
-﻿//! El idioma de la interfaz.
+//! El idioma de la interfaz.
 //!
 //! CINCO IDIOMAS Y NO DOS, que son los que ofrece el instalador de la V1
 //! (`SetupOverlay.svelte`: `t(es, pt, en, fr, de)`). El cockpit de la V2 se
@@ -1480,12 +1480,19 @@ pub const FRASES: &[Frase] = &[
     ),
     f!("Fundir", "Merge", "Fundir", "Fusionner", "Zusammenführen"),
     f!(
+        "Gastado de verdad",
+        "Actually spent",
+        "Gasto real",
+        "Dépensé réellement",
+        "Tatsächlich ausgegeben",
+    ),    f!(
         "Google vía NVIDIA",
         "Google via NVIDIA",
         "Google via NVIDIA",
         "Google via NVIDIA",
         "Google über NVIDIA",
     ),
+
     f!(
         "Grafo de conocimiento (V1)",
         "Knowledge graph (V1)",
@@ -3190,6 +3197,13 @@ pub const FRASES: &[Frase] = &[
         "Fakten, die Lucy sich merkt",
     ),
     f!(
+        "hoy {hoy} · 30 días {mes}",
+        "today {hoy} · 30 days {mes}",
+        "hoje {hoy} · 30 dias {mes}",
+        "aujourd'hui {hoy} · 30 jours {mes}",
+        "heute {hoy} · 30 Tage {mes}",
+    ),
+    f!(
         "incluido en el prompt",
         "included in the prompt",
         "incluído no prompt",
@@ -3337,6 +3351,13 @@ pub const FRASES: &[Frase] = &[
         "ainda não chega para uma tendência",
         "pas encore assez de données pour une tendance",
         "noch zu wenig für einen Trend",
+    ),
+    f!(
+        "todavía no hay nada apuntado en esta base",
+        "nothing recorded in this database yet",
+        "ainda não há nada apontado nesta base",
+        "rien n'est encore enregistré dans cette base",
+        "in dieser Datenbank ist noch nichts erfasst",
     ),
     f!(
         "todavía vive en src-tauri, junto al transporte WinRM y a",
@@ -3515,6 +3536,13 @@ pub const FRASES: &[Frase] = &[
         "{n} Dateien in {dir} — die neueste zuerst",
     ),
     f!("{n} h", "{n} h", "{n} h", "{n} h", "{n} Std."),
+    f!(
+        "{n} llamadas al modelo en 30 días · {ent} tokens de entrada, {sal} de salida",
+        "{n} model calls in 30 days · {ent} input tokens, {sal} output",
+        "{n} chamadas ao modelo em 30 dias · {ent} tokens de entrada, {sal} de saída",
+        "{n} appels au modèle en 30 jours · {ent} tokens en entrée, {sal} en sortie",
+        "{n} Modellaufrufe in 30 Tagen · {ent} Eingabe-Tokens, {sal} Ausgabe",
+    ),
     f!(
         "{n} memorias detrás",
         "{n} memories behind it",

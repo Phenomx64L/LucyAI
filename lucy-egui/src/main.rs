@@ -4228,6 +4228,13 @@ struct App {
     /// que un nombre pedido a un Flash se cobrara al precio del Opus que esté
     /// puesto. Un contador que exagera es tan inútil como uno que no está.
     gasto_titulos: f64,
+    /// El gasto de los últimos treinta días, leído de disco. `None` = todavía no
+    /// se ha pedido en esta visita a Configuración.
+    ///
+    /// SEPARADO DE `gasto_titulos` Y DE `gasto_sesion` PORQUE MIDE OTRA COSA:
+    /// esos dos son de esta sesión y se reinician al arrancar. Éste sobrevive, y
+    /// es el que contesta «¿cuánto me costó Lucy este mes?».
+    gasto_hist: Option<lucy_core::usage::Resumen>,
     /// El recuento de la base, cacheado. `None` = aún no se ha mirado.
     recuento: Option<lucy_core::upkeep::Recuento>,
     /// Cuántos trozos de documento están sin vector.
@@ -4770,6 +4777,7 @@ impl App {
                 .and_then(|v| v.parse().ok()),
             chips_rx: None,
             gasto_titulos: 0.0,
+            gasto_hist: None,
             recuento: None,
             sin_vector: 0,
             purga_armada: None,
@@ -4848,6 +4856,10 @@ impl App {
         // pestaña que se está mirando.
         // El tercero es el motivo del fallo, `None` si el turno cerró bien.
         let mut cerrados: Vec<(usize, String, Option<String>)> = Vec::new();
+        // EL MODELO, ANTES DEL PRÉSTAMO. Dentro del bucle `self` está prestado
+        // por las pestañas y no se puede leer un campo suyo; hace falta para
+        // apuntar el gasto, que va tarifado por modelo.
+        let modelo = self.chat_model.clone();
         for t in &mut self.tabs {
             if t.rx.is_none() {
                 continue;
@@ -4896,6 +4908,26 @@ impl App {
                         lucy_core::chat::ChatEvent::Usage(i, o) => {
                             t.tokens_in += i;
                             t.tokens_out += o;
+                            // Y AL DISCO, que es donde faltaba. Estos dos
+                            // contadores viven en el struct de la pestaña: al
+                            // cerrar el programa desaparecían, y con ellos la
+                            // única respuesta posible a «¿cuánto me costó Lucy
+                            // este mes?». La tarifa y los números estaban desde
+                            // siempre; lo que no había era la línea que los
+                            // guarda.
+                            //
+                            // Una fila por llamada al proveedor y no una por
+                            // turno: un turno con tres vueltas de herramienta
+                            // son tres facturas, y sumarlas antes de guardarlas
+                            // perdería justo el detalle que explica por qué un
+                            // turno costó lo que costó.
+                            let _ = lucy_core::usage::apunta(
+                                &modelo,
+                                i,
+                                o,
+                                lucy_core::usage::Para::Chat,
+                                &t.uid.to_string(),
+                            );
                         }
                         lucy_core::chat::ChatEvent::Done => {
                             done = true;
@@ -5754,6 +5786,12 @@ impl eframe::App for App {
                     );
                     if resp.clicked() {
                         self.view = v;
+                        // El gasto histórico se recarga al ENTRAR en una vista y
+                        // no en cada fotograma: son tres consultas de agregación
+                        // y el panel se repinta sesenta veces por segundo. Se
+                        // invalida aquí para que volver a Configuración enseñe
+                        // cifras de ahora y no las de la visita anterior.
+                        self.gasto_hist = None;
                     }
                     if active {
                         // Barra de acento a la izquierda, como el CSS.
@@ -7928,6 +7966,17 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                     if let Some(c) = lucy_core::pricing::cost(&modelo, ent, sal) {
                         self.gasto_titulos += c;
                     }
+                    // Las sugerencias de la pantalla de inicio también cuestan, y
+                    // van en su propio cubo: nadie las pide, salen solas, y por
+                    // eso son de lo primero que hay que poder mirar cuando la
+                    // factura no cuadra con lo que uno cree haber usado.
+                    let _ = lucy_core::usage::apunta(
+                        &modelo,
+                        ent,
+                        sal,
+                        lucy_core::usage::Para::Chips,
+                        "",
+                    );
                 }
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {}
@@ -7985,6 +8034,18 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
             if let Some(c) = lucy_core::pricing::cost(&modelo, ent, sal) {
                 self.gasto_titulos += c;
             }
+            // Y AL DISCO, COMO «titulo». Es el gasto que más fácil se le escapa
+            // a cualquiera —nadie pide un título, salen solos— y por eso vale la
+            // pena poder separarlo: un mes en el que los títulos se llevan el
+            // 40 % no se arregla hablando menos con Lucy, se arregla titulando
+            // con el modelo local.
+            let _ = lucy_core::usage::apunta(
+                &modelo,
+                ent,
+                sal,
+                lucy_core::usage::Para::Titulo,
+                &uid.to_string(),
+            );
         }
     }
 
@@ -9191,6 +9252,17 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                 // enseña podía ir veinte llamadas por detrás de la factura.
                 self.tabs[i].tokens_in += r.tokens_in;
                 self.tabs[i].tokens_out += r.tokens_out;
+                // APUNTADO APARTE COMO «fork». El coste de un sub-agente es la
+                // parte de la factura que nadie ve pasar, y sumarlo al del chat
+                // en el mismo cubo dejaría sin contestar «¿me salen a cuenta los
+                // sub-agentes?».
+                let _ = lucy_core::usage::apunta(
+                    &self.chat_model,
+                    r.tokens_in,
+                    r.tokens_out,
+                    lucy_core::usage::Para::Fork,
+                    &self.tabs[i].uid.to_string(),
+                );
                 self.tabs[i].ws.trace_push(lucy_core::agent::TraceEntry {
                     phase: if r.ok { "obs" } else { "error" }.into(),
                     label: format!("Sub-agente {}: {}", r.id, if r.ok { "hecho" } else { "error" }),
@@ -13452,6 +13524,71 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                         );
                     },
                 );
+                // LO QUE COSTÓ DE VERDAD, Y NO SOLO ESTA SESIÓN.
+                //
+                // El tope de arriba es POR SESIÓN y se reinicia en cada
+                // arranque, así que hasta ahora abrir Lucy cinco veces en un día
+                // permitía gastar cinco topes sin que nada lo dijera. Y el
+                // recuento de tokens vivía en el struct de cada pestaña: al
+                // cerrar el programa desaparecía, y con él la única respuesta
+                // posible a «¿cuánto me costó Lucy este mes?».
+                //
+                // La tarifa, los recuentos y hasta la tabla estaban desde
+                // siempre —`token_usage` tiene casi mil filas que escribió la
+                // app vieja hasta agosto— y lo que faltaba era la línea que las
+                // guarda y ésta que las lee.
+                if self.gasto_hist.is_none() {
+                    self.gasto_hist = lucy_core::usage::resumen(30).ok();
+                }
+                if let Some(h) = &self.gasto_hist {
+                    // EL DESGLOSE POR PARA QUÉ es la mitad útil: saber que se
+                    // gastaron doce dólares no sugiere nada, y saber que cuatro
+                    // se fueron en poner títulos sugiere titular con el modelo
+                    // local.
+                    let desglose = h
+                        .por_para
+                        .iter()
+                        .filter(|(_, c, _)| *c > 0.0)
+                        .map(|(k, c, _)| format!("{k} {}", lucy_core::pricing::fmt_usd(*c)))
+                        .collect::<Vec<_>>()
+                        .join(" · ");
+                    fila(
+                        ui,
+                        "Gastado de verdad",
+                        Some(&if desglose.is_empty() {
+                            i18n::tr("todavía no hay nada apuntado en esta base").to_string()
+                        } else {
+                            desglose
+                        }),
+                        false,
+                        |ui| {
+                            ui.label(
+                                egui::RichText::new(i18n::trf(
+                                    "hoy {hoy} · 30 días {mes}",
+                                    &[
+                                        (
+                                            "hoy",
+                                            &lucy_core::pricing::fmt_usd(
+                                                lucy_core::usage::gasto_de_hoy(),
+                                            ),
+                                        ),
+                                        ("mes", &lucy_core::pricing::fmt_usd(h.total)),
+                                    ],
+                                ))
+                                .strong(),
+                            )
+                            .on_hover_text(i18n::trf(
+                                "{n} llamadas al modelo en 30 días · {ent} tokens de entrada, \
+                                 {sal} de salida",
+                                &[
+                                    ("n", &h.llamadas.to_string()),
+                                    ("ent", &h.entrada.to_string()),
+                                    ("sal", &h.salida.to_string()),
+                                ],
+                            ));
+                        },
+                    );
+                }
                 // El enrutado AVISA, no cambia el modelo. Ver la cabecera de
                 // `lucy_core::routing`: un enrutador que elige en silencio hace
                 // que la respuesta que lees no venga del modelo que
