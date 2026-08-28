@@ -4415,6 +4415,26 @@ struct App {
     proc_probe: lucy_core::system::ProcProbe,
     proc_by_cpu: bool,
     services: Vec<lucy_core::system::DownService>,
+    /// Si la lista de arriba es una MEDIDA o solo está vacía.
+    ///
+    /// LA DISTINCIÓN QUE FALTABA, y la pagaba el vigilante. Un `Vec` vacío dice
+    /// las dos cosas a la vez —«no hay servicios rotos» y «todavía no he
+    /// mirado»— y el vigilante leía siempre la primera. Al arrancar, la lista
+    /// está vacía y la sonda tarda su ciclo en contestar, así que la primera
+    /// pasada de cada sesión concluía que no había ninguno roto: si la sesión
+    /// anterior había avisado de una caída, lo primero que hacía Lucy al abrirse
+    /// era anunciar una recuperación que no había pasado. Lo mismo al cambiar de
+    /// equipo en el panel, que vacía la lista hasta la sonda siguiente.
+    ///
+    /// Un aviso de más se ignora; un «ya está arreglado» falso hace que alguien
+    /// deje de mirar algo que sigue roto.
+    ///
+    /// Aquí y no en `svc_stamp.is_empty()`, que es lo que parecería aprovechable:
+    /// ese campo arranca con un guion para que la cabecera tenga algo que pintar,
+    /// así que ya miente sobre esto mismo — y atarle una decisión de seguridad a
+    /// una cadena que existe para la interfaz es pedir que la próxima persona que
+    /// cambie el guion por otra cosa rompa el vigilante sin saberlo.
+    svc_medidos: bool,
     /// Cadencias separadas por COSTE, no por gusto: los medidores van a 1 s,
     /// los procesos a 3 s (`refresh_processes` recorre la tabla entera) y los
     /// servicios a 30 s (lanza un PowerShell). Una sola cadencia obligaría a
@@ -4985,6 +5005,7 @@ impl App {
             proc_probe: lucy_core::system::ProcProbe::new(),
             proc_by_cpu: false,
             services: Vec::new(),
+            svc_medidos: false,
             // Instantes en el pasado para que las tres cadencias disparen en el
             // primer frame: el dashboard tiene que abrirse con datos, no vacío
             // esperando 30 segundos a que aparezcan los servicios.
@@ -5005,7 +5026,24 @@ impl App {
             fallos: std::collections::HashMap::new(),
             svc_rx: None,
             vigilante_rx: None,
-            vigilante_ultima: 0,
+            // NO SE VIGILA EN EL PRIMER SEGUNDO, y con un cero aquí sí se hacía.
+            //
+            // El porcentaje de CPU de `sysinfo` es un DELTA entre dos refrescos,
+            // así que la primera lectura de la vida del proceso vale cero — no
+            // porque la máquina esté tranquila, sino porque todavía no hay dos
+            // muestras que restar. Con `vigilante_ultima` en cero la primera
+            // pasada salía en ese mismo instante y leía ese cero como una medida:
+            // si la sesión anterior se cerró con la CPU en aviso, lo primero que
+            // hacía Lucy al abrirse era anunciar que se había arreglado.
+            //
+            // Es el mismo fallo que `svc_medidos` cierra para los servicios, y
+            // aquí no se puede arreglar igual porque un cero es un valor legítimo
+            // de CPU y no se distingue del que no se ha medido. Lo que sí se
+            // puede es no preguntar hasta tener algo que contestar: al minuto,
+            // `sysinfo` lleva sesenta muestras y la sonda de servicios ya ha
+            // contestado dos veces. Un minuto de retraso al arrancar no le cuesta
+            // nada a una vigilancia continua.
+            vigilante_ultima: ahora_epoch(),
             vigilante_remoto_rx: None,
             vigilante_remoto_ultima: 0,
             cpu_hist: Vec::new(),
@@ -13630,10 +13668,13 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
             {
                 self.vigilante_ultima = ahora;
                 let snap = s.clone();
-                let servicios = self.services.clone();
+                // `None` mientras la sonda no haya contestado nunca: ver
+                // `svc_medidos`. Es lo que evita que la primera pasada de cada
+                // arranque anuncie una recuperación que no ha pasado.
+                let servicios = self.svc_medidos.then(|| self.services.clone());
                 let (tx, rx) = std::sync::mpsc::channel();
                 std::thread::spawn(move || {
-                    let _ = tx.send(lucy_core::watch::pasada(&snap, &servicios, ahora));
+                    let _ = tx.send(lucy_core::watch::pasada(&snap, servicios.as_deref(), ahora));
                 });
                 self.vigilante_rx = Some(rx);
             }
@@ -13843,6 +13884,7 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
         match rx.try_recv() {
             Ok(Some(v)) => {
                 self.services = v;
+                self.svc_medidos = true;
                 self.svc_stamp = stamp_now();
                 self.svc_rx = None;
             }
@@ -15452,6 +15494,12 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                 self.cpu_hist.clear();
                 self.ram_hist.clear();
                 self.services.clear();
+                // Y vaciarla es DEJAR DE SABER, no enterarse de que no hay
+                // ninguno roto. Sin esta línea, el vigilante local leería la
+                // lista recién vaciada como una medida buena y anunciaría que
+                // todo se ha arreglado — por haber cambiado de equipo en un
+                // panel. Ver `svc_medidos`.
+                self.svc_medidos = false;
                 self.dash_shown = Some(Instant::now());
             }
         }
