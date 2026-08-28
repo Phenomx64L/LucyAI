@@ -4168,6 +4168,14 @@ struct App {
     /// un equipo caído son información útil, y dejar la lista vacía sin decir
     /// nada hace que el operador crea que el log está limpio.
     lv_error: String,
+    /// Cuántos avisos del vigilante están sin leer.
+    ///
+    /// CACHEADO, y no por optimizar de más: la barra de estado se pinta en cada
+    /// fotograma, y preguntárselo a SQLite ahí serían sesenta consultas por
+    /// segundo mientras Lucy escribe para enseñar un número que solo cambia
+    /// cuando el vigilante habla. Se refresca donde cambia: al terminar una
+    /// pasada y al marcarlos leídos.
+    avisos_sin_ver: usize,
     /// Si el carril de la derecha está plegado.
     ///
     /// PLEGADO Y NO ESTRECHADO. Se podía llevar el borde hasta el mínimo, pero
@@ -4501,7 +4509,6 @@ struct App {
     sys_stamp: String,
     // telemetry
     last: Instant,
-    fps: f32,
     /// Última vez que hubo ALGO que animar: tokens llegando, salida del PTY.
     ///
     /// Gobierna la política de repintado. Ver `update()`: repintar sin
@@ -4951,6 +4958,11 @@ impl App {
                 .and_then(|s| s.get_string(K_SPEND))
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(0.0),
+            // AL ARRANCAR SE PREGUNTA UNA VEZ. Sin esto, los avisos que Lucy
+            // dio anoche y nadie leyó saldrían como cero hasta la primera pasada
+            // del vigilante — o sea que lo primero que hace la barra al abrir la
+            // aplicación sería mentir.
+            avisos_sin_ver: lucy_core::notify::cuantos_sin_ver(),
             ws_plegado: storage
                 .and_then(|s| s.get_string(K_WS_PLEGADO))
                 .and_then(|v| v.parse().ok())
@@ -5003,7 +5015,6 @@ impl App {
             dash_shown: None,
             sys_stamp: String::from("—"),
             last: Instant::now(),
-            fps: 0.0,
             last_activity: Instant::now(),
         }
     }
@@ -5592,11 +5603,7 @@ impl eframe::App for App {
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let now = Instant::now();
-        let dt = now.duration_since(self.last).as_secs_f32();
         self.last = now;
-        if dt > 0.0 {
-            self.fps = 0.9 * self.fps + 0.1 * (1.0 / dt);
-        }
 
         // ── La ventana se vigila su propio tamaño ────────────────────────────
         //
@@ -5833,20 +5840,46 @@ impl eframe::App for App {
                     ui.label(egui::RichText::new(pty_glyph).color(pty_color).size(10.5));
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        // El FPS marca ~1 en reposo A PROPÓSITO: se repinta a
-                        // fondo solo cuando hay algo que animar. Se etiqueta
-                        // para que nadie lo lea como un problema.
-                        let idle = self.fps < 5.0;
-                        ui.label(
-                            egui::RichText::new(if idle {
-                                "reposo".to_string()
-                            } else {
-                                format!("{:.0} FPS", self.fps)
-                            })
-                            .color(theme::txt3())
-                            .size(10.5),
-                        );
-                        ui.add_space(10.0);
+                        // LOS AVISOS SIN LEER, EN EL SITIO QUE SE VE SIEMPRE.
+                        //
+                        // El globo de Windows se pierde en cuanto se va de
+                        // pantalla —está medido en `lucy_core::notify`— así que
+                        // el registro es la única memoria de lo que Lucy dijo
+                        // mientras no había nadie mirando. Tenerlo solo en
+                        // Configuración lo convertía en algo que hay que ir a
+                        // buscar, y a lo que hay que ir a buscar no se va.
+                        //
+                        // Solo cuando hay alguno: un cero permanente es ruido, y
+                        // lo que este hueco tiene que decir es «hay algo».
+                        if self.avisos_sin_ver > 0 {
+                            let r = ui.label(
+                                egui::RichText::new(i18n::trf(
+                                    "◆ {n} sin leer",
+                                    &[("n", &self.avisos_sin_ver.to_string())],
+                                ))
+                                .color(theme::amber())
+                                .size(10.5),
+                            );
+                            if r.on_hover_text(i18n::tr(
+                                "Avisos del vigilante que no has marcado como leídos. Se gestionan en Configuración.",
+                            ))
+                            .clicked()
+                            {
+                                self.view = View::Configuracion;
+                            }
+                            ui.add_space(10.0);
+                        }
+                        // AQUÍ ESTABA EL CONTADOR DE FOTOGRAMAS, y se ha ido.
+                        //
+                        // Servía para demostrar que el shell nativo se repinta
+                        // cuando quiere —cosa que un compositor de WebView no
+                        // puede hacer— y esa demostración ya está hecha y
+                        // escrita en la política de repintado de más arriba. Lo
+                        // que quedaba era un número que no llevaba a ninguna
+                        // decisión, ocupando el sitio más valioso de la ventana:
+                        // el que se ve siempre.
+                        //
+                        // En su lugar, lo que sí lleva a una decisión.
                         ui.label(
                             egui::RichText::new(&self.chat_model).color(theme::txt3()).size(10.5),
                         );
@@ -6158,9 +6191,32 @@ impl App {
             // plegado — un botón permanente para volver a abrir algo que está
             // abierto es ruido.
             if self.ws_plegado {
+                // EL BOTÓN LLEVA LA CUENTA, y sin ella plegar el carril habría
+                // sido un cambio a peor. Las cuatro pestañas de dentro enseñan
+                // cuántos pasos, cuántas ejecuciones y cuántas líneas de trace
+                // hay — y al plegarlo, esa señal se iba con ellas. El operador
+                // se quedaría sin saber que Lucy ha hecho algo mientras miraba
+                // la conversación, que es justo cuando se pliega.
+                let t = &self.tabs[self.tab].ws;
+                let n = t.plan.len() + t.exec.len() + t.artifacts.len();
+                let corriendo = t.forks_running() > 0
+                    || t.plan.iter().any(|p| p.status == lucy_core::agent::StepStatus::Running);
                 right(ui, 26.0, |ui| {
+                    let etiqueta = if n > 0 {
+                        i18n::trf("Plan ▸ {n}", &[("n", &n.to_string())])
+                    } else {
+                        i18n::tr("Plan ▸").to_string()
+                    };
+                    let b = egui::Button::new(
+                        egui::RichText::new(etiqueta)
+                            .size(theme::FS_FOOTNOTE)
+                            // Acento solo si hay algo EN MARCHA. Un número no es
+                            // urgente —lleva ahí desde hace diez minutos— y
+                            // teñirlo siempre enseñaría a no mirarlo.
+                            .color(if corriendo { theme::acc() } else { theme::txt3() }),
+                    );
                     if ui
-                        .button(i18n::tr("Plan ▸"))
+                        .add(b)
                         .on_hover_text(i18n::tr("Volver a abrir el carril del agente"))
                         .clicked()
                     {
@@ -13557,10 +13613,20 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
             Err(std::sync::mpsc::TryRecvError::Empty) => return,
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 if remota { self.vigilante_remoto_rx = None } else { self.vigilante_rx = None }
+        // El contador de la barra se refresca DONDE CAMBIA. Es lo único que
+        // crea avisos, así que preguntarlo en cada fotograma serían sesenta
+        // consultas por segundo para un número que se mueve unas pocas veces al
+        // día.
+        self.avisos_sin_ver = lucy_core::notify::cuantos_sin_ver();
                 return;
             }
         };
         if remota { self.vigilante_remoto_rx = None } else { self.vigilante_rx = None }
+        // El contador de la barra se refresca DONDE CAMBIA. Es lo único que
+        // crea avisos, así que preguntarlo en cada fotograma serían sesenta
+        // consultas por segundo para un número que se mueve unas pocas veces al
+        // día.
+        self.avisos_sin_ver = lucy_core::notify::cuantos_sin_ver();
         let avisados: Vec<&lucy_core::watch::Sintoma> = d
             .iter()
             .filter_map(|x| match x {
@@ -13997,6 +14063,7 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                             .clicked()
                         {
                             let _ = lucy_core::notify::marca_visto(None);
+                            self.avisos_sin_ver = 0;
                         }
                     },
                 );

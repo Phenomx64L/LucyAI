@@ -523,6 +523,13 @@ pub const FRASES: &[Frase] = &[
     ),
     f!("Aviso", "Warning", "Aviso", "Avertissement", "Warnung"),
     f!("Avisos", "Warnings", "Avisos", "Avertissements", "Warnungen"),
+    f!(
+        "Avisos del vigilante que no has marcado como leídos. Se gestionan en Configuración.",
+        "Watcher alerts you have not marked as read. They are managed in Settings.",
+        "Avisos do vigilante que não marcaste como lidos. Gerem-se em Configuração.",
+        "Alertes de la sentinelle que tu n'as pas marquées comme lues. Elles se gèrent dans Configuration.",
+        "Hinweise des Wächters, die du nicht als gelesen markiert hast. Verwaltet in den Einstellungen.",
+    ),
     f!("Avisos sin leer", "Unread alerts", "Avisos por ler", "Alertes non lues", "Ungelesene Hinweise"),
     f!(
         "Añadir el primero",
@@ -2287,6 +2294,7 @@ pub const FRASES: &[Frase] = &[
         "Fragt den Modellkatalog ab — kostet nichts",
     ),
     f!("Plan ▸", "Plan ▸", "Plano ▸", "Plan ▸", "Plan ▸"),
+    f!("Plan ▸ {n}", "Plan ▸ {n}", "Plano ▸ {n}", "Plan ▸ {n}", "Plan ▸ {n}"),
     f!(
         "Plegar el carril — vuelve con el botón de la cabecera",
         "Collapse the rail — bring it back from the header button",
@@ -3849,6 +3857,7 @@ pub const FRASES: &[Frase] = &[
     f!("■  Parar", "■  Stop", "■  Parar", "■  Arrêter", "■  Anhalten"),
     f!("■ Detener", "■ Stop", "■ Parar", "■ Arrêter", "■ Stopp"),
     f!("▸ Ejecutar", "▸ Run", "▸ Executar", "▸ Exécuter", "▸ Ausführen"),
+    f!("◆ {n} sin leer", "◆ {n} unread", "◆ {n} por ler", "◆ {n} non lues", "◆ {n} ungelesen"),
     f!("◈ Semántica", "◈ Semantic", "◈ Semântica", "◈ Sémantique", "◈ Semantisch"),
     f!("● ESCANEADO {hora}", "● SCANNED {hora}", "● ANALISADO {hora}", "● ANALYSÉ {hora}", "● GESCANNT {hora}"),
     f!(
