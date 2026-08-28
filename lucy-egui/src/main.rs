@@ -3355,6 +3355,26 @@ enum MsgAction {
 /// Ahora es lo que es: una línea con el comando, si fue bien, y la salida
 /// dentro. Plegada por defecto porque en el 90 % de los casos basta con saber
 /// que corrió; abierta cuando hace falta mirar.
+/// Cuántos caracteres monoespaciados caben en la cabecera de un `exec_row`.
+///
+/// Separada para poder probarla: es la cuenta que impide que una línea de
+/// comando ensanche el carril entero, y equivocarse en ella no da un error sino
+/// texto recortado dos mensajes más abajo — ver el comentario de `exec_row`.
+///
+/// 0,62 del tamaño de fuente es el avance medido de esta monoespaciada. Los 56
+/// son el triángulo del plegable, el glifo de resultado y sus separaciones. El
+/// suelo de 24 existe para que un carril muy estrecho enseñe algo en vez de
+/// dejar solo puntos suspensivos.
+fn caracteres_que_caben(ancho: f32) -> usize {
+    // EL «…» CUENTA. `recorta_visual` devuelve `n` caracteres MÁS los puntos
+    // suspensivos, así que pedirle exactamente los que caben pinta uno de más.
+    // Son dos píxeles, y dos píxeles bastan para que el rectángulo desborde y
+    // arrastre el ancho del carril al fotograma siguiente — que es todo el
+    // daño que este cálculo existe para evitar.
+    let caben = ((ancho - 56.0) / (theme::FS_CAPTION * 0.62)) as usize;
+    caben.saturating_sub(1).max(24)
+}
+
 fn exec_row(ui: &mut egui::Ui, i: usize, cmd: &str, ok: bool, out: &str) {
     ui.add_space(6.0);
     let (col, glyph) = if ok {
@@ -3362,14 +3382,48 @@ fn exec_row(ui: &mut egui::Ui, i: usize, cmd: &str, ok: bool, out: &str) {
     } else {
         (theme::red(), "✕")
     };
+    // EL COMANDO SE RECORTA EN LA CABECERA, Y ESTO ARREGLABA TRES COSAS A LA VEZ.
+    //
+    // Un `CollapsingHeader` no ajusta su título ni lo recorta: pinta la línea
+    // entera y hace crecer su rectángulo. Un `Get-Service | Where-Object {...} |
+    // Select-Object Name, DisplayName, Status, StartType` mide más que el
+    // carril, así que el CONTENIDO del `ScrollArea` pasaba a medir eso.
+    //
+    // Y ahí venía el daño de verdad, que no era esta línea: al fotograma
+    // siguiente, `ui.available_width()` dentro del área devolvía el ancho
+    // INFLADO, `transcript` lo tomaba como el ancho del carril, y TODOS los
+    // mensajes se maquetaban más anchos que el panel. El panel los recortaba
+    // contra su borde y el texto se leía cortado a media palabra, sin barra de
+    // desplazamiento y sin volver a fluir al estrechar la ventana.
+    //
+    // O sea: la respuesta de Lucy salía cortada por culpa de la línea del
+    // comando de dos mensajes más arriba.
+    //
+    // Monoespaciada, así que los caracteres que caben se estiman por el ancho:
+    // 0,62 del tamaño de fuente es lo medido para esta tipografía, y los 56 son
+    // el triángulo del plegable más el glifo y sus separaciones.
+    let cabe = caracteres_que_caben(ui.available_width());
     egui::CollapsingHeader::new(
-        egui::RichText::new(format!("{glyph}  {cmd}"))
+        egui::RichText::new(format!("{glyph}  {}", recorta_visual(cmd, cabe)))
             .size(theme::FS_CAPTION)
             .monospace()
             .color(col),
     )
     .id_salt(("exec", i))
     .show(ui, |ui| {
+        // El comando ENTERO va dentro, que es donde se puede leer sin que su
+        // longitud deforme el carril. Recortarlo arriba sin ponerlo aquí sería
+        // esconder lo que se ejecutó.
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(cmd)
+                    .size(theme::FS_CAPTION)
+                    .monospace()
+                    .color(col),
+            )
+            .wrap(),
+        );
+        ui.add_space(4.0);
         ui.add(
             egui::Label::new(
                 egui::RichText::new(out)
@@ -6077,6 +6131,18 @@ impl App {
             .show_separator_line(false)
             .show_inside(ui, |ui| self.composer(ui));
 
+        // EL ANCHO SE MIDE AQUÍ FUERA, y es la mitad del arreglo del recorte.
+        //
+        // Dentro del `ScrollArea`, `ui.available_width()` no devuelve el ancho
+        // del carril: devuelve el del CONTENIDO, que en egui crece si algo lo
+        // desborda y se arrastra al fotograma siguiente. Con una sola línea
+        // larga —el comando de un `exec_row`, por ejemplo— ese número se queda
+        // inflado, y todo lo que se maquete con él sale más ancho que el panel y
+        // acaba recortado contra su borde.
+        //
+        // Aquí, antes de entrar, es el ancho de verdad. Los 12 son la barra de
+        // desplazamiento, que no se descuenta sola.
+        let ancho_carril = (ui.available_width() - 12.0).max(220.0);
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .stick_to_bottom(true)
@@ -6085,7 +6151,7 @@ impl App {
                     self.empty_state(ui);
                     return;
                 }
-                self.transcript(ui);
+                self.transcript(ui, ancho_carril);
             });
     }
 
@@ -6095,7 +6161,28 @@ impl App {
         let mut cerrar: Option<usize> = None;
         let mut abrir = false;
 
+        // EL BOTÓN DE ABRIR SE RESERVA PRIMERO, Y LAS PESTAÑAS SE DESPLAZAN.
+        //
+        // Esto era una fila recta sin desplazamiento: con siete conversaciones
+        // abiertas, las pestañas seguían dibujándose más allá del borde y se
+        // llevaban por delante lo único que permitía salir del atasco — el «+»
+        // quedaba fuera de la ventana y la ✕ de la última también. O sea que al
+        // llegar a ese punto no se podía ni abrir otra ni cerrar ninguna: la
+        // barra se cerraba sobre sí misma.
+        //
+        // Ahora el «+» se coloca a la derecha ANTES que nada, así que existe
+        // pase lo que pase, y las pestañas viven en un carril que se desplaza en
+        // horizontal. Sin barra visible: se arrastra o se usa la rueda, y una
+        // barra de desplazamiento en una tira de 26 px de alto ocupa más de lo
+        // que ayuda.
         row_align(ui, 30.0, egui::Align::Center, |ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            let ancho_tiras = (ui.available_width() - 36.0).max(80.0);
+            egui::ScrollArea::horizontal()
+                .id_salt("tiras")
+                .max_width(ancho_tiras)
+                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+                .show(ui, |ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
             for (i, t) in self.tabs.iter().enumerate() {
                 let on = i == self.tab;
@@ -6158,6 +6245,7 @@ impl App {
                     }
                 }
             }
+            });
             let (pr, presp) =
                 ui.allocate_exact_size(egui::vec2(28.0, 26.0), egui::Sense::click());
             ui.painter().rect(
@@ -6567,10 +6655,16 @@ impl App {
     /// El color del operador vive en su AVATAR, no en la burbuja. Teñir la
     /// burbuja —que es lo que había aquí— compite con el acento y hace que dos
     /// órdenes seguidas parezcan un bloque de color.
-    fn transcript(&mut self, ui: &mut egui::Ui) {
+    /// `ancho` viene medido FUERA del `ScrollArea` a propósito: ver el
+    /// comentario de quien la llama. Dentro, `available_width` puede venir
+    /// inflado por lo que desbordó en el fotograma anterior.
+    fn transcript(&mut self, ui: &mut egui::Ui, ancho: f32) {
         let busy = self.tabs[self.tab].busy();
         let n = self.tabs[self.tab].log.len();
-        let full = ui.available_width();
+        // Se toma el MENOR de los dos: el de fuera es el bueno, y si por lo que
+        // sea el de dentro fuera todavía menor —una barra que aparece, un
+        // margen— quedarse con el grande volvería a desbordar.
+        let full = ancho.min(ui.available_width().max(220.0));
         let me = initials(&user_name());
         let mut copiar: Option<String> = None;
         // `(índice, acción)` — se aplica DESPUÉS del bucle: tocar el registro
@@ -21381,5 +21475,74 @@ mod empaquetado {
             "el acceso directo del menú volvió a ser anunciado y MSI no admite propiedades en uno \
              anunciado: el AUMID se perdería sin decir nada"
         );
+    }
+}
+
+#[cfg(test)]
+mod maquetado {
+    use super::*;
+
+    /// La cuenta que impide que una línea de comando ensanche el carril entero.
+    ///
+    /// EL FALLO QUE ESTO CIERRA no se veía donde estaba. Un `CollapsingHeader`
+    /// no ajusta ni recorta su título: pinta la línea entera y hace crecer su
+    /// rectángulo. Con un `Get-Service | Where-Object {...} | Select-Object …`
+    /// el contenido del `ScrollArea` pasaba a medir eso, y al fotograma
+    /// siguiente `available_width()` dentro del área devolvía el ancho INFLADO.
+    ///
+    /// A partir de ahí, TODOS los mensajes se maquetaban más anchos que el panel
+    /// y el panel los recortaba contra su borde: la respuesta de Lucy salía
+    /// cortada a media palabra por culpa de la línea del comando de dos mensajes
+    /// más arriba, y estrechar la ventana no la hacía volver a fluir.
+    #[test]
+    fn un_comando_largo_no_desborda_el_carril() {
+        // El comando real del pantallazo, y un carril estrecho de los de verdad.
+        let cmd = "Get-Service | Where-Object {$_.StartType -eq 'Automatic' -and \
+                   $_.Status -ne 'Running'} | Select-Object Name, DisplayName, Status, StartType";
+        for ancho in [320.0_f32, 480.0, 745.0, 1200.0] {
+            let n = caracteres_que_caben(ancho);
+            let cortado = recorta_visual(cmd, n);
+            // Lo pintado no puede pasar del ancho del carril. Se mide con el
+            // mismo avance con el que se calculó, más el hueco reservado.
+            // Se cuentan los caracteres DE VERDAD pintados, puntos suspensivos
+            // incluidos: olvidarlos fue exactamente el error de la primera
+            // versión de esta cuenta, y son los dos píxeles que desbordaban.
+            let pintado = cortado.chars().count() as f32 * theme::FS_CAPTION * 0.62 + 56.0;
+            assert!(
+                pintado <= ancho + 1.0,
+                "con un carril de {ancho} px se pintarían {pintado:.0}: vuelve a desbordar"
+            );
+        }
+    }
+
+    #[test]
+    fn un_carril_estrecho_sigue_enseñando_algo_del_comando() {
+        // El suelo. Sin él, un carril de 200 px daría cero caracteres y la fila
+        // sería un triángulo y unos puntos suspensivos: se perdería incluso el
+        // cmdlet, que es lo único que se necesita para reconocer la fila.
+        let n = caracteres_que_caben(120.0);
+        assert!(n >= 24, "un carril estrecho deja el comando en nada: {n}");
+        let corto = recorta_visual("Get-Service -Name Spooler", n);
+        assert!(corto.starts_with("Get-Service"), "no se reconoce el comando: «{corto}»");
+    }
+
+    #[test]
+    fn un_comando_que_cabe_no_se_toca() {
+        // Recortar lo que cabía añadiría unos puntos suspensivos que mienten.
+        let n = caracteres_que_caben(1200.0);
+        assert_eq!(recorta_visual("ipconfig /all", n), "ipconfig /all");
+    }
+
+    #[test]
+    fn mas_ancho_nunca_significa_menos_texto() {
+        // Una guarda de monotonía: si la cuenta se cambia por otra y deja de
+        // crecer con el ancho, la cabecera se recortaría MÁS al agrandar la
+        // ventana, que es lo contrario de lo que el operador espera.
+        let mut previo = 0;
+        for ancho in [120.0_f32, 200.0, 320.0, 480.0, 745.0, 1200.0, 2400.0] {
+            let n = caracteres_que_caben(ancho);
+            assert!(n >= previo, "a {ancho} px caben {n} y a menos cabían {previo}");
+            previo = n;
+        }
     }
 }
