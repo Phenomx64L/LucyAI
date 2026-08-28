@@ -135,7 +135,7 @@ fn recorta(s: &str, max: usize) -> String {
     s.chars().take(max).collect::<String>() + "…"
 }
 
-fn ahora_iso() -> String {
+pub(crate) fn ahora_iso() -> String {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
