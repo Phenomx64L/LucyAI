@@ -74,6 +74,20 @@ pub struct Sintoma {
     pub equipo: String,
 }
 
+/// La clave de un síntoma, con el equipo delante.
+///
+/// LA COLISIÓN QUE ESTO EVITA. Mientras el vigilante solo miraba este equipo, la
+/// clave era `disco:C:` a secas. En cuanto entra un servidor remoto que también
+/// tiene una unidad C:, las dos comparten la clave que las DEDUPICA — y el
+/// resultado no es un aviso de más sino uno de menos: el disco lleno del
+/// servidor se calla porque «ya se dijo» refiriéndose al de aquí.
+///
+/// El equipo vacío no lleva prefijo, para que las claves que ya hay en la tabla
+/// de una instalación en marcha sigan valiendo.
+pub fn clave_de(equipo: &str, cosa: &str) -> String {
+    if equipo.is_empty() { cosa.to_string() } else { format!("{equipo}/{cosa}") }
+}
+
 /// Lo que se sabe de una clave: cuándo se avisó por última vez, con qué nivel, y
 /// cuántas veces se ha avisado de ella en las últimas horas.
 ///
@@ -294,7 +308,7 @@ pub fn observa_local(s: &SysSnapshot, servicios: &[DownService], u: &Umbrales) -
     let mut v = Vec::new();
 
     v.push(Sintoma {
-        clave: "cpu".into(),
+        clave: clave_de("", "cpu"),
         nivel: u.cpu(s.cpu_pct),
         asunto: "CPU".into(),
         titulo: "CPU alta".into(),
@@ -306,7 +320,7 @@ pub fn observa_local(s: &SysSnapshot, servicios: &[DownService], u: &Umbrales) -
     if s.mem_total > 0 {
         let pct = s.mem_used as f32 / s.mem_total as f32 * 100.0;
         v.push(Sintoma {
-            clave: "memoria".into(),
+            clave: clave_de("", "memoria"),
             nivel: u.mem(pct),
             asunto: "Memoria".into(),
             titulo: "Memoria alta".into(),
@@ -330,7 +344,7 @@ pub fn observa_local(s: &SysSnapshot, servicios: &[DownService], u: &Umbrales) -
             // El punto de montaje y no el nombre: el nombre de un volumen se
             // puede cambiar desde el explorador, y entonces la clave cambiaría y
             // el disco volvería a ser «nuevo» para el vigilante.
-            clave: format!("disco:{}", d.mount),
+            clave: clave_de("", &format!("disco:{}", d.mount)),
             nivel: u.disco(pct),
             asunto: format!("Disco {}", d.mount),
             titulo: format!("Disco {} casi lleno", d.mount),
@@ -355,7 +369,7 @@ pub fn observa_local(s: &SysSnapshot, servicios: &[DownService], u: &Umbrales) -
     // apague los avisos. La distinción ya la hace `DownService::crashed`.
     let rotos: Vec<&str> = servicios.iter().filter(|x| x.crashed()).map(|x| x.name.as_str()).collect();
     v.push(Sintoma {
-        clave: "servicios".into(),
+        clave: clave_de("", "servicios"),
         nivel: if rotos.is_empty() { Nivel::Ok } else { Nivel::Critico },
         asunto: "Servicios automáticos".into(),
         // El plural se decide con `rotos.len() == 1`, y con la lista vacía cae
@@ -372,6 +386,146 @@ pub fn observa_local(s: &SysSnapshot, servicios: &[DownService], u: &Umbrales) -
     });
 
     v
+}
+
+// ── Capa 1, lo remoto ───────────────────────────────────────────────────────
+
+/// Cada cuánto se sondea un equipo remoto.
+///
+/// Cinco minutos, no uno. Cada sonda es una sesión WinRM contra la red: hacerla
+/// cada minuto por cada equipo convierte al vigilante en carga para lo que
+/// vigila, y ninguno de los umbrales que mira cambia tan deprisa como para
+/// notarlo.
+pub const REMOTO_CADA_SECS: i64 = 5 * 60;
+
+/// Los síntomas de un equipo remoto que SÍ contestó.
+pub fn observa_remoto(equipo: &str, s: &crate::health::Salud, u: &Umbrales) -> Vec<Sintoma> {
+    let mut v = vec![
+        // Que contesta es en sí mismo un síntoma en `Ok`, y hace falta: es lo
+        // que permite decir «SRV-04 vuelve a responder» cuando se cae y vuelve.
+        Sintoma {
+            clave: clave_de(equipo, "vivo"),
+            nivel: Nivel::Ok,
+            asunto: format!("Equipo {equipo}"),
+            titulo: format!("{equipo} no responde"),
+            cuerpo: String::new(),
+            cuerpo_ok: format!("{equipo} vuelve a responder."),
+            equipo: equipo.to_string(),
+        },
+        Sintoma {
+            clave: clave_de(equipo, "cpu"),
+            nivel: u.cpu(s.cpu_pct),
+            asunto: format!("CPU de {equipo}"),
+            titulo: format!("CPU alta en {equipo}"),
+            cuerpo: format!("La CPU de {equipo} va al {:.0} %.", s.cpu_pct),
+            cuerpo_ok: format!("La CPU de {equipo} ha bajado al {:.0} %.", s.cpu_pct),
+            equipo: equipo.to_string(),
+        },
+    ];
+    if s.mem_total_mb > 0 {
+        let pct = s.mem_pct();
+        v.push(Sintoma {
+            clave: clave_de(equipo, "memoria"),
+            nivel: u.mem(pct),
+            asunto: format!("Memoria de {equipo}"),
+            titulo: format!("Memoria alta en {equipo}"),
+            cuerpo: format!(
+                "{equipo} usa {} de {} MB de memoria — el {pct:.0} %.",
+                s.mem_used_mb, s.mem_total_mb
+            ),
+            cuerpo_ok: format!("La memoria de {equipo} ha bajado al {pct:.0} %."),
+            equipo: equipo.to_string(),
+        });
+    }
+    for d in &s.discos {
+        if d.total_gb <= 0.0 {
+            continue;
+        }
+        let pct = d.pct();
+        let libres = d.total_gb - d.usado_gb;
+        // El montaje si lo hay, y el nombre si no: en Linux `nombre` es
+        // `/dev/sda1` y el montaje es lo que le dice algo a una persona.
+        let donde = if d.montaje.is_empty() { &d.nombre } else { &d.montaje };
+        v.push(Sintoma {
+            clave: clave_de(equipo, &format!("disco:{donde}")),
+            nivel: u.disco(pct),
+            asunto: format!("Disco {donde} de {equipo}"),
+            titulo: format!("Disco {donde} casi lleno en {equipo}"),
+            cuerpo: format!(
+                "{donde} de {equipo} al {pct:.0} % — quedan {libres:.1} GB de {:.1}.",
+                d.total_gb
+            ),
+            cuerpo_ok: format!("{donde} de {equipo} al {pct:.0} %, con {libres:.1} GB libres."),
+            equipo: equipo.to_string(),
+        });
+    }
+    v
+}
+
+/// El síntoma de un equipo que NO contestó.
+///
+/// DEVUELVE UNO SOLO, Y ESO ES LO IMPORTANTE. La tentación es devolver además
+/// los síntomas de sus discos y su CPU en `Ok` para «completar el cuadro», y
+/// sería un error grave: la capa 2 usa un síntoma en `Ok` para declarar una
+/// RECUPERACIÓN. Un servidor que se cae con el disco al 99 % anunciaría, al
+/// dejar de responder, que su disco ha vuelto a la normalidad.
+///
+/// No saber nada de una máquina no es una buena noticia sobre ella. Con un solo
+/// síntoma, lo que se dijo de sus discos se queda como estaba hasta que vuelva
+/// a contestar.
+pub fn observa_caido(equipo: &str, error: &str) -> Vec<Sintoma> {
+    vec![Sintoma {
+        clave: clave_de(equipo, "vivo"),
+        nivel: Nivel::Critico,
+        asunto: format!("Equipo {equipo}"),
+        titulo: format!("{equipo} no responde"),
+        cuerpo: format!("No se ha podido sondear {equipo}: {}", recorta(error, 140)),
+        cuerpo_ok: format!("{equipo} vuelve a responder."),
+        equipo: equipo.to_string(),
+    }]
+}
+
+/// El síntoma de un equipo que no se puede vigilar por falta de credencial.
+///
+/// SE AVISA, aunque sea un problema de configuración y no de la máquina. Callarlo
+/// dejaría un equipo dado de alta al que nadie vigila y nadie sabe que nadie
+/// vigila — el silencio que este proyecto lleva toda la sesión persiguiendo. El
+/// espaciado del freno se encarga de que no se convierta en una cantinela.
+pub fn observa_sin_credencial(equipo: &str) -> Vec<Sintoma> {
+    vec![Sintoma {
+        clave: clave_de(equipo, "credencial"),
+        nivel: Nivel::Aviso,
+        asunto: format!("Credencial de {equipo}"),
+        titulo: format!("No puedo vigilar {equipo}"),
+        cuerpo: format!("{equipo} está dado de alta pero no tiene contraseña guardada."),
+        cuerpo_ok: format!("Ya hay credencial para {equipo}."),
+        equipo: equipo.to_string(),
+    }]
+}
+
+fn recorta(s: &str, n: usize) -> String {
+    let limpio = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    limpio.chars().take(n).collect()
+}
+
+/// Una pasada sobre los equipos remotos dados de alta.
+///
+/// BLOQUEANTE Y LENTA: una sesión WinRM por equipo. Quien la llama tiene que
+/// estar en un hilo, y no llamarla más a menudo que `REMOTO_CADA_SECS`.
+pub fn pasada_remota(hosts: &[crate::hosts::Host], ahora: i64) -> Vec<Decision> {
+    let mut sintomas = Vec::new();
+    for h in hosts {
+        let equipo = if h.name.is_empty() { h.id.clone() } else { h.name.clone() };
+        let u = crate::thresholds::de(&h.id);
+        match crate::hosts::password(&h.id) {
+            None => sintomas.extend(observa_sin_credencial(&equipo)),
+            Some(p) => match crate::health::sonda(h, &p) {
+                Ok(s) => sintomas.extend(observa_remoto(&equipo, &s, &u)),
+                Err(e) => sintomas.extend(observa_caido(&equipo, &e)),
+            },
+        }
+    }
+    manda(sintomas, ahora)
 }
 
 // ── El puente con el canal ──────────────────────────────────────────────────
@@ -455,7 +609,21 @@ pub fn olvida_la_sesion() {
 /// demasiado» sin tener que adivinar.
 pub fn pasada(s: &SysSnapshot, servicios: &[DownService], ahora: i64) -> Vec<Decision> {
     let u = crate::thresholds::de("");
-    let sintomas = observa_local(s, servicios, &u);
+    manda(observa_local(s, servicios, &u), ahora)
+}
+
+/// Decide sobre unos síntomas y manda lo que toque.
+///
+/// COMPARTIDA POR LO LOCAL Y LO REMOTO a propósito. La política de qué se dice y
+/// qué se calla no puede tener dos copias: el día que una se ajuste y la otra no,
+/// el operador tendrá dos vigilantes con dos criterios y ninguna forma de saber
+/// cuál le está hablando.
+///
+/// EL TOPE POR PASADA ES POR PASADA, no por equipo. Con veinte servidores caídos
+/// salen tres globos y diecisiete filas en el registro, que es justo lo que se
+/// quiere: veinte notificaciones seguidas no informan de veinte cosas, tapan
+/// diecinueve.
+pub fn manda(sintomas: Vec<Sintoma>, ahora: i64) -> Vec<Decision> {
     let claves: Vec<String> = sintomas.iter().map(|x| x.clave.clone()).collect();
     let decisiones = decide(sintomas, &lo_ya_dicho(&claves), ahora);
     for d in &decisiones {
@@ -871,6 +1039,132 @@ mod tests {
         };
         let v = observa_local(&s, &[], &Umbrales::default());
         assert!(!v.iter().any(|x| x.clave.starts_with("disco:")));
+    }
+
+    fn salud(cpu: f32, disco_pct: f32) -> crate::health::Salud {
+        crate::health::Salud {
+            hostname: "SRV-04".into(),
+            os: "Windows Server 2019".into(),
+            uptime_h: 100,
+            cpu_pct: cpu,
+            cpu_cores: 8,
+            mem_total_mb: 32_768,
+            mem_used_mb: 8_000,
+            discos: vec![crate::health::Disco {
+                nombre: "C".into(),
+                montaje: "C:".into(),
+                total_gb: 500.0,
+                usado_gb: 500.0 * disco_pct / 100.0,
+            }],
+            procesos: vec![],
+        }
+    }
+
+    #[test]
+    fn dos_equipos_con_la_misma_unidad_no_comparten_clave() {
+        // LA COLISIÓN QUE HABRÍA ROTO LO REMOTO EL PRIMER DÍA, y no en la
+        // dirección que uno teme: no habría avisado de MÁS, habría avisado de
+        // MENOS. El disco lleno del servidor se callaría porque «ya se dijo»,
+        // refiriéndose al de esta máquina.
+        let local = observa_local(
+            &SysSnapshot {
+                host: String::new(),
+                os: String::new(),
+                kernel: String::new(),
+                cpu_brand: String::new(),
+                cpu_pct: 1.0,
+                per_core: vec![],
+                mem_used: 0,
+                mem_total: 0,
+                swap_used: 0,
+                swap_total: 0,
+                uptime_secs: 0,
+                cores: 1,
+                disks: vec![crate::system::DiskInfo {
+                    name: "Sistema".into(),
+                    mount: "C:".into(),
+                    total: 1_000,
+                    avail: 10,
+                }],
+            },
+            &[],
+            &Umbrales::default(),
+        );
+        let remoto = observa_remoto("SRV-04", &salud(5.0, 99.0), &Umbrales::default());
+        let cl = |v: &[Sintoma]| -> Vec<String> {
+            v.iter().filter(|x| x.clave.contains("disco")).map(|x| x.clave.clone()).collect()
+        };
+        let (a, b) = (cl(&local), cl(&remoto));
+        assert_eq!(a, vec!["disco:C:".to_string()], "la clave local cambió de forma");
+        assert_eq!(b, vec!["SRV-04/disco:C:".to_string()]);
+        assert_ne!(a, b, "las dos máquinas comparten la clave que las dedupica");
+    }
+
+    #[test]
+    fn un_equipo_caido_no_anuncia_que_sus_discos_se_han_arreglado() {
+        // EL ERROR QUE HABRÍA SIDO MUY FÁCIL COMETER: devolver los síntomas de
+        // sus discos en `Ok` para «completar el cuadro» cuando no contesta. La
+        // capa 2 usa un síntoma en `Ok` para declarar RECUPERACIÓN, así que un
+        // servidor que se cae con el disco al 99 % anunciaría, justo al dejar de
+        // responder, que su disco ha vuelto a la normalidad.
+        //
+        // No saber nada de una máquina no es una buena noticia sobre ella.
+        let v = observa_caido("SRV-04", "WinRM: no se pudo conectar");
+        assert_eq!(v.len(), 1, "un equipo caído dio {} síntomas: {:?}", v.len(),
+                   v.iter().map(|x| &x.clave).collect::<Vec<_>>());
+        assert_eq!(v[0].clave, "SRV-04/vivo");
+        assert_eq!(v[0].nivel, Nivel::Critico);
+        assert!(!v.iter().any(|x| x.nivel == Nivel::Ok), "un caído trajo buenas noticias");
+
+        // Y la vuelta sí se anuncia: el síntoma «vivo» en Ok es lo que permite
+        // decir «SRV-04 vuelve a responder».
+        let vivo = observa_remoto("SRV-04", &salud(5.0, 10.0), &Umbrales::default());
+        let v = vivo.iter().find(|x| x.clave == "SRV-04/vivo").expect("falta el síntoma vivo");
+        assert_eq!(v.nivel, Nivel::Ok);
+        assert_eq!(
+            juicio(v, Some((AHORA - MIN_ENTRE_AVISOS, Nivel::Critico))),
+            Motivo::Recuperado
+        );
+    }
+
+    #[test]
+    fn un_equipo_sin_credencial_se_dice_en_vez_de_dejarlo_sin_vigilar() {
+        // Callarlo dejaría un equipo dado de alta al que nadie vigila y nadie
+        // sabe que nadie vigila — el silencio que este proyecto lleva toda la
+        // sesión persiguiendo. El espaciado del freno impide que se convierta en
+        // una cantinela.
+        let v = observa_sin_credencial("SRV-04");
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].nivel, Nivel::Aviso, "una credencial que falta no es una emergencia");
+        assert_eq!(v[0].clave, "SRV-04/credencial");
+        // Y no se pisa con el síntoma de que el equipo esté vivo o caído.
+        assert_ne!(v[0].clave, observa_caido("SRV-04", "x")[0].clave);
+    }
+
+    #[test]
+    fn el_tope_por_pasada_es_por_pasada_y_no_por_equipo() {
+        // Veinte servidores caídos son veinte noticias de verdad, y aun así
+        // veinte globos seguidos no informan de veinte cosas: tapan diecinueve.
+        let mut v = Vec::new();
+        for i in 0..20 {
+            v.extend(observa_caido(&format!("SRV-{i:02}"), "sin respuesta"));
+        }
+        let d = decide(v, &Antes::new(), AHORA);
+        let avisados = d.iter().filter(|x| matches!(x, Decision::Avisa(..))).count();
+        assert_eq!(avisados, MAX_POR_PASADA);
+        // Los otros diecisiete quedan en el registro, no se pierden.
+        assert_eq!(
+            d.iter().filter(|x| matches!(x, Decision::Calla(Motivo::NoCabeEnLaPasada))).count(),
+            17
+        );
+    }
+
+    #[test]
+    fn un_disco_remoto_sin_tamano_no_produce_una_division_por_cero() {
+        let mut s = salud(5.0, 50.0);
+        s.discos[0].total_gb = 0.0;
+        let v = observa_remoto("SRV-04", &s, &Umbrales::default());
+        assert!(!v.iter().any(|x| x.clave.contains("disco")));
     }
 
     #[test]
