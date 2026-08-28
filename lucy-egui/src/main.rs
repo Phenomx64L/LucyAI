@@ -4402,6 +4402,16 @@ struct App {
     /// Sonda de servicios en vuelo. `Some` = hay un hilo trabajando, que es lo
     /// que anima el botón de refresco y lo que impide lanzar una segunda.
     svc_rx: Option<std::sync::mpsc::Receiver<Option<Vec<lucy_core::system::DownService>>>>,
+    /// La pasada del vigilante en vuelo. `Some` = hay un hilo mirando.
+    ///
+    /// Sirve además de cerrojo: sin él, una pasada lenta —un toast tarda
+    /// doscientos milisegundos y pueden salir tres— dejaría arrancar la
+    /// siguiente antes de que la primera escribiera sus avisos, y las dos verían
+    /// el mismo «todavía no se ha dicho nada».
+    vigilante_rx: Option<std::sync::mpsc::Receiver<Vec<lucy_core::watch::Decision>>>,
+    /// Cuándo corrió la última, en epoch. En disco no: si Lucy se cierra y se
+    /// abre, que el vigilante mire enseguida es lo correcto.
+    vigilante_ultima: i64,
     /// Historial de las líneas de tendencia de CPU y RAM.
     cpu_hist: Vec<f32>,
     ram_hist: Vec<f32>,
@@ -4485,6 +4495,17 @@ const WS_DEF: f32 = 340.0;
 /// memoria, leer una página—, y aquí CADA vuelta es un comando en esta máquina.
 /// Ocho alcanzan para una investigación normal —mirar servicios, mirar eventos,
 /// mirar disco, concluir— y se quedan cortos justo donde uno quiere enterarse.
+/// Cada cuánto mira el vigilante, en segundos.
+///
+/// Un minuto. No lo pone la urgencia —la política de `watch` no repetiría un
+/// aviso aunque esto corriera cada segundo— sino el coste: `lo_ya_dicho` hace
+/// una consulta por clave, y con seis claves al segundo son medio millón de
+/// consultas al día para contestar seis veces «ya lo dije».
+///
+/// Un minuto es además el grano del historial de métricas, así que las dos
+/// series hablan de lo mismo.
+const VIGILANTE_CADA_SECS: i64 = 60;
+
 const MAX_LOOPS_DEF: u32 = 8;
 /// Los extremos del ajuste. Abajo, menos de dos no es un bucle. Arriba, el mismo
 /// techo que la V2: quien lo suba hasta ahí sabe lo que hace.
@@ -4836,6 +4857,8 @@ impl App {
             exec_origen: "ai",
             fallos: std::collections::HashMap::new(),
             svc_rx: None,
+            vigilante_rx: None,
+            vigilante_ultima: 0,
             cpu_hist: Vec::new(),
             ram_hist: Vec::new(),
             remote_hosts: lucy_core::hosts::load(),
@@ -5500,6 +5523,7 @@ impl eframe::App for App {
         // tiene que poder cerrarse igual, o el botón se quedaría girando para
         // siempre al volver.
         self.pump_services();
+        self.pump_vigilante();
         // Igual que los servicios: fuera del `if` de la vista, para que una
         // sonda lanzada justo antes de cambiar de pantalla pueda cerrarse.
         if let Some(v) = self.proc_probe.recoger() {
@@ -13141,6 +13165,31 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                 // apuntar una muestra sería cambiar un lujo por lo básico.
                 let _ = lucy_core::history::guarda("local", &m);
             }
+
+            // ── el vigilante ─────────────────────────────────────────────────
+            //
+            // CADA MINUTO Y NO CADA SEGUNDO. La política de `watch` ya impide
+            // repetir un aviso, así que correrlo más a menudo no produciría más
+            // globos — produciría más consultas: `lo_ya_dicho` hace una por
+            // clave, y con seis claves al segundo son medio millón de consultas
+            // al día para contestar seis veces «ya lo dije».
+            //
+            // EN OTRO HILO, y esto no es opcional: mandar un toast lanza un
+            // PowerShell, que son doscientos milisegundos. Hacerlo aquí perdería
+            // doce frames seguidos cada vez que algo se rompe — justo cuando el
+            // operador va a mirar la pantalla.
+            if self.vigilante_rx.is_none()
+                && ahora - self.vigilante_ultima >= VIGILANTE_CADA_SECS
+            {
+                self.vigilante_ultima = ahora;
+                let snap = s.clone();
+                let servicios = self.services.clone();
+                let (tx, rx) = std::sync::mpsc::channel();
+                std::thread::spawn(move || {
+                    let _ = tx.send(lucy_core::watch::pasada(&snap, &servicios, ahora));
+                });
+                self.vigilante_rx = Some(rx);
+            }
         }
 
         // El resumen del historial, cada cinco minutos. Lee hasta cuarenta y
@@ -13224,6 +13273,79 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                 Err(std::sync::mpsc::TryRecvError::Empty) => {}
             }
         }
+    }
+
+    /// Recoge la pasada del vigilante y la deja escrita en el carril de Trace.
+    ///
+    /// SE ANOTA TAMBIÉN LO QUE SE CALLÓ, y es media razón de que exista este
+    /// método. «Me avisa demasiado» y «no me avisó de aquello» son las dos
+    /// quejas que va a recibir esta función, y las dos son imposibles de
+    /// investigar si lo único que queda escrito es lo que sí salió. Con el
+    /// motivo de cada silencio, la conversación deja de ser sobre impresiones.
+    ///
+    /// En una línea plegada y solo cuando hubo algo: seis «nada que decir» por
+    /// minuto llenarían el carril y taparían lo que se está mirando.
+    fn pump_vigilante(&mut self) {
+        let Some(rx) = &self.vigilante_rx else { return };
+        let d = match rx.try_recv() {
+            Ok(d) => d,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.vigilante_rx = None;
+                return;
+            }
+        };
+        self.vigilante_rx = None;
+        let avisados: Vec<&lucy_core::watch::Sintoma> = d
+            .iter()
+            .filter_map(|x| match x {
+                lucy_core::watch::Decision::Avisa(s, _) => Some(s),
+                _ => None,
+            })
+            .collect();
+        // Sin avisos y sin nada callado por una razón interesante, no se escribe
+        // nada: el carril es para lo que pasó, no para demostrar que el
+        // vigilante sigue vivo.
+        let callados_interesantes = d
+            .iter()
+            .filter(|x| {
+                matches!(
+                    x,
+                    lucy_core::watch::Decision::Calla(
+                        lucy_core::watch::Motivo::YaLoDije
+                            | lucy_core::watch::Motivo::DemasiadoPronto
+                            | lucy_core::watch::Motivo::NoCabeEnLaPasada
+                    )
+                )
+            })
+            .count();
+        if avisados.is_empty() && callados_interesantes == 0 {
+            return;
+        }
+        let detalle = d
+            .iter()
+            .map(|x| match x {
+                lucy_core::watch::Decision::Avisa(s, m) => {
+                    format!("avisa  {:<14} {:?}", s.clave, m)
+                }
+                lucy_core::watch::Decision::Calla(m) => format!("calla  {m:?}"),
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let ti = self.tab;
+        self.tabs[ti].ws.trace_push(lucy_core::agent::TraceEntry {
+            phase: if avisados.is_empty() { "info".into() } else { "obs".into() },
+            label: if avisados.is_empty() {
+                i18n::tr("El vigilante miró y se calló").into()
+            } else {
+                i18n::trf(
+                    "El vigilante avisó de {n}",
+                    &[("n", &avisados.len().to_string())],
+                )
+            },
+            detail: detalle,
+            ..Default::default()
+        });
     }
 
     /// Recoge el resultado de la sonda de servicios si ya llegó.

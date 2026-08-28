@@ -1151,6 +1151,20 @@ pub const FRASES: &[Frase] = &[
         "Le sondage distant (`get_remote_health_windows` / `_linux`)",
         "Die Fernabfrage (`get_remote_health_windows` / `_linux`)",
     ),
+    f!(
+        "El vigilante avisó de {n}",
+        "The watcher raised {n}",
+        "O vigilante avisou de {n}",
+        "La sentinelle a signalé {n}",
+        "Der Wächter hat {n} gemeldet",
+    ),
+    f!(
+        "El vigilante miró y se calló",
+        "The watcher looked and stayed quiet",
+        "O vigilante olhou e calou-se",
+        "La sentinelle a regardé et s'est tue",
+        "Der Wächter hat nachgesehen und geschwiegen",
+    ),
     f!("Elegir carpeta…", "Choose folder…", "Escolher pasta…", "Choisir un dossier…", "Ordner wählen…"),
     f!(
         "Elige la carpeta de un skill, o una que contenga varios — un repositorio descargado sirve tal cual",
