@@ -23,6 +23,18 @@ winresource = "0.1"
 # tests en verde porque prueban la serialización, no el almacén.
 eframe = { version = "0.29", features = ["persistence"] }
 egui = "0.29"
+# Para alcanzar el HWND y pedirle a Windows las esquinas redondeadas y la sombra.
+#
+# NO AÑADE NADA AL ÁRBOL: ya estaba dentro, en la misma versión, porque la usan
+# eframe y winit. Declararla aquí solo la hace NOMBRABLE — eframe no la
+# reexporta, así que sin esta línea el trait `HasWindowHandle` que
+# `CreationContext` implementa no se puede ni mencionar.
+#
+# Y no hace falta el crate `windows`: son dos llamadas a `dwmapi.dll`, y ese
+# crate son cientos de megas de metadatos compilados para declarar una función.
+# Se declaran a mano, como ya se hace con `reg.exe` para leer el tema del
+# sistema en vez de arrastrar `winreg` por una consulta.
+raw-window-handle = "0.6"
 egui_commonmark = "0.18"
 proto-core = { path = "../proto-core" }
 dirs = "5"

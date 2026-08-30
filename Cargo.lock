@@ -3700,6 +3700,7 @@ dependencies = [
  "keyring",
  "lucy-core",
  "proto-core",
+ "raw-window-handle",
  "rfd",
  "serde",
  "serde_json",

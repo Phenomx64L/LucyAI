@@ -16,6 +16,8 @@ mod avatar;
 mod drain;
 mod i18n;
 mod icons;
+#[cfg(windows)]
+mod marco;
 mod prompt;
 mod theme;
 mod voice;
@@ -148,6 +150,18 @@ fn main() -> eframe::Result {
                     .unwrap_or(theme::Mode::Dark),
             );
             theme::apply(&cc.egui_ctx);
+            // LA FORMA DE LA VENTANA, que hasta ahora no la ponía nadie.
+            //
+            // `with_decorations(false)` quita el marco del sistema entero, y con
+            // él se van las esquinas redondeadas de Windows 11 y la sombra. El
+            // resultado es un rectángulo exacto pegado al escritorio — que es
+            // literalmente lo que se reportó: «el marco de la ventana es muy
+            // cuadrada y rompe mucho la estética».
+            //
+            // AQUÍ Y NO EN CADA FOTOGRAMA: son dos propiedades que el gestor de
+            // escritorio conserva. Ver `marco::redondea`.
+            #[cfg(windows)]
+            marco::redondea(cc);
             Ok(Box::new(App::new(cc.storage)))
         }),
     )
