@@ -5855,7 +5855,12 @@ impl eframe::App for App {
                     // Con el del módulo se va también el distintivo «COCKPIT»
                     // que salía en Terminal IA: era el nombre de la interfaz en
                     // la V2, y aquí no distingue nada de nada.
-                    ui.label(egui::RichText::new(i18n::tr("✦ Lucy")).color(theme::acc()).strong().size(15.0));
+                    ui.label(
+                        egui::RichText::new(i18n::tr("✦ Lucy"))
+                            .color(theme::acc())
+                            .strong()
+                            .size(theme::FS_HEADING),
+                    );
                     right(ui, 30.0, |ui| self.window_buttons(ui));
                 });
             });
@@ -5868,14 +5873,14 @@ impl eframe::App for App {
                 ui.horizontal_centered(|ui| {
                     let host = lucy_core::system::hostname();
                     ui.label(egui::RichText::new("●").color(theme::acc()).size(9.0));
-                    ui.label(egui::RichText::new(host.to_uppercase()).color(theme::txt3()).size(10.5));
+                    ui.label(egui::RichText::new(host.to_uppercase()).color(theme::txt3()).size(theme::FS_BAR));
                     ui.add_space(10.0);
                     let (pty_glyph, pty_color) = if self.pty.is_some() {
                         ("▸ PTY", theme::txt3())
                     } else {
                         ("✕ PTY", theme::amber())
                     };
-                    ui.label(egui::RichText::new(pty_glyph).color(pty_color).size(10.5));
+                    ui.label(egui::RichText::new(pty_glyph).color(pty_color).size(theme::FS_BAR));
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         // LOS AVISOS SIN LEER, EN EL SITIO QUE SE VE SIEMPRE.
@@ -5896,7 +5901,7 @@ impl eframe::App for App {
                                     &[("n", &self.avisos_sin_ver.to_string())],
                                 ))
                                 .color(theme::amber())
-                                .size(10.5),
+                                .size(theme::FS_BAR),
                             );
                             if r.on_hover_text(i18n::tr(
                                 "Avisos del vigilante que no has marcado como leídos. Se gestionan en Configuración.",
@@ -5919,7 +5924,7 @@ impl eframe::App for App {
                         //
                         // En su lugar, lo que sí lleva a una decisión.
                         ui.label(
-                            egui::RichText::new(&self.chat_model).color(theme::txt3()).size(10.5),
+                            egui::RichText::new(&self.chat_model).color(theme::txt3()).size(theme::FS_BAR),
                         );
                         // EL MODO FIJADO, siempre que lo haya. Cambia todas las
                         // respuestas y sobrevive al cierre: sin verlo, dentro de
@@ -5930,7 +5935,7 @@ impl eframe::App for App {
                             ui.label(
                                 egui::RichText::new(i18n::trf("modo {p}", &[("p", &p)]))
                                     .color(theme::acc())
-                                    .size(10.5),
+                                    .size(theme::FS_BAR),
                             )
                             .on_hover_text(
                                 "Un skill fijado enmarca todas las respuestas. Se quita con \
@@ -5944,7 +5949,7 @@ impl eframe::App for App {
                         if self.privacy {
                             ui.add_space(10.0);
                             ui.label(
-                                egui::RichText::new(i18n::tr("privado")).color(theme::acc()).size(10.5),
+                                egui::RichText::new(i18n::tr("privado")).color(theme::acc()).size(theme::FS_BAR),
                             )
                             .on_hover_text(i18n::tr(
                                 "Modo privacidad: nada sale de este equipo. Solo modelos \
@@ -5963,7 +5968,7 @@ impl eframe::App for App {
                                 egui::RichText::new(format!("auto {usados}/{tope}"))
                                     .color(if usados >= tope { theme::amber() } else { theme::acc() })
                                     .monospace()
-                                    .size(10.5),
+                                    .size(theme::FS_BAR),
                             )
                             .on_hover_text(
                                 "Pasos que Lucy ha encadenado sola en esta orden. Al \
@@ -5983,7 +5988,7 @@ impl eframe::App for App {
                                 egui::RichText::new(lucy_core::pricing::fmt_usd(c))
                                     .color(if c > 0.0 { theme::txt3() } else { theme::faint() })
                                     .monospace()
-                                    .size(10.5),
+                                    .size(theme::FS_BAR),
                             )
                             .on_hover_text(i18n::trf(
                                 "{ent} tokens de entrada, {sal} de salida en esta terminal",
@@ -5997,7 +6002,7 @@ impl eframe::App for App {
                             None => ui.label(
                                 egui::RichText::new(i18n::tr("coste n/d"))
                                     .color(theme::faint())
-                                    .size(10.5),
+                                    .size(theme::FS_BAR),
                             )
                             .on_hover_text(i18n::tr("Este modelo no tiene precio en el catálogo")),
                         };
@@ -6537,7 +6542,7 @@ impl App {
                          los comandos que propone.",
                     ))
                     .color(theme::txt3())
-                    .size(11.0),
+                    .size(theme::FS_CAPTION),
                 );
                 ui.add_space(8.0);
 
@@ -6609,7 +6614,7 @@ impl App {
                     ui.label(
                         egui::RichText::new(&self.workdir_msg)
                             .color(theme::red())
-                            .size(11.0),
+                            .size(theme::FS_CAPTION),
                     );
                 }
             },
@@ -6772,15 +6777,29 @@ impl App {
             ui.add_space(14.0);
             ui.label(
                 egui::RichText::new(greeting(&user_name()))
-                    .size(22.0)
+                    .size(theme::FS_DISPLAY)
                     .color(theme::txt()),
             );
             ui.add_space(8.0);
+            // TRADUCIDA, Y LA TRADUCCIÓN YA ESTABA. Las cinco versiones llevan
+            // en la tabla desde que se escribió la pantalla; lo que faltaba era
+            // el `tr` de este sitio, así que un operador en inglés abría Lucy y
+            // lo primero que leía era una frase en español. El test que vigila
+            // las traducciones busca literales DENTRO de `tr(...)`, así que una
+            // frase que no pasa por ahí le es invisible: no falló nadie, es que
+            // no había quien mirara.
+            //
+            // Y SIN EL SALTO DE LÍNEA A MANO. Iba partida en dos con un `\n` en
+            // el sitio donde quedaba bien en la ventana de quien la escribió; en
+            // una estrecha partía dos veces y en una ancha dejaba media línea
+            // vacía. Con el ancho acotado, la parte quien sabe cuánto mide cada
+            // palabra — que además es distinto en los cinco idiomas.
+            ui.set_max_width(420.0);
             ui.label(
-                egui::RichText::new(
-                    "Escribe una orden y Lucy la ejecuta — el plan, la salida y el trace\n\
+                egui::RichText::new(i18n::tr(
+                    "Escribe una orden y Lucy la ejecuta — el plan, la salida y el trace \
                      se llenan en el workspace →",
-                )
+                ))
                 .size(theme::FS_BODY)
                 .color(theme::txt3()),
             );
@@ -6910,7 +6929,7 @@ impl App {
                                     .show(ui, |ui| {
                                         ui.label(
                                             egui::RichText::new(&text)
-                                                .size(13.5)
+                                                .size(theme::FS_BODY)
                                                 .color(theme::txt()),
                                         );
                                     });
@@ -8118,9 +8137,9 @@ fn orden_de_ventana(icon: icons::Icon, maximizada: bool) -> egui::ViewportComman
         if let Some(ruta) = args.trim().strip_prefix("install") {
             let ruta = ruta.trim();
             if ruta.is_empty() {
-                self.di(
+                self.di(i18n::tr(
                     r"Dime de dónde: `/skills install C:\ruta\al\skill`. Vale la carpeta de un skill, o una que contenga varios — un repositorio descargado sirve tal cual.",
-                );
+                ));
                 return;
             }
             let m = match lucy_core::skills::user_dir() {
@@ -13935,7 +13954,7 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
             // La unidad se alinea por ABAJO con la cifra: centrada, el `%` flota
             // a media altura del número y parece un exponente.
             let is_text = !k.text.is_empty();
-            let vsize = if is_text { theme::FS_HEADING } else { 28.0 };
+            let vsize = if is_text { theme::FS_HEADING } else { theme::FS_HERO };
             row_align(ui, vsize * 1.45, egui::Align::Max, |ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
                 if is_text {
@@ -13964,7 +13983,7 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                 if !k.unit.is_empty() {
                     ui.label(
                         egui::RichText::new(k.unit)
-                            .size(14.0)
+                            .size(theme::FS_HEADING)
                             .color(theme::txt3()),
                     );
                 }
@@ -15654,7 +15673,7 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                 // en la deuda de traducción sin aportar nada.
                 ui.label(
                     egui::RichText::new(format!("{pct:.1}%", pct = s.cpu_pct))
-                        .size(22.0)
+                        .size(theme::FS_DISPLAY)
                         .color(c),
                 );
                 ui.label(
@@ -15672,7 +15691,7 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
             card_on(ui, egui::vec2(ancho, 92.0), 14.0, theme::bg2(), |ui| {
                 panel_title(ui, icons::Icon::Ram, "Memoria");
                 ui.add_space(6.0);
-                ui.label(egui::RichText::new(format!("{pct:.1}%")).size(22.0).color(c));
+                ui.label(egui::RichText::new(format!("{pct:.1}%")).size(theme::FS_DISPLAY).color(c));
                 ui.label(
                     egui::RichText::new(i18n::trf(
                         "{usado} de {total} MB",

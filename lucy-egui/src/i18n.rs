@@ -206,6 +206,16 @@ pub fn modelo(nombre: &str) -> String {
 ///
 /// Público porque lo usa el test que compara plantilla y traducciones, y ese
 /// test es la mitad del valor de este mecanismo.
+///
+/// Y SOLO LO USA ESE TEST, así que en la compilación normal está muerta y el
+/// compilador lo dice. Se silencia AQUÍ y con el motivo, en vez de dejar que el
+/// aviso salga en cada `cargo build`: un aviso que sale siempre y que todo el
+/// mundo sabe que no importa es un sitio donde el siguiente aviso —el que sí
+/// importa— pasa desapercibido. Se comprobó antes de callarlo: el test es
+/// `las_plantillas_conservan_sus_huecos_en_los_cinco_idiomas`, y lo que vigila
+/// es que una traducción no se deje un `{n}` por el camino, que es un valor que
+/// desaparece de la frase sin que falle nada.
+#[allow(dead_code)]
 pub fn huecos(s: &str) -> Vec<&str> {
     let mut v = Vec::new();
     let mut resto = s;
@@ -952,6 +962,18 @@ pub const FRASES: &[Frase] = &[
         "Dicter une règle que Lucy applique toujours",
         "Eine Regel festlegen, die Lucy immer anwendet",
     ),
+    f!(
+        "Dime de dónde: `/skills install C:\\ruta\\al\\skill`. Vale la carpeta de un \
+         skill, o una que contenga varios — un repositorio descargado sirve tal cual.",
+        "Tell me where: `/skills install C:\\path\\to\\skill`. A skill folder works, or one \
+         holding several — a downloaded repository works as it is.",
+        "Diz-me de onde: `/skills install C:\\caminho\\para\\skill`. Serve a pasta de um \
+         skill, ou uma que contenha vários — um repositório descarregado serve tal como está.",
+        "Dis-moi d'où : `/skills install C:\\chemin\\vers\\skill`. Le dossier d'un skill \
+         convient, ou un qui en contient plusieurs — un dépôt téléchargé marche tel quel.",
+        "Sag mir woher: `/skills install C:\\pfad\\zum\\skill`. Der Ordner eines Skills geht, \
+         oder einer mit mehreren — ein heruntergeladenes Repository passt so wie es ist.",
+    ),
     f!("Dirección", "Address", "Endereço", "Adresse", "Adresse"),
     f!(
         "Directorio de trabajo",
@@ -1243,15 +1265,15 @@ pub const FRASES: &[Frase] = &[
         "Schreib einen Befehl, oder sag mir, was du wissen willst, und ich übersetze es.",
     ),
     f!(
-        "Escribe una orden y Lucy la ejecuta — el plan, la salida y el trace\n\
+        "Escribe una orden y Lucy la ejecuta — el plan, la salida y el trace \
          se llenan en el workspace →",
-        "Type a command and Lucy runs it — the plan, the output and the trace\n\
+        "Type a command and Lucy runs it — the plan, the output and the trace \
          fill up in the workspace →",
-        "Escreve uma ordem e a Lucy executa-a — o plano, a saída e o rasto\n\
+        "Escreve uma ordem e a Lucy executa-a — o plano, a saída e o rasto \
          preenchem-se no workspace →",
-        "Écris une commande et Lucy l'exécute — le plan, la sortie et la trace\n\
+        "Écris une commande et Lucy l'exécute — le plan, la sortie et la trace \
          se remplissent dans le workspace →",
-        "Schreib einen Befehl und Lucy führt ihn aus — Plan, Ausgabe und Spur\n\
+        "Schreib einen Befehl und Lucy führt ihn aus — Plan, Ausgabe und Spur \
          füllen sich im Workspace →",
     ),
     f!(
@@ -2172,6 +2194,13 @@ pub const FRASES: &[Frase] = &[
         "Não foi possível verificar: {e}",
         "Impossible de vérifier : {e}",
         "Prüfung fehlgeschlagen: {e}",
+    ),
+    f!(
+        "No se pudo sondear el equipo",
+        "Could not probe the machine",
+        "Não se conseguiu sondar o equipamento",
+        "Impossible de sonder la machine",
+        "Der Rechner konnte nicht abgefragt werden",
     ),
     f!(
         "No se pudo traducir: {e}",

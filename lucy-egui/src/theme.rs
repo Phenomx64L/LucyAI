@@ -187,8 +187,27 @@ pub fn txt3() -> Color32 {
     if light() { Color32::from_rgb(0x57, 0x63, 0x6F) } else { Color32::from_rgb(0x98, 0xA2, 0xAE) }
 }
 /// `--text-faint` — rótulos de instrumento, subtítulos, pistas.
+///
+/// SUBIDO HASTA QUE SE LEE, y lo que había antes no se leía. Los valores viejos
+/// —`#8792A0` en claro, `#5C6672` en oscuro— dan 2.74 y 2.81 de contraste contra
+/// el lienzo. El mínimo de la norma para texto pequeño es 4.5, y ni siquiera
+/// llegaban al 3.0 que se le pide a una LÍNEA o a un icono.
+///
+/// No era un color de adorno pagando el precio de serlo: de sus ciento tres
+/// usos, prácticamente todos son TEXTO —los rótulos de instrumento («DISCO
+/// SISTEMA») y las dos líneas de detalle de cada tarjeta KPI— y ninguno es
+/// pintura. O sea que el peldaño más flojo de la escalera llevaba encima las
+/// etiquetas que dicen qué es cada número, a diez y once puntos.
+///
+/// El precio es que se acerca a `txt3`, y se acepta a sabiendas: la escalera
+/// pierde algo de separación en el último tramo (4.50 contra 5.32 en claro) y
+/// gana que ese tramo exista de verdad. Un peldaño ilegible no es un peldaño.
+///
+/// Los dos valores son el más cercano al original que llega a 4.5 moviendo SOLO
+/// la luminosidad: el tono y la saturación no se tocan, así que es el mismo gris
+/// azulado de siempre.
 pub fn faint() -> Color32 {
-    if light() { Color32::from_rgb(0x87, 0x92, 0xA0) } else { Color32::from_rgb(0x5C, 0x66, 0x72) }
+    if light() { Color32::from_rgb(0x62, 0x6E, 0x7C) } else { Color32::from_rgb(0x7C, 0x88, 0x95) }
 }
 /// `--text-disabled` — inactivo.
 #[allow(dead_code)]
@@ -224,20 +243,34 @@ pub struct Paleta {
 }
 
 /// Las paletas disponibles. La primera es la de casa.
+///
+/// LOS DOS ACENTOS CLAROS SE OSCURECIERON UN PASO MÁS, y no es un cambio de
+/// gusto: es terminar algo que el CSS ya había empezado. `cockpit-tokens.css`
+/// dice al lado del valor «emerald oscurecido para contraste sobre blanco», así
+/// que la intención estaba escrita — pero medido, `#12A379` daba 2.78 sobre el
+/// lienzo claro. Ni el 4.5 de la norma para texto, ni el 3.0 que se le pide a una
+/// barra o a un icono. El oscurecido se había quedado a medio camino.
+///
+/// Esmeralda y Cian, y solo ellas. Violeta (5.15) y Magenta (4.61) ya pasaban, y
+/// los cuatro acentos oscuros pasan de sobra —el más flojo va por 6.10—, porque
+/// sobre un lienzo casi negro un color saturado tiene todo el margen del mundo.
+///
+/// El hover baja lo mismo que bajaba antes, para que la distancia entre reposo y
+/// hover siga siendo la que era.
 pub const PALETAS: &[Paleta] = &[
     Paleta {
         nombre: "Esmeralda",
         clave: "esmeralda",
-        claro: (0x12, 0xA3, 0x79),
-        claro_hover: (0x0E, 0x8A, 0x66),
+        claro: (0x0E, 0x7B, 0x5B),
+        claro_hover: (0x0C, 0x67, 0x4C),
         oscuro: (0x3D, 0xD6, 0xA4),
         oscuro_hover: (0x34, 0xC2, 0x96),
     },
     Paleta {
         nombre: "Cian",
         clave: "cian",
-        claro: (0x0E, 0x8F, 0xA8),
-        claro_hover: (0x0B, 0x77, 0x8C),
+        claro: (0x0C, 0x77, 0x8C),
+        claro_hover: (0x0B, 0x68, 0x7B),
         oscuro: (0x4C, 0xD2, 0xE8),
         oscuro_hover: (0x3F, 0xBC, 0xD1),
     },
@@ -355,6 +388,18 @@ pub fn red_bg() -> Color32 {
 
 /// `--fs-micro` — rótulo de instrumento (mono, versalitas, con tracking).
 pub const FS_MICRO: f32 = 10.0;
+/// La barra de estado de arriba, medio punto por debajo de `FS_CAPTION`.
+///
+/// EXISTÍA YA, PERO COMO NUEVE `10.5` SUELTOS. Es una tira horizontal que no
+/// puede envolver ni desbordar y que lleva el equipo, el modelo, el modo fijado y
+/// los avisos sin leer a la vez; medio punto menos es lo que hace que quepan en
+/// una ventana estrecha. Eso es un PAPEL, y un papel se nombra: escrito nueve
+/// veces a mano, el décimo sitio lo pone a 11 sin querer y la tira deja de estar
+/// alineada consigo misma.
+///
+/// Medio punto y no uno: a 10 se confunde con el rótulo de instrumento, que es
+/// otra cosa —versalitas, mono, con tracking— y a 11 no cabe.
+pub const FS_BAR: f32 = 10.5;
 /// `--fs-caption` — etiquetas de sección, metadatos.
 pub const FS_CAPTION: f32 = 11.0;
 /// `--fs-footnote` — chips, secundario.
@@ -365,8 +410,33 @@ pub const FS_BODY: f32 = 13.0;
 pub const FS_HEADING: f32 = 15.0;
 /// `--fs-title` — título de vista.
 pub const FS_TITLE: f32 = 18.0;
+
+// ── El tramo de display ──────────────────────────────────────────────────────
+//
+// LA ESCALA NO LLEGABA HASTA ARRIBA, y por eso el código tenía un `22.0` en tres
+// sitios y un `28.0` en el que más se mira de la aplicación. No era gente
+// saltándose el sistema: era el sistema quedándose corto. Una cifra héroe no es
+// «un título de vista un poco más grande»; es el elemento que ES la tarjeta, y
+// no tenía nombre.
+//
+// Dos y no uno, porque hay dos tamaños de tarjeta: la del panel local, donde la
+// cifra manda sobre todo lo demás, y la de un equipo remoto o el saludo, que
+// comparten sitio con más cosas.
+
+/// La cifra que ES la tarjeta: el número grande del KPI local.
+pub const FS_HERO: f32 = 28.0;
+/// La cifra o la frase que manda en una tarjeta compartida: los equipos
+/// remotos, el saludo de la pantalla de bienvenida.
+pub const FS_DISPLAY: f32 = 22.0;
+
 /// `--ls-label` — `0.09em`, el tracking de los rótulos de instrumento.
 pub const LS_LABEL: f32 = 0.09;
+
+// LOS GLIFOS NO SON ESTA ESCALA, y por eso no están aquí. Un `●` de estado a 7,
+// un `✦` de avatar a 40 o un `⚠` a 12 se miden contra la CAJA que ocupan y
+// contra el texto que llevan al lado, no contra un papel tipográfico: son
+// dibujos hechos con una fuente. Meterlos en la escala obligaría a inventar un
+// nombre por cada tamaño de punto y no haría el código más claro.
 
 // ── Movimiento ───────────────────────────────────────────────────────────────
 // En segundos, que es lo que piden las funciones de animación de egui.
@@ -623,17 +693,18 @@ pub fn importance_color(importance: i64) -> Color32 {
     }
 }
 
-/// Color de la barra de una métrica general (CPU, RAM, disco de sistema).
-///
-/// Acento hasta el 90 %, y solo entonces peligro. Los umbrales no son uno solo
-/// para todo el panel a propósito — ver `core_color`.
-pub fn meter_color(pct: f32) -> Color32 {
-    if pct >= 90.0 {
-        red()
-    } else {
-        acc()
-    }
-}
+// AQUÍ ESTABAN `meter_color` Y `disk_color`, y se han ido.
+//
+// Repartían color por umbral —uno saltaba a rojo en 90 sin ámbar, el otro avisaba
+// en ámbar desde 80— mientras la tira de alertas usaba 86 y la tarjeta del mismo
+// volumen otro más. Tres cortes para el mismo número en la misma pantalla, y el
+// mismo disco al 85 % salía verde, ámbar y sin avisar a la vez.
+//
+// Los sustituyó `main::color_nivel`, que solo PINTA lo que ya decidió
+// `lucy_core::thresholds`. El compilador las daba por muertas hace tiempo y sus
+// tests las mantenían vivas lo justo para que nadie lo notara. Se borran en vez
+// de dejarlas con un `#[allow(dead_code)]`: mientras existan, son dos funciones
+// con nombre razonable esperando a que alguien las llame y reponga el bug.
 
 /// Color de un acierto de búsqueda semántica, por su parecido (0-1).
 ///
@@ -647,20 +718,6 @@ pub fn match_color(score: f32) -> Color32 {
         txt2()
     } else {
         faint()
-    }
-}
-
-/// Color de un volumen: rojo desde 90, ámbar desde 80.
-///
-/// Un disco lleno no se arregla solo, así que avisa antes que la CPU: el aviso
-/// llega cuando todavía queda margen para actuar.
-pub fn disk_color(pct: f32) -> Color32 {
-    if pct >= 90.0 {
-        red()
-    } else if pct >= 80.0 {
-        amber()
-    } else {
-        acc()
     }
 }
 
@@ -698,7 +755,12 @@ mod tests {
         assert_eq!(bg3(), Color32::from_rgb(0x13, 0x1A, 0x22), "--surface-2");
         assert_eq!(acc(), Color32::from_rgb(0x3D, 0xD6, 0xA4), "--accent");
         assert_eq!(txt(), Color32::from_rgb(0xE8, 0xED, 0xF2), "--text-primary");
-        assert_eq!(faint(), Color32::from_rgb(0x5C, 0x66, 0x72), "--text-faint");
+        // `--text-faint` va con el valor SUBIDO, en los dos ficheros. El de la
+        // hoja de estilos —`#5C6672`— daba 2.81 de contraste y no se leía; se
+        // corrigió allí y aquí a la vez, que es de lo que va este test: que las
+        // dos caras digan lo mismo. Si alguien lo baja en uno de los dos, esto
+        // salta antes de que las interfaces diverjan.
+        assert_eq!(faint(), Color32::from_rgb(0x7C, 0x88, 0x95), "--text-faint");
         assert_eq!(amber(), Color32::from_rgb(0xE5, 0xB5, 0x67), "--warning");
         assert_eq!(red(), Color32::from_rgb(0xF0, 0x6E, 0x6E), "--danger");
         assert_eq!(blue(), Color32::from_rgb(0x80, 0x98, 0xFF), "--user");
@@ -720,12 +782,19 @@ mod tests {
         // Los mismos NOMBRES de token con la escala de luminosidad al revés, no
         // una inversión aritmética. Y el detalle que el CSS deja escrito: la
         // esmeralda de identidad NO pasa contraste como texto sobre blanco, así
-        // que en claro se oscurece a #12A379 — mismo carácter, legible.
+        // que en claro se oscurece.
+        //
+        // HASTA `#0E7B5B`, Y NO HASTA `#12A379` COMO DECÍA ANTES. La frase del
+        // CSS era correcta y el número no la cumplía: `#12A379` da 2.78 sobre el
+        // lienzo claro, o sea que el oscurecido se quedó a medio camino y el
+        // comentario lo daba por hecho. Quien lo comprueba es
+        // `las_cuatro_paletas_se_ven_en_los_dos_modos`; aquí solo se fija el
+        // valor para que las dos caras no se separen.
         let _t = serie();
         set_mode(Mode::Light);
         assert!(light());
         assert_eq!(bg(), Color32::from_rgb(0xF4, 0xF6, 0xFA), "--surface-0 claro");
-        assert_eq!(acc(), Color32::from_rgb(0x12, 0xA3, 0x79), "--accent claro");
+        assert_eq!(acc(), Color32::from_rgb(0x0E, 0x7B, 0x5B), "--accent claro");
         assert_eq!(txt(), Color32::from_rgb(0x0E, 0x16, 0x21), "--text-primary claro");
         set_mode(Mode::Dark);
     }
@@ -774,16 +843,147 @@ mod tests {
         assert_eq!(core_color(60.0, 12.0), acc());
     }
 
+    // ── Contraste ────────────────────────────────────────────────────────────
+    //
+    // ESTE ES EL TEST QUE FALTABA, y su ausencia es la razón de que hubiera que
+    // arreglar nada. El que sí había —`el_texto_se_ve_sobre_su_fondo_en_los_dos_
+    // temas`— compara la luminancia de `bg` con la de `txt` y pide 120 de
+    // diferencia: pasaba holgado mientras `faint` iba por 2.74 y el acento claro
+    // por 2.78. Comprobaba el peldaño más fácil de la escalera y ninguno de los
+    // que fallaban.
+
+    /// La fórmula de contraste de la WCAG. Es aritmética, no una opinión.
+    fn contraste(a: Color32, b: Color32) -> f32 {
+        let canal = |c: u8| {
+            let c = c as f32 / 255.0;
+            if c <= 0.03928 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+        };
+        let lum = |c: Color32| {
+            0.2126 * canal(c.r()) + 0.7152 * canal(c.g()) + 0.0722 * canal(c.b())
+        };
+        let (x, y) = (lum(a), lum(b));
+        (x.max(y) + 0.05) / (x.min(y) + 0.05)
+    }
+
+    /// Las cuatro superficies sobre las que puede caer algo.
+    fn superficies() -> [Color32; 4] {
+        [bg(), bg2(), bg3(), bg4()]
+    }
+
+    /// El mínimo de la norma para texto normal. Todo lo que se lee tiene que
+    /// llegar aquí, contra CUALQUIERA de las superficies — no contra la mejor.
+    const AA: f32 = 4.5;
+
     #[test]
-    fn los_umbrales_de_disco_avisan_antes_que_los_de_cpu() {
-        assert_eq!(disk_color(79.9), acc());
-        assert_eq!(disk_color(80.0), amber());
-        assert_eq!(disk_color(89.9), amber());
-        assert_eq!(disk_color(90.0), red());
-        // Y la barra general no se tiñe en ese mismo punto: un 80 % de RAM no es
-        // lo mismo que un 80 % de disco.
-        assert_eq!(meter_color(80.0), acc());
-        assert_eq!(meter_color(90.0), red());
+    fn toda_la_escalera_de_texto_se_lee_en_los_dos_temas() {
+        let _t = serie();
+        for m in [Mode::Dark, Mode::Light] {
+            set_mode(m);
+            for (nombre, color) in
+                [("txt", txt()), ("txt2", txt2()), ("txt3", txt3()), ("faint", faint())]
+            {
+                for (i, s) in superficies().iter().enumerate() {
+                    let r = contraste(color, *s);
+                    assert!(
+                        r >= AA,
+                        "{m:?}: {nombre} sobre la superficie {i} da {r:.2}, y hace falta {AA}"
+                    );
+                }
+            }
+        }
+        set_mode(Mode::Dark);
+    }
+
+    #[test]
+    fn la_escalera_sigue_siendo_una_escalera() {
+        // Subir `faint` hasta que se lea lo acerca a `txt3`. Que llegue a
+        // ADELANTARLO sería otra cosa: entonces el peldaño flojo pintaría más
+        // fuerte que el de encima y la jerarquía diría lo contrario de lo que
+        // significa. Con margen, para que un retoque futuro no los cruce por
+        // centésimas.
+        let _t = serie();
+        for m in [Mode::Dark, Mode::Light] {
+            set_mode(m);
+            let c = |x: Color32| contraste(x, bg());
+            assert!(c(txt()) > c(txt2()) + 0.5, "{m:?}: txt no manda sobre txt2");
+            assert!(c(txt2()) > c(txt3()) + 0.5, "{m:?}: txt2 no manda sobre txt3");
+            assert!(c(txt3()) > c(faint()) + 0.5, "{m:?}: txt3 no manda sobre faint");
+        }
+        set_mode(Mode::Dark);
+    }
+
+    #[test]
+    fn las_cuatro_paletas_se_ven_en_los_dos_modos() {
+        // EL ACENTO NO ES SOLO DECORACIÓN. De sus noventa y seis usos, seis son
+        // texto —el nombre de Lucy en la cabecera, el chip «privado» a diez
+        // puntos y medio— así que el listón es el de texto y no el de gráfico.
+        //
+        // Y se comprueban las CUATRO: el operador elige, y una paleta que solo
+        // se ha mirado en oscuro es una paleta que falla el día que alguien pasa
+        // a claro. Violeta y Magenta ya pasaban; Esmeralda y Cian no, y por eso
+        // se tocaron.
+        let _t = serie();
+        for (i, p) in PALETAS.iter().enumerate() {
+            for (m, base, hover) in [
+                (Mode::Dark, p.oscuro, p.oscuro_hover),
+                (Mode::Light, p.claro, p.claro_hover),
+            ] {
+                set_mode(m);
+                set_paleta(i);
+                for (que, (r, g, b)) in [("acento", base), ("hover", hover)] {
+                    let c = Color32::from_rgb(r, g, b);
+                    for (j, s) in superficies().iter().enumerate() {
+                        let v = contraste(c, *s);
+                        assert!(
+                            v >= AA,
+                            "{} en {m:?}: el {que} sobre la superficie {j} da {v:.2}, \
+                             y hace falta {AA}",
+                            p.nombre
+                        );
+                    }
+                }
+            }
+        }
+        set_paleta(0);
+        set_mode(Mode::Dark);
+    }
+
+    #[test]
+    fn el_hover_del_acento_se_distingue_del_reposo() {
+        // Si el hover empatara con el reposo, el control no contestaría al ratón
+        // — y al oscurecer los dos acentos claros para ganar contraste, el hover
+        // es justo lo que se podía haber quedado plano.
+        let _t = serie();
+        for (i, p) in PALETAS.iter().enumerate() {
+            set_paleta(i);
+            for m in [Mode::Dark, Mode::Light] {
+                set_mode(m);
+                assert_ne!(acc(), acc_hover(), "{} en {m:?}", p.nombre);
+            }
+        }
+        set_paleta(0);
+        set_mode(Mode::Dark);
+    }
+
+    #[test]
+    fn la_escala_tipografica_esta_ordenada_y_sin_empates() {
+        // Dos papeles con el mismo número no son dos papeles: son uno con dos
+        // nombres, y el segundo se usa creyendo que cambia algo.
+        let escala = [
+            ("MICRO", FS_MICRO),
+            ("BAR", FS_BAR),
+            ("CAPTION", FS_CAPTION),
+            ("FOOTNOTE", FS_FOOTNOTE),
+            ("BODY", FS_BODY),
+            ("HEADING", FS_HEADING),
+            ("TITLE", FS_TITLE),
+            ("DISPLAY", FS_DISPLAY),
+            ("HERO", FS_HERO),
+        ];
+        for par in escala.windows(2) {
+            let ((na, a), (nb, b)) = (par[0], par[1]);
+            assert!(a < b, "{na} ({a}) no va por debajo de {nb} ({b})");
+        }
     }
 
     #[test]
