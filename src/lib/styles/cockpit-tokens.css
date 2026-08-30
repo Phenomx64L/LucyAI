@@ -49,7 +49,13 @@
   --text-primary:   #E8EDF2;  /* headings, active labels, user message text     */
   --text-secondary: #C7D0D9;  /* body / Lucy narrative                          */
   --text-muted:     #98A2AE;  /* labels, secondary chips, timestamps            */
-  --text-faint:     #5C6672;  /* hints, pending steps, placeholder              */
+  /* Subido de #5C6672, que daba 2.81 de contraste sobre el lienzo: por debajo
+     del 4.5 que pide la norma para texto pequeño y por debajo incluso del 3.0
+     de una línea. No es un color de adorno —lleva los rótulos de instrumento y
+     el detalle de cada tarjeta, a 10 y 11 px—, así que el peldaño más flojo de
+     la escalera era el que no se leía. Mismo tono y misma saturación; solo sube
+     la luminosidad hasta el mínimo que pasa. */
+  --text-faint:     #7C8895;  /* hints, pending steps, placeholder              */
   --text-disabled:  #3C4550;  /* pending-step icon, inactive                    */
 
   /* ── Accent · Lucy's emerald (identity, refined — desaturated vs. old neon) ─
@@ -179,14 +185,20 @@
   --text-primary:   #0E1621;
   --text-secondary: #2B3742;
   --text-muted:     #57636F;
-  --text-faint:     #8792A0;
+  /* Subido de #8792A0 por lo mismo que su gemelo oscuro: daba 2.74. */
+  --text-faint:     #626E7C;
   --text-disabled:  #B4BDC7;
 
-  --accent:      #12A379;   /* emerald oscurecido para contraste sobre blanco   */
-  --accent-hover:#0E8A66;
+  /* OSCURECIDO DE VERDAD, que antes se quedó a medio camino. El comentario de
+     aquí ya decía «oscurecido para contraste sobre blanco» y era la intención
+     correcta, pero #12A379 da 2.78 sobre el lienzo claro: ni el 4.5 de texto ni
+     el 3.0 de una barra. #0E7B5B es el más cercano al original que llega a 4.5
+     moviendo solo la luminosidad. El hover baja lo mismo que bajaba antes. */
+  --accent:      #0E7B5B;   /* emerald oscurecido para contraste sobre blanco   */
+  --accent-hover:#0C674C;
   --accent-ink:  #FFFFFF;                  /* texto/icono SOBRE relleno accent   */
-  --accent-bg:   rgba(18, 163, 121, 0.12);
-  --accent-line: rgba(18, 163, 121, 0.34);
+  --accent-bg:   rgba(14, 123, 91, 0.12);
+  --accent-line: rgba(14, 123, 91, 0.34);
 
   --user:     #5162DC;
   --user-bg:  rgba(81, 98, 220, 0.12);
