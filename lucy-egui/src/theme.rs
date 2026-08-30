@@ -457,6 +457,38 @@ pub const R_MD: f32 = 10.0;
 /// `--r-lg` — tarjetas y paneles.
 pub const R_LG: f32 = 12.0;
 
+/// La cápsula de un control: el radio que hace sus extremos semicírculos.
+///
+/// SE PIDE POR EL ALTO Y NO POR EL RADIO porque el radio no es el dato: el dato
+/// es «esto es una cápsula», y de un alto solo sale un radio que lo cumpla. Un
+/// número escrito a mano se queda atrás en cuanto alguien cambia la altura del
+/// control, y lo que sale entonces no es ni cápsula ni rectángulo — es la forma
+/// intermedia que se lee como «rectángulo con las esquinas limadas», que es
+/// justo lo que hay que evitar.
+///
+/// La familia de píldoras de Lucy ya era cápsula de verdad —`tag_chip` con 9
+/// sobre 18, `insignia` con 11 sobre 22, `meter` con `h / 2.0`, y cinco sitios
+/// más con un 999 que se pasa de largo a propósito— pero cada una a su manera.
+/// Esto es esa misma cuenta, con nombre.
+pub fn capsule(alto: f32) -> Rounding {
+    Rounding::same(alto / 2.0)
+}
+
+/// El radio de algo insertado dentro de otra cosa redondeada.
+///
+/// CONCÉNTRICO, que es una regla y no una preferencia: para que el aro de aire
+/// entre las dos formas tenga el MISMO grosor en todo el contorno, el radio de
+/// dentro tiene que ser el de fuera menos la inserción. Con cualquier otro
+/// número el aro es más grueso en los lados rectos que en las esquinas, y eso se
+/// ve aunque no se sepa nombrar.
+///
+/// El segmentado lo tenía mal por un píxel: 8 fuera, 3 de inserción, y 6 dentro
+/// donde tocaba 5. Un píxel en un control de treinta.
+#[allow(dead_code)]
+pub fn concentrico(fuera: f32, insercion: f32) -> Rounding {
+    Rounding::same((fuera - insercion).max(0.0))
+}
+
 /// Radio por defecto de los widgets de egui.
 const ROUND: f32 = R_SM;
 
@@ -635,11 +667,23 @@ fn apply_visuals(ctx: &egui::Context) {
     ]
     .into();
 
-    // Las transiciones que egui hace por su cuenta —el fundido de un control al
-    // pasar el cursor— pasan a durar lo que dura una transición de hover en el
-    // CSS. Es el mismo `--dur-fast` de `.host-pill:hover` y `.ghost-btn:hover`,
-    // y con el valor por defecto de egui los controles respondían a otra
-    // velocidad que todo lo demás.
+    // ESTO NO FUNDE NINGÚN HOVER, y el comentario que había aquí decía que sí.
+    //
+    // Decía que «las transiciones que egui hace por su cuenta —el fundido de un
+    // control al pasar el cursor— pasan a durar lo que dura una transición de
+    // hover en el CSS». Ese fundido NO EXISTE: `Widgets::style` (egui 0.29.1,
+    // style.rs) elige `hovered`, `active` o `inactive` con un `if` seco y
+    // devuelve una referencia, sin interpolar nada. Comprobado leyendo la
+    // función, no supuesto.
+    //
+    // Lo que sí gobierna este valor es `Context::animate_bool` y compañía —los
+    // desplegables que se abren, y las animaciones que Lucy pide a mano—, así
+    // que la línea se queda y el número es bueno. Lo que se va es la promesa.
+    //
+    // Consecuencia que conviene tener escrita: los controles que Lucy pinta ella
+    // misma cambian de color en UN fotograma, y ninguna constante de duración va
+    // a arreglar eso. Hace falta interpolar en el sitio, como ya hace el
+    // segmentado con la posición de su píldora.
     style.animation_time = DUR_FAST;
 
     // Espaciado. Los valores por defecto de egui son más apretados que el CSS
@@ -962,6 +1006,54 @@ mod tests {
             }
         }
         set_paleta(0);
+        set_mode(Mode::Dark);
+    }
+
+    #[test]
+    fn una_capsula_es_media_altura() {
+        assert_eq!(capsule(24.0), Rounding::same(12.0));
+        assert_eq!(capsule(30.0), Rounding::same(15.0));
+    }
+
+    #[test]
+    fn la_capsula_sale_concentrica_sola() {
+        // ESTA ES LA RAZÓN DE QUE `capsule` EXISTA, y no que ahorre una
+        // división. Si el grupo es la cápsula del alto TOTAL y la píldora es la
+        // cápsula del alto INTERIOR, el aro de aire sale del mismo grosor en
+        // todo el contorno sin que nadie tenga que calcularlo:
+        //
+        //     capsule(H + 2P) - P  =  (H + 2P)/2 - P  =  H/2  =  capsule(H)
+        //
+        // Con los radios escritos a mano no salía: el segmentado tenía 8 fuera,
+        // 3 de inserción y 6 dentro, donde tocaba 5. Un píxel en un control de
+        // treinta, y se ve — el aro era más grueso en los lados rectos que en
+        // las esquinas.
+        for (h, p) in [(24.0_f32, 3.0_f32), (18.0, 2.0), (32.0, 4.0), (40.0, 6.0)] {
+            assert_eq!(
+                concentrico(capsule(h + p * 2.0).nw, p),
+                capsule(h),
+                "con alto {h} e inserción {p} el aro no es constante"
+            );
+        }
+    }
+
+    #[test]
+    fn el_rail_y_su_hover_no_son_el_mismo_color_en_ningun_tema() {
+        // EL FALLO QUE ESTO CIERRA. El rail se rellena con `bg2()` y su hover
+        // pintaba `bg3()` — y en el tema claro los dos son `#FFFFFF` EXACTO, así
+        // que pasar el ratón por los ocho módulos no hacía absolutamente nada.
+        // Era el único de los once hover de la aplicación que no se veía, y
+        // estaba en el elemento que más se usa.
+        //
+        // Que `bg2` y `bg3` coincidan en claro no es un error: la escalera de
+        // superficies tiene cuatro peldaños y en un tema claro no hay cuatro
+        // blancos distintos que sigan siendo blancos. Lo que era un error es
+        // apoyar una señal en una diferencia que ese tema no tiene.
+        let _t = serie();
+        for m in [Mode::Dark, Mode::Light] {
+            set_mode(m);
+            assert_ne!(bg2(), bg4(), "{m:?}: el hover del rail sería invisible");
+        }
         set_mode(Mode::Dark);
     }
 

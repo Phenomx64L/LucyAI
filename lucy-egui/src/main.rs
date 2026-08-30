@@ -2300,6 +2300,17 @@ fn dos_columnas(ui: &mut egui::Ui, col: f32, mut contenido: impl FnMut(&mut egui
 /// reordenar el panel, que con `ui.id()` la reiniciaba.
 ///
 /// Devuelve el índice pulsado, si se pulsó alguno.
+/// El alto de UNA opción del segmentado, y el aro de aire que la rodea.
+///
+/// CON NOMBRE PORQUE DE LOS DOS SALE TODO LO DEMÁS: el radio del grupo es la
+/// cápsula de `SEG_H + SEG_PAD * 2`, el de la píldora es la cápsula de `SEG_H`, y
+/// el ancho mínimo se reparte contando `SEG_PAD`. Escritos a mano en cinco
+/// sitios —que es como estaban— cambiar la altura del control obligaba a
+/// acordarse de cuatro números más, y el que se olvidara rompía la
+/// concentricidad sin dar ningún error.
+const SEG_H: f32 = 24.0;
+const SEG_PAD: f32 = 3.0;
+
 fn segmentado(
     ui: &mut egui::Ui,
     clave: &str,
@@ -2321,14 +2332,19 @@ fn segmentado(
     //
     // Se descuentan los márgenes del grupo (3 por lado) y los huecos entre
     // opciones, o el reparto se pasaría por esos píxeles.
-    let huecos = 6.0 + (n as f32 - 1.0) * 2.0;
-    let disponible = (ui.available_width() - huecos).max(n as f32 * 24.0);
+    let huecos = SEG_PAD * 2.0 + (n as f32 - 1.0) * 2.0;
+    let disponible = (ui.available_width() - huecos).max(n as f32 * SEG_H);
     let w = (ancho.min(disponible) / n as f32).floor();
     let mut elegido = None;
     egui::Frame::none()
         .fill(theme::bg3())
-        .rounding(egui::Rounding::same(theme::R_SM))
-        .inner_margin(egui::Margin::same(3.0))
+        // CÁPSULA, y derivada del alto en vez de escrita. Antes era `R_SM` —8
+        // sobre los 30 px que mide el control—, o sea el 27 % del alto: la forma
+        // que el ojo lee como «rectángulo con las esquinas limadas» y no como
+        // píldora. Son los cuatro segmentados de Configuración, que es donde más
+        // se mira.
+        .rounding(theme::capsule(SEG_H + SEG_PAD * 2.0))
+        .inner_margin(egui::Margin::same(SEG_PAD))
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
             // DE IZQUIERDA A DERECHA, IMPUESTO. `ui.horizontal` hereda la
@@ -2362,24 +2378,16 @@ fn segmentado(
                 for (i, o) in opciones.iter().enumerate() {
                     let on = i == activo;
                     let (rect, resp) =
-                        ui.allocate_exact_size(egui::vec2(w, 24.0), egui::Sense::click());
+                        ui.allocate_exact_size(egui::vec2(w, SEG_H), egui::Sense::click());
                     if primero.is_none() {
                         primero = Some(rect);
                         // El relleno activo se pinta UNA vez, en la posición
                         // interpolada, y antes que los textos para quedar debajo.
                         let desliz = rect.translate(egui::vec2(pos * (w + 2.0), 0.0));
-                        ui.painter().rect_filled(
-                            desliz,
-                            egui::Rounding::same(theme::R_SM - 2.0),
-                            theme::acc(),
-                        );
+                        ui.painter().rect_filled(desliz, theme::capsule(SEG_H), theme::acc());
                     }
                     if !on && resp.hovered() {
-                        ui.painter().rect_filled(
-                            rect,
-                            egui::Rounding::same(theme::R_SM - 2.0),
-                            theme::bg4(),
-                        );
+                        ui.painter().rect_filled(rect, theme::capsule(SEG_H), theme::bg4());
                     }
                     ui.painter().text(
                         rect.center(),
@@ -6053,24 +6061,48 @@ impl eframe::App for App {
                         // cifras de ahora y no las de la visita anterior.
                         self.gasto_hist = None;
                     }
+                    // LA PÍLDORA ES UNA PIEZA, y antes eran dos.
+                    //
+                    // Lo activo se marcaba con una franja de acento de 2,5 px
+                    // pegada al borde izquierdo —radio 0.0, la ÚNICA esquina viva
+                    // de toda la aplicación— más una baldosa de radio 4 sobre 42
+                    // px de alto, que es menos del diez por ciento: un
+                    // rectángulo. Esa franja es el marcador de selección de
+                    // Fluent y de VS Code, o sea la señal que dice «aplicación de
+                    // Windows» a cualquiera que la haya visto mil veces, y estaba
+                    // en el elemento fijo que más se mira de la ventana.
+                    //
+                    // No se pierde nada al quitarla: el acento ya lo llevan el
+                    // icono y el rótulo, que se pintan con `fg` unas líneas más
+                    // abajo. Lo que se gana es que la selección sea UNA forma en
+                    // vez de un rectángulo con una marca al lado.
+                    //
+                    // Ocho píxeles de inserción horizontal, y no un margen en el
+                    // panel: el rótulo se pinta con `painter().text()`, que ni
+                    // envuelve ni recorta, así que estrechar el panel dejaría
+                    // «Configuración» saliéndose por los lados. Insertando solo
+                    // la píldora, el texto conserva los 96 px enteros.
+                    let pastilla = resp.rect.shrink2(egui::vec2(8.0, 3.0));
                     if active {
-                        // Barra de acento a la izquierda, como el CSS.
-                        let r = resp.rect;
                         ui.painter().rect_filled(
-                            egui::Rect::from_min_size(r.min, egui::vec2(2.5, r.height())),
-                            0.0,
-                            theme::acc(),
-                        );
-                        ui.painter().rect_filled(
-                            r.shrink2(egui::vec2(3.0, 2.0)),
-                            4.0,
+                            pastilla,
+                            egui::Rounding::same(theme::R_MD),
                             theme::acc().linear_multiply(0.10),
                         );
                     } else if resp.hovered() {
+                        // `bg4` Y NO `bg3`, QUE EN CLARO ERA INVISIBLE. El rail se
+                        // rellena con `bg2()`, y en el tema claro `bg2` y `bg3`
+                        // son los dos `#FFFFFF` exacto: blanco sobre blanco. O sea
+                        // que pasar el ratón por los ocho módulos no hacía nada,
+                        // y el único de los once hover de la aplicación que no se
+                        // veía era el del elemento que más se usa.
+                        //
+                        // En oscuro también gana: `bg4` (#18202A) sube cinco
+                        // unidades más que `bg3` (#131A22) sobre el rail.
                         ui.painter().rect_filled(
-                            resp.rect.shrink2(egui::vec2(3.0, 2.0)),
-                            4.0,
-                            theme::bg3(),
+                            pastilla,
+                            egui::Rounding::same(theme::R_MD),
+                            theme::bg4(),
                         );
                     }
                     let c = resp.rect.center();
@@ -6085,7 +6117,10 @@ impl eframe::App for App {
                         egui::pos2(c.x, c.y + 12.0),
                         egui::Align2::CENTER_CENTER,
                         label,
-                        egui::FontId::proportional(9.5),
+                        // `FS_MICRO` y no un `9.5` suelto, que no era ninguno de
+                        // los nueve tamaños del sistema — y el sistema empieza
+                        // justo medio punto por encima.
+                        egui::FontId::proportional(theme::FS_MICRO),
                         fg,
                     );
                 }
@@ -6183,7 +6218,30 @@ impl eframe::App for App {
             }
         }
 
-        egui::CentralPanel::default().show(ctx, |ui| {
+        // EL MARGEN DEL CONTENIDO, ELEGIDO. Era el de fábrica de egui —8 px por
+        // los cuatro lados, de `Frame::central_panel`— y es el único margen de
+        // toda la aplicación que no había decidido nadie: las ocho vistas se
+        // dibujaban a ocho píxeles del rail, del borde de la ventana, de la
+        // cabecera y de la barra de estado, mientras la cabecera respiraba
+        // catorce y las tarjetas doce o más. Ocho es lo que apretaba el
+        // contenido contra el cromo y hacía que la ventana pareciera llena.
+        //
+        // Dieciocho a los lados y no veinte, para no perder una columna entera
+        // de la rejilla del Dashboard con las ventanas estrechas. Catorce arriba
+        // y doce abajo porque la cabecera y la barra de estado ya ponen su línea
+        // separadora, y sumar el mismo aire a los dos lados de una línea la
+        // convierte en un hueco.
+        //
+        // El relleno se pone explícito: sin `.frame()` egui usaba el suyo, que
+        // lleva el color del panel; con uno propio hay que decirlo o el central
+        // sale transparente sobre el lienzo.
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::none()
+                    .fill(theme::bg())
+                    .inner_margin(egui::Margin { left: 18.0, right: 18.0, top: 14.0, bottom: 12.0 }),
+            )
+            .show(ctx, |ui| {
             // ── La entrada de una vista ──────────────────────────────────────
             //
             // Cambiar de módulo es la transición más frecuente de la aplicación
@@ -6961,7 +7019,15 @@ impl App {
                     ui.spacing_mut().item_spacing.x = 10.0;
                     // Mientras escribe, el avatar de Lucy late. Es la señal de
                     // que sigue viva cuando la respuesta tarda en arrancar.
-                    let pulse = busy && i == n - 1;
+                    // `motion()` TAMBIÉN AQUÍ, que era el único de los ocho
+                    // sitios que animan sin consultarla. Con las animaciones
+                    // apagadas el avatar seguía latiendo — y no es solo que
+                    // desobedeciera el ajuste: `animate_bool_with_time` pide
+                    // repintado mientras corre, así que mantenía la ventana a
+                    // sesenta hercios durante todo el turno, saltándose la
+                    // política de bajar a uno en reposo. Quien apaga las
+                    // animaciones suele hacerlo por eso.
+                    let pulse = busy && i == n - 1 && motion();
                     let bg = if pulse {
                         let t = ui.ctx().animate_bool_with_time(
                             egui::Id::new(("pulse", i)),
@@ -7199,8 +7265,10 @@ impl App {
         let mut dictar = false;
         let mut abrir_dialogo = false;
         let mut quitar: Option<usize> = None;
+        // Lo rellena el `TextEdit` de más abajo; se lee al salir del marco.
+        let mut campo_enfocado = false;
 
-        egui::Frame::none()
+        let marco = egui::Frame::none()
             .fill(theme::bg3())
             .stroke(egui::Stroke::new(1.0_f32, theme::bdr()))
             .rounding(egui::Rounding::same(theme::R_LG))
@@ -7425,20 +7493,29 @@ impl App {
                         enviar = true;
                     }
 
-                    ui.add_enabled(
-                        !busy,
-                        egui::TextEdit::multiline(&mut self.tabs[self.tab].input)
-                            .id(id)
-                            .return_key(egui::KeyboardShortcut::new(
-                                egui::Modifiers::SHIFT,
-                                egui::Key::Enter,
-                            ))
-                            .hint_text(i18n::tr("Escribe una orden…   ·   Shift+Enter = salto de línea"))
-                            .desired_width(field_w)
-                            .desired_rows(lineas)
-                            .frame(false)
-                            .font(egui::FontId::proportional(theme::FS_BODY)),
-                    );
+                    // SE GUARDA SI EL CAMPO TIENE EL FOCO, para poder dibujarlo.
+                    // `frame(false)` es justo el interruptor que se lo quita:
+                    // en egui 0.29.1 el anillo de foco del `TextEdit` está
+                    // entero dentro de un `if frame` (text_edit/builder.rs:422),
+                    // así que sin marco no se pinta. Aquí no hay marco a
+                    // propósito —lo dibuja el compositor entero, no el campo—,
+                    // de modo que la señal hay que reponerla fuera.
+                    campo_enfocado = ui
+                        .add_enabled(
+                            !busy,
+                            egui::TextEdit::multiline(&mut self.tabs[self.tab].input)
+                                .id(id)
+                                .return_key(egui::KeyboardShortcut::new(
+                                    egui::Modifiers::SHIFT,
+                                    egui::Key::Enter,
+                                ))
+                                .hint_text(i18n::tr("Escribe una orden…   ·   Shift+Enter = salto de línea"))
+                                .desired_width(field_w)
+                                .desired_rows(lineas)
+                                .frame(false)
+                                .font(egui::FontId::proportional(theme::FS_BODY)),
+                        )
+                        .has_focus();
 
                     right(ui, 26.0, |ui| {
                         // Redondo y relleno de acento: es la ÚNICA acción primaria
@@ -7487,6 +7564,34 @@ impl App {
                     });
                 });
             });
+
+        // EL ANILLO DE FOCO DEL COMPOSITOR, que no tenía ninguno.
+        //
+        // Es el control más usado de la aplicación y no daba ninguna señal de
+        // tener el teclado: el cursor parpadeante era todo, y el cursor
+        // parpadeante también está cuando el foco lo tiene otra cosa y el campo
+        // solo lo recuerda. Al volver de Configuración, o después de pulsar un
+        // botón, no había forma de saber si escribir iba a ir al campo o a
+        // ninguna parte.
+        //
+        // Se pinta ENCIMA del borde del marco en vez de cambiar el `stroke` del
+        // `Frame`: `Frame::show` pinta su fondo al cerrar el cierre y no deja
+        // tocarlo desde dentro, y llegar al `stroke` obligaría a partir el marco
+        // en `begin`/`end` y a reescribir el cierre entero — mucho movimiento
+        // para dibujar una línea. Sobreescribe el borde exactamente, así que no
+        // se ve doble.
+        //
+        // Del acento y del mismo grosor: es la señal que egui usa para sus
+        // propios widgets enfocados (`Widgets::style` devuelve `active`, y el
+        // tema pone el acento en `active.bg_stroke`), así que el compositor pasa
+        // a decir lo mismo que dicen los demás.
+        if campo_enfocado {
+            ui.painter().rect_stroke(
+                marco.response.rect,
+                egui::Rounding::same(theme::R_LG),
+                egui::Stroke::new(1.0_f32, theme::acc()),
+            );
+        }
 
         // La paleta se dibuja DESPUÉS del compositor y encima: tiene que quedar
         // por delante del hilo, y en modo inmediato lo último que se pinta es lo
