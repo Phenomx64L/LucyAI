@@ -601,13 +601,10 @@ fn apply_visuals(ctx: &egui::Context) {
     visuals.window_stroke = Stroke::new(1.0_f32, bdr2());
     visuals.window_rounding = Rounding::same(R_LG);
     // La ÚNICA sombra suave permitida: menús y popovers flotantes. Todo lo demás
-    // plano — `--shadow-pop`.
-    visuals.popup_shadow = egui::epaint::Shadow {
-        offset: egui::vec2(0.0, 12.0),
-        blur: 32.0,
-        spread: 0.0,
-        color: Color32::from_black_alpha(115),
-    };
+    // plano — `--shadow-pop`. Sale de `sombra_flotante` para que los menús que
+    // Lucy monta a mano sobre un `Area` —que no pasan por aquí— usen exactamente
+    // la misma y no una copia con otros números.
+    visuals.popup_shadow = sombra_flotante();
 
     // Los cinco estados de widget. egui los usa TODOS: dejarlos por defecto es
     // lo que hace que una app se vea "de egui" en vez de tuya.
@@ -725,6 +722,125 @@ pub fn instrument_label(text: &str, color: Color32) -> egui::text::LayoutJob {
         },
     );
     job
+}
+
+/// El contorno de un rectángulo de esquinas CONTINUAS.
+///
+/// ── QUÉ ES ESTO Y POR QUÉ NO LO DA egui ─────────────────────────────────────
+///
+/// `Rounding` en egui son cuatro radios, y el teselador los dibuja con
+/// `add_circle_quadrant`: la esquina es un arco de circunferencia. Comprobado en
+/// el código de epaint 0.29.1, y buscando `continuous`, `squircle` o
+/// `superellipse` en todo el crate no hay una sola coincidencia. No es que esté
+/// mal puesto: es que no existe la opción.
+///
+/// Un arco de circunferencia entra en la recta con un salto de curvatura — pasa
+/// de cero a 1/r de golpe. El ojo lo registra aunque no sepa nombrarlo, y es
+/// exactamente la diferencia entre un rectángulo redondeado y una esquina de
+/// macOS: desde Big Sur, Apple usa una superelipse, donde la curvatura sube
+/// progresivamente y la esquina «entra» en el lado en vez de pegarse a él.
+///
+/// ── LA CUENTA ────────────────────────────────────────────────────────────────
+///
+/// La superelipse es |x/a|^n + |y/b|^n = 1. Con n = 2 sale una elipse —el arco de
+/// siempre—; según sube n, la forma se acerca al rectángulo y la transición se
+/// reparte por más tramo del lado. Cinco es el valor que se usa habitualmente
+/// para aproximar la esquina de Apple.
+///
+/// Se muestrea SOLO LA ESQUINA y no la figura entera: los lados son rectas y
+/// gastar puntos en ellas es teselar de más para dibujar lo mismo.
+///
+/// ── DÓNDE USARLA Y DÓNDE NO ─────────────────────────────────────────────────
+///
+/// En las cuatro superficies GRANDES: una tarjeta, un panel, la burbuja del
+/// operador y el compositor. En un chip de veinte píxeles la diferencia entre
+/// una superelipse y un arco es menos de un píxel, así que se paga un polígono
+/// de sesenta y cuatro vértices para dibujar lo mismo — ahí `Rounding` está bien.
+///
+/// El radio se acota a la mitad del lado corto: por encima de eso la figura deja
+/// de tener lados rectos y las dos esquinas de un mismo lado se pisan.
+pub fn superelipse(rect: egui::Rect, radio: f32) -> Vec<egui::Pos2> {
+    /// Cuántos puntos por esquina. Dieciséis es donde deja de verse el polígono
+    /// en una esquina de veinte píxeles; más es teselar para nadie.
+    const POR_ESQUINA: usize = 16;
+    /// El exponente. 2 sería una elipse —el arco de toda la vida—; 5 es la
+    /// aproximación habitual de la esquina continua de Apple.
+    const N: f32 = 5.0;
+
+    let r = radio.min(rect.width() * 0.5).min(rect.height() * 0.5).max(0.0);
+    if r <= 0.0 {
+        let (a, b) = (rect.min, rect.max);
+        return vec![a, egui::pos2(b.x, a.y), b, egui::pos2(a.x, b.y)];
+    }
+
+    // Un cuadrante en coordenadas locales, del lado hacia el vértice.
+    let cuadrante: Vec<(f32, f32)> = (0..=POR_ESQUINA)
+        .map(|i| {
+            let t = i as f32 / POR_ESQUINA as f32 * std::f32::consts::FRAC_PI_2;
+            // Forma paramétrica: x = cos(t)^(2/n), y = sin(t)^(2/n). Da un
+            // reparto de puntos mucho más regular que despejar y de x, que los
+            // amontona en los extremos justo donde no hacen falta.
+            let e = 2.0 / N;
+            (t.cos().abs().powf(e) * r, t.sin().abs().powf(e) * r)
+        })
+        .collect();
+
+    let (x0, y0, x1, y1) = (rect.min.x, rect.min.y, rect.max.x, rect.max.y);
+    let mut p = Vec::with_capacity(POR_ESQUINA * 4 + 4);
+    // Las cuatro esquinas, en sentido horario desde la superior derecha. El
+    // orden importa: `convex_polygon` no reordena nada.
+    for (dx, dy) in &cuadrante {
+        p.push(egui::pos2(x1 - r + dx, y0 + r - dy));
+    }
+    for (dx, dy) in cuadrante.iter().rev() {
+        p.push(egui::pos2(x1 - r + dx, y1 - r + dy));
+    }
+    for (dx, dy) in &cuadrante {
+        p.push(egui::pos2(x0 + r - dx, y1 - r + dy));
+    }
+    for (dx, dy) in cuadrante.iter().rev() {
+        p.push(egui::pos2(x0 + r - dx, y0 + r - dy));
+    }
+    p
+}
+
+/// La sombra de lo que FLOTA, en una sola función.
+///
+/// ESTABA ESCRITA TRES VECES CON DOS VALORES. La de `popup_shadow` —que es la
+/// que reciben los desplegables que construye egui— va a 0/12/32/115; los dos
+/// menús de equipo que Lucy monta a mano sobre un `Area` llevaban su propia
+/// copia a 0/6/18/90, la mitad de profundidad; y otros dos menús del mismo tipo
+/// no llevaban ninguna. Cuatro menús que hacen lo mismo, flotando a tres alturas
+/// distintas sobre la misma pantalla.
+///
+/// La profundidad es lo que dice QUÉ ESTÁ ENCIMA DE QUÉ. Con tres valores, esa
+/// información deja de ser información: pasa a ser una decoración que varía.
+///
+/// Sigue siendo la ÚNICA sombra permitida —el resto de la profundidad del
+/// Cockpit sale de superficies planas apiladas más bordes finos— y por eso vive
+/// aquí y no en cada sitio que la quiera.
+pub fn sombra_flotante() -> egui::epaint::Shadow {
+    egui::epaint::Shadow {
+        offset: egui::vec2(0.0, 12.0),
+        blur: 32.0,
+        spread: 0.0,
+        color: Color32::from_black_alpha(115),
+    }
+}
+
+/// El velo que se pone encima de una superficie mientras se la tiene pulsada.
+///
+/// UN SOLO NÚMERO PARA TODA LA APLICACIÓN, porque «pulsado» es un estado del
+/// sistema visual y no de cada control: con un valor por sitio, dos botones
+/// contiguos se hunden distinto y el que se hunde menos parece que no responde.
+///
+/// OSCURECE EN CLARO Y ACLARA EN OSCURO. Un velo negro sobre una superficie ya
+/// oscura no se ve —#131A22 con un diez por ciento de negro sigue siendo casi
+/// #131A22— así que en el tema de casa el hundido no existiría. Lo que dice
+/// «esto se está pulsando» no es el color, es que la superficie CAMBIE; hacia
+/// dónde cambia depende de dónde parta.
+pub fn hundido() -> Color32 {
+    if light() { Color32::from_black_alpha(20) } else { Color32::from_white_alpha(16) }
 }
 
 /// Color del texto según el nivel de importancia de una memoria (1-3), igual
@@ -1007,6 +1123,74 @@ mod tests {
         }
         set_paleta(0);
         set_mode(Mode::Dark);
+    }
+
+    #[test]
+    fn la_superelipse_se_queda_dentro_de_su_rectangulo() {
+        // Un contorno que se sale pinta por encima de lo que tenga al lado, y en
+        // una rejilla de tarjetas eso es un borde que invade a su vecina.
+        let r = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(200.0, 120.0));
+        let p = superelipse(r, 14.0);
+        assert!(p.len() > 32, "muy pocos puntos para una curva: {}", p.len());
+        for q in &p {
+            assert!(
+                r.contains(*q),
+                "el punto {q:?} se sale de {r:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn la_superelipse_toca_los_cuatro_lados() {
+        // Si no llegara a los lados, la figura sería más pequeña que su rect y
+        // las tarjetas encogerían visualmente sin que nadie lo hubiera pedido.
+        let r = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(100.0, 60.0));
+        let p = superelipse(r, 12.0);
+        let cerca = |a: f32, b: f32| (a - b).abs() < 0.01;
+        assert!(p.iter().any(|q| cerca(q.x, r.min.x)), "no toca el lado izquierdo");
+        assert!(p.iter().any(|q| cerca(q.x, r.max.x)), "no toca el derecho");
+        assert!(p.iter().any(|q| cerca(q.y, r.min.y)), "no toca el de arriba");
+        assert!(p.iter().any(|q| cerca(q.y, r.max.y)), "no toca el de abajo");
+    }
+
+    #[test]
+    fn la_esquina_continua_es_mas_llena_que_un_arco() {
+        // LO QUE DISTINGUE LA FIGURA. En el punto medio de la esquina, un arco de
+        // circunferencia está a r·(1−√2/2) ≈ 0.293·r del vértice. La superelipse
+        // se acerca más —la curvatura se reparte por el lado en vez de
+        // concentrarse— y eso es exactamente la diferencia que se ve.
+        //
+        // Sin esta comprobación, un exponente puesto en 2 por error daría una
+        // elipse: la misma esquina de siempre, con el coste de teselar sesenta y
+        // cuatro puntos para nada, y nadie lo notaría leyendo el código.
+        let lado = 100.0_f32;
+        let radio = 20.0_f32;
+        let r = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(lado, lado));
+        let p = superelipse(r, radio);
+        let vertice = egui::pos2(lado, 0.0); // la esquina superior derecha
+        let mas_cerca = p
+            .iter()
+            .map(|q| q.distance(vertice))
+            .fold(f32::INFINITY, f32::min);
+        let arco = radio * (1.0 - std::f32::consts::FRAC_1_SQRT_2);
+        assert!(
+            mas_cerca < arco * 0.85,
+            "la esquina se queda a {mas_cerca:.2} del vértice y un arco llega a \
+             {arco:.2}: esto no es una superelipse, es un arco"
+        );
+    }
+
+    #[test]
+    fn un_radio_imposible_no_deforma_la_figura() {
+        // Un radio mayor que la mitad del lado corto haría que las dos esquinas
+        // de un mismo lado se pisaran. Se acota, y lo que sale sigue estando
+        // dentro del rect.
+        let r = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(40.0, 20.0));
+        for q in superelipse(r, 999.0) {
+            assert!(r.contains(q), "{q:?} fuera de {r:?}");
+        }
+        // Y con radio cero salen las cuatro esquinas y nada más.
+        assert_eq!(superelipse(r, 0.0).len(), 4);
     }
 
     #[test]

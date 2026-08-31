@@ -2038,12 +2038,12 @@ fn card_on(
 ) {
     ui.allocate_ui_with_layout(size, egui::Layout::top_down(egui::Align::Min), |ui| {
         ui.set_min_size(size);
-        egui::Frame::none()
-            .fill(fill)
-            .stroke(egui::Stroke::new(1.0_f32, theme::bdr()))
-            .rounding(egui::Rounding::same(theme::R_LG))
-            .inner_margin(egui::Margin::same(pad))
-            .show(ui, |ui| {
+        marco_continuo(
+            ui,
+            fill,
+            theme::bdr(),
+            egui::Margin::same(pad),
+            |ui| {
                 let inner = size - egui::Vec2::splat(pad * 2.0);
                 ui.set_min_size(inner);
                 ui.set_max_width(inner.x);
@@ -2054,7 +2054,8 @@ fn card_on(
                 // los `add_space` de cada tarjeta, que sí se pueden sumar.
                 ui.spacing_mut().item_spacing.y = 0.0;
                 add(ui);
-            });
+            },
+        );
     });
 }
 
@@ -2096,12 +2097,12 @@ fn panel(
     derecha: impl FnOnce(&mut egui::Ui),
     add: impl FnOnce(&mut egui::Ui),
 ) {
-    egui::Frame::none()
-        .fill(theme::bg2())
-        .stroke(egui::Stroke::new(1.0_f32, theme::bdr()))
-        .rounding(egui::Rounding::same(theme::R_LG))
-        .inner_margin(egui::Margin::same(16.0))
-        .show(ui, |ui| {
+    marco_continuo(
+        ui,
+        theme::bg2(),
+        theme::bdr(),
+        egui::Margin::same(16.0),
+        |ui| {
             ui.set_width(ancho - 32.0);
             ui.spacing_mut().item_spacing.y = 0.0;
             row_align(ui, 22.0, egui::Align::Center, |ui| {
@@ -2386,9 +2387,10 @@ fn segmentado(
                         let desliz = rect.translate(egui::vec2(pos * (w + 2.0), 0.0));
                         ui.painter().rect_filled(desliz, theme::capsule(SEG_H), theme::acc());
                     }
-                    if !on && resp.hovered() {
-                        ui.painter().rect_filled(rect, theme::capsule(SEG_H), theme::bg4());
+                    if !on {
+                        superficie(ui, &resp, rect, theme::capsule(SEG_H), theme::bg4());
                     }
+                    anillo(ui, &resp, rect, theme::capsule(SEG_H));
                     ui.painter().text(
                         rect.center(),
                         egui::Align2::CENTER_CENTER,
@@ -2600,6 +2602,108 @@ fn panel_title(ui: &mut egui::Ui, icon: icons::Icon, title: &str) {
 /// llamada al sistema por cada núcleo, sesenta veces por segundo.
 fn motion() -> bool {
     MOTION.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Un `Frame` con las esquinas CONTINUAS en vez de arcos de círculo.
+///
+/// Ver `theme::superelipse` para qué es y por qué egui no lo trae. Aquí solo
+/// está la fontanería de pintarlo: se RESERVA el hueco de la forma antes del
+/// contenido y se rellena después, que es exactamente lo que hace `Frame` por
+/// dentro y por el mismo motivo — el tamaño no se sabe hasta haber maquetado, y
+/// pintar el fondo al final lo pondría por encima de lo que contiene.
+///
+/// SOLO EN LAS SUPERFICIES GRANDES, y es una decisión: las tarjetas, los paneles
+/// y el compositor. En un chip de veinte píxeles la diferencia entre una
+/// superelipse y un arco no llega al píxel, así que ahí se pagaría un polígono
+/// de sesenta y cuatro vértices por fotograma para dibujar lo mismo. La burbuja
+/// del operador también se queda fuera por eso: hay una por mensaje, y en una
+/// conversación larga son cientos.
+fn marco_continuo<R>(
+    ui: &mut egui::Ui,
+    relleno: egui::Color32,
+    borde: egui::Color32,
+    margen: egui::Margin,
+    add: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    let hueco = ui.painter().add(egui::Shape::Noop);
+    let mut prep = egui::Frame::none().inner_margin(margen).begin(ui);
+    let r = add(&mut prep.content_ui);
+    let resp = prep.end(ui);
+    ui.painter().set(
+        hueco,
+        egui::Shape::convex_polygon(
+            theme::superelipse(resp.rect, theme::R_LG),
+            relleno,
+            egui::Stroke::new(1.0_f32, borde),
+        ),
+    );
+    r
+}
+
+/// Cuánto está encendido el hover de un control PINTADO A MANO, de 0 a 1.
+///
+/// EGUI NO FUNDE NADA, y este fichero creía que sí. `theme.rs` ponía
+/// `style.animation_time` con un comentario que decía que ajustaba «el fundido de
+/// un control al pasar el cursor»; ese fundido no existe. `Widgets::style` (egui
+/// 0.29.1) elige `hovered`, `active` o `inactive` con un `if` seco y devuelve una
+/// referencia — leído, no supuesto. Los controles que Lucy dibuja ella misma
+/// cambian de color en UN fotograma, y ninguna constante de duración lo arregla:
+/// hay que interpolar en el sitio, que es lo que hace esto.
+///
+/// Es la misma técnica que el segmentado ya usaba para la POSICIÓN de su píldora
+/// —y por el mismo motivo escrito allí: el movimiento conecta el estado de antes
+/// con el de ahora, así que el ojo sigue el cambio en vez de tener que volver a
+/// buscarlo—. Lo único que faltaba era aplicarla también al color.
+///
+/// La clave se deriva del `Response`, así que cada control anima por su cuenta
+/// sin que nadie tenga que inventarle un nombre. Y con el movimiento apagado
+/// devuelve 0 o 1 secos: sin esa salida, `animate_bool_with_time` pediría
+/// repintado en cada control bajo el cursor y mantendría la ventana a sesenta
+/// hercios, que es justo lo que el ajuste viene a evitar.
+fn hov(ui: &egui::Ui, resp: &egui::Response) -> f32 {
+    if !motion() {
+        return if resp.hovered() { 1.0 } else { 0.0 };
+    }
+    ui.ctx()
+        .animate_bool_with_time(resp.id.with("hov"), resp.hovered(), theme::DUR_FAST)
+}
+
+/// Pinta la superficie de reposo de un control pintado a mano, con su hover
+/// fundido y su estado pulsado.
+///
+/// EL TERCER ESTADO NO EXISTÍA. Los controles de la casa tenían dos —reposo y
+/// hover— y entre el clic y su efecto no pasaba nada: `is_pointer_button_down_on`
+/// aparecía tres veces en veintidós mil líneas, y las tres en el arrastre de la
+/// ventana y en los bordes de redimensionado, ninguna en un control. En una
+/// aplicación donde un clic puede tardar en tener efecto —abrir un módulo que
+/// consulta la base, mandar un turno— no acusar la pulsación hace dudar de si se
+/// ha pulsado.
+fn superficie(ui: &egui::Ui, resp: &egui::Response, rect: egui::Rect, r: egui::Rounding, color: egui::Color32) {
+    let t = hov(ui, resp);
+    if t > 0.0 {
+        // Por ALFA y no mezclando canales: el color de hover se pinta encima del
+        // fondo que ya hay con la opacidad del fundido, que es exactamente la
+        // mezcla que se quiere y no obliga a saber qué había debajo.
+        ui.painter().rect_filled(rect, r, color.gamma_multiply(t));
+    }
+    if resp.is_pointer_button_down_on() {
+        ui.painter().rect_filled(rect, r, theme::hundido());
+    }
+}
+
+/// El anillo de foco de teclado de un control pintado a mano.
+///
+/// LOS TREINTA Y TRES CONTROLES DE LA CASA ESTÁN EN EL ORDEN DE TABULACIÓN y
+/// ninguno lo dibujaba. `Sense::click()` trae `focusable: true`, así que al
+/// tabular el foco entra en ellos de verdad — simplemente no se veía dónde
+/// estaba. Los widgets propios de egui sí lo enseñan: `Widgets::style` devuelve
+/// `active` cuando hay foco, y el tema pone el acento en `active.bg_stroke`.
+/// Esto es esa misma señal para los que se pintan a mano.
+fn anillo(ui: &egui::Ui, resp: &egui::Response, rect: egui::Rect, r: egui::Rounding) {
+    if resp.has_focus() {
+        ui.painter()
+            .rect_stroke(rect, r, egui::Stroke::new(1.0_f32, theme::acc()));
+    }
 }
 
 /// Interruptor global del movimiento.
@@ -3531,13 +3635,23 @@ fn msg_actions(ui: &mut egui::Ui, stamp: &str, right_aligned: bool) -> MsgAction
 ///
 /// Se aclara al pasar el cursor. Es la única respuesta que tiene un botón sin
 /// fondo, y sin ella no hay forma de saber que es pulsable hasta pulsarlo.
+/// El lado de un botón de icono suelto. De aquí sale también su radio.
+const ICONO_H: f32 = 26.0;
+
 fn ghost_icon(ui: &mut egui::Ui, icon: icons::Icon) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::click());
-    let c = if resp.hovered() { theme::txt() } else { theme::txt3() };
-    if resp.hovered() {
-        ui.painter()
-            .rect_filled(rect, egui::Rounding::same(6.0), theme::bg4());
-    }
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(ICONO_H, ICONO_H), egui::Sense::click());
+    // REDONDO, COMO EL DE ENVIAR QUE TIENE AL LADO. Era un cuadrado de 26 px con
+    // radio 6 escrito a mano: el 23 % del lado, que es el punto donde una figura
+    // ha dejado de leerse como redonda y todavía no se lee como cuadrada — o sea,
+    // botón de barra de herramientas de Windows. Y en la MISMA fila del
+    // compositor está el de enviar, que sí es un círculo de verdad, dando la
+    // referencia de cómo se ve bien.
+    let r = theme::capsule(ICONO_H);
+    superficie(ui, &resp, rect, r, theme::bg4());
+    anillo(ui, &resp, rect, r);
+    // El icono se aclara con el mismo fundido que el fondo, en vez de saltar.
+    let t = hov(ui, &resp);
+    let c = if t > 0.5 { theme::txt() } else { theme::txt3() };
     icons::draw(ui.painter(), icon, rect.center(), 17.0, c);
     resp
 }
@@ -3788,22 +3902,18 @@ fn lv_opcion(ui: &mut egui::Ui, nombre: &str, tipo: &str, sel: bool) -> bool {
 
 /// Un lado de un control segmentado. Activo = relleno de acento con tinta
 /// oscura encima, que es el único sitio donde el CSS pone el acento sólido.
-fn seg(ui: &mut egui::Ui, label: &str, on: bool) -> bool {
-    let b = egui::Button::new(
-        egui::RichText::new(label)
-            .size(theme::FS_CAPTION)
-            .color(if on { theme::acc_ink() } else { theme::txt3() }),
-    )
-    .fill(if on {
-        theme::acc()
-    } else {
-        egui::Color32::TRANSPARENT
-    })
-    .stroke(egui::Stroke::NONE)
-    .rounding(egui::Rounding::same(6.0))
-    .min_size(egui::vec2(40.0, 18.0));
-    ui.add(b).clicked()
-}
+// AQUÍ ESTABA `fn seg`, EL SEGUNDO SEGMENTADO DE LA APLICACIÓN, y se ha ido.
+//
+// Era un `Button` de 40×18 con radio 6 y sin animación, metido a mano en dos
+// `Frame` que no coincidían ni entre sí ni con `segmentado`: tres alturas, tres
+// radios de grupo, dos separaciones y dos radios de píldora para el MISMO
+// control. Y de los dos segmentados de la casa, uno deslizaba y el otro saltaba
+// — lo que hace que el que salta se note más, no menos.
+//
+// Los cuatro sitios pasan por `segmentado`, que ya devuelve `Option<usize>` y ya
+// exige una clave propia. Esa clave es justo lo que estos dos necesitaban: sin
+// ella compartirían el estado de la animación, que es el fallo que el comentario
+// de `segmentado` documenta.
 
 /// Los datos de una tarjeta KPI.
 ///
@@ -6038,6 +6148,9 @@ impl eframe::App for App {
             .resizable(false)
             .frame(egui::Frame::none().fill(theme::bg2()).inner_margin(egui::Margin::symmetric(0.0, 10.0)))
             .show(ctx, |ui| {
+                // El rect de la primera entrada, del que sale la posición de la
+                // píldora deslizante. `None` hasta que se dibuja la primera.
+                let mut primera_fila: Option<egui::Rect> = None;
                 for v in View::ALL {
                     let label = v.label();
                     let active = self.view == v;
@@ -6083,13 +6196,37 @@ impl eframe::App for App {
                     // «Configuración» saliéndose por los lados. Insertando solo
                     // la píldora, el texto conserva los 96 px enteros.
                     let pastilla = resp.rect.shrink2(egui::vec2(8.0, 3.0));
-                    if active {
+                    // LA MISMA PÍLDORA DESLIZANTE QUE EL SEGMENTADO, y por su
+                    // mismo motivo, que ya está escrito ahí: el movimiento
+                    // CONECTA el sitio donde estaba con el sitio donde está, así
+                    // que el ojo sigue el cambio. Cambiar de módulo es la
+                    // transición más frecuente de toda la aplicación y era la que
+                    // saltaba — el indicador desaparecía de una fila y aparecía
+                    // en otra, y había que volver a buscarlo.
+                    //
+                    // Se pinta UNA sola vez, en la primera entrada del bucle y en
+                    // la posición interpolada. Dibujarla dentro del `if active`
+                    // de cada entrada es lo que la hacía saltar: entonces no hay
+                    // una píldora que se mueve, hay ocho que se encienden.
+                    if primera_fila.is_none() {
+                        primera_fila = Some(pastilla);
+                        let destino = View::ALL.iter().position(|x| *x == self.view).unwrap_or(0);
+                        let pos = if motion() {
+                            ui.ctx().animate_value_with_time(
+                                egui::Id::new("rail-pos"),
+                                destino as f32,
+                                theme::DUR_FAST,
+                            )
+                        } else {
+                            destino as f32
+                        };
                         ui.painter().rect_filled(
-                            pastilla,
+                            pastilla.translate(egui::vec2(0.0, pos * 46.0)),
                             egui::Rounding::same(theme::R_MD),
                             theme::acc().linear_multiply(0.10),
                         );
-                    } else if resp.hovered() {
+                    }
+                    if !active {
                         // `bg4` Y NO `bg3`, QUE EN CLARO ERA INVISIBLE. El rail se
                         // rellena con `bg2()`, y en el tema claro `bg2` y `bg3`
                         // son los dos `#FFFFFF` exacto: blanco sobre blanco. O sea
@@ -6099,12 +6236,15 @@ impl eframe::App for App {
                         //
                         // En oscuro también gana: `bg4` (#18202A) sube cinco
                         // unidades más que `bg3` (#131A22) sobre el rail.
-                        ui.painter().rect_filled(
+                        superficie(
+                            ui,
+                            &resp,
                             pastilla,
                             egui::Rounding::same(theme::R_MD),
                             theme::bg4(),
                         );
                     }
+                    anillo(ui, &resp, pastilla, egui::Rounding::same(theme::R_MD));
                     let c = resp.rect.center();
                     icons::draw(
                         ui.painter(),
@@ -11441,22 +11581,22 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
             ui.add_space(6.0);
 
             // ── modo ──
+            //
+            // POR `segmentado`, QUE ES EL CONTROL DE LA CASA. Esto tenía su
+            // propio segmentado hecho a mano —`fn seg`, un `Button` de 18 px con
+            // radio 6— dentro de un `Frame` con otro radio y sin tocar el
+            // `item_spacing`, o sea con ocho píxeles entre las dos opciones. Con
+            // esa separación no se leía como un grupo: se leía como dos botones
+            // sueltos metidos en una caja, que es el aspecto exacto de un
+            // GroupBox de Windows. Y no deslizaba: el relleno saltaba de una a
+            // otra, lo que se notaba más porque el segmentado de Configuración
+            // sí desliza.
             let mut nuevo = self.lv_mode;
-            egui::Frame::none()
-                .fill(theme::bg3())
-                .stroke(egui::Stroke::new(1.0_f32, theme::bdr()))
-                .rounding(egui::Rounding::same(theme::R_MD))
-                .inner_margin(egui::Margin::same(2.0))
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        if seg(ui, i18n::tr("Auditoría"), self.lv_mode == LvMode::Auditoria) {
-                            nuevo = LvMode::Auditoria;
-                        }
-                        if seg(ui, i18n::tr("Archivo"), self.lv_mode == LvMode::Archivo) {
-                            nuevo = LvMode::Archivo;
-                        }
-                    });
-                });
+            let modos = [i18n::tr("Auditoría"), i18n::tr("Archivo")];
+            let actual = if self.lv_mode == LvMode::Auditoria { 0 } else { 1 };
+            if let Some(i) = segmentado(ui, "lv-modo", 200.0, &modos, actual) {
+                nuevo = if i == 0 { LvMode::Auditoria } else { LvMode::Archivo };
+            }
             if nuevo != self.lv_mode {
                 self.lv_mode = nuevo;
                 // Las filas del modo anterior NO se quedan. Contestan a otra
@@ -11663,12 +11803,9 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                     .stroke(egui::Stroke::new(1.0_f32, theme::bdr2()))
                     .rounding(egui::Rounding::same(theme::R_LG))
                     .inner_margin(egui::Margin::same(6.0))
-                    .shadow(egui::epaint::Shadow {
-                        offset: egui::vec2(0.0, 6.0),
-                        blur: 18.0,
-                        spread: 0.0,
-                        color: egui::Color32::from_black_alpha(90),
-                    })
+                    // La sombra de la casa, no una copia con la mitad de
+                    // profundidad. Ver `theme::sombra_flotante`.
+                    .shadow(theme::sombra_flotante())
                     .show(ui, |ui| {
                         ui.set_min_width(210.0);
                         if lv_opcion(ui, i18n::tr("Este equipo"), "local", self.lv_host.is_empty()) {
@@ -13136,12 +13273,9 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                     .stroke(egui::Stroke::new(1.0_f32, theme::bdr2()))
                     .rounding(egui::Rounding::same(theme::R_LG))
                     .inner_margin(egui::Margin::same(6.0))
-                    .shadow(egui::epaint::Shadow {
-                        offset: egui::vec2(0.0, 6.0),
-                        blur: 18.0,
-                        spread: 0.0,
-                        color: egui::Color32::from_black_alpha(90),
-                    })
+                    // La sombra de la casa, no una copia con la mitad de
+                    // profundidad. Ver `theme::sombra_flotante`.
+                    .shadow(theme::sombra_flotante())
                     .show(ui, |ui| {
                         ui.set_min_width(210.0);
                         if lv_opcion(ui, i18n::tr("Este equipo"), "local", self.inv_host.is_empty()) {
@@ -16545,25 +16679,20 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                             // El selector va en la cabecera de la tabla, que es
                             // donde el operador ya está mirando cuando decide
                             // por qué columna ordenar.
-                            right(ui, 22.0, |ui| {
-                                egui::Frame::none()
-                                    .fill(theme::bg3())
-                                    .stroke(egui::Stroke::new(1.0_f32, theme::bdr()))
-                                    .rounding(egui::Rounding::same(theme::R_SM))
-                                    .inner_margin(egui::Margin::same(2.0))
-                                    .show(ui, |ui| {
-                                        ui.spacing_mut().item_spacing.x = 2.0;
-                                        // Cambiar de criterio RECARGA la lista:
-                                        // reordenar la que ya está en pantalla
-                                        // mostraría el top-8 por RAM reordenado
-                                        // por CPU, que no es el top-8 por CPU.
-                                        if seg(ui, "CPU", by_cpu) {
-                                            cambiar = Some(true);
-                                        }
-                                        if seg(ui, "RAM", !by_cpu) {
-                                            cambiar = Some(false);
-                                        }
-                                    });
+                            // El mismo `segmentado` que el resto de la casa. Ver
+                            // el del visor de logs: aquí había otra geometría
+                            // más —radio de grupo distinto, 2 px de separación
+                            // en vez de 8— para el mismo control.
+                            //
+                            // Cambiar de criterio RECARGA la lista: reordenar la
+                            // que ya está en pantalla mostraría el top-8 por RAM
+                            // reordenado por CPU, que no es el top-8 por CPU.
+                            right(ui, SEG_H + SEG_PAD * 2.0, |ui| {
+                                let i = if by_cpu { 0 } else { 1 };
+                                if let Some(k) = segmentado(ui, "proc-orden", 120.0, &["CPU", "RAM"], i)
+                                {
+                                    cambiar = Some(k == 0);
+                                }
                             });
                         });
                         ui.add_space(8.0);
