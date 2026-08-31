@@ -2430,6 +2430,68 @@ fn dos_columnas(ui: &mut egui::Ui, col: f32, mut contenido: impl FnMut(&mut egui
 /// reordenar el panel, que con `ui.id()` la reiniciaba.
 ///
 /// Devuelve el índice pulsado, si se pulsó alguno.
+/// Un número con sus dos botones, además del arrastre.
+///
+/// ── EL FALLO QUE ESTO CIERRA ─────────────────────────────────────────────────
+///
+/// Contado por quien lo sufrió: «el modo de ajustar los precios o porcentajes es
+/// únicamente moviendo de izquierda a derecha el mouse con el clic izquierdo
+/// presionado o directamente escribiéndolo, es algo confuso el ajuste».
+///
+/// Y es exacto. Un `DragValue` de egui tiene dos formas de usarse —arrastrar
+/// horizontalmente, o hacer doble clic para escribir— y NO ENSEÑA NINGUNA DE LAS
+/// DOS. Parece una etiqueta con un número. Quien no lo haya visto antes no tiene
+/// de dónde sacar que se arrastra, y el descubrimiento accidental es peor que
+/// ninguno: se arrastra sin querer y el tope de gasto cambia sin que nadie
+/// quisiera cambiarlo.
+///
+/// ── SE AÑADE, NO SE SUSTITUYE ────────────────────────────────────────────────
+///
+/// El arrastre y la escritura se quedan: para pasar de 80 a 95 el arrastre es lo
+/// más rápido que hay, y escribir es lo que uno quiere cuando ya sabe el número.
+/// Lo que faltaba era la tercera forma, la que se ve sin saber nada: dos botones.
+///
+/// ── EL PASO ES DE CADA CAMPO ─────────────────────────────────────────────────
+///
+/// Un paso único sería otro número puesto a ojo. Un umbral se mueve de punto en
+/// punto —de 80 a 81 significa algo—; un tope de gasto en dólares, de cuarto en
+/// cuarto; y el de pasos, de uno en uno, porque cada paso es un comando que se
+/// ejecuta solo en la máquina de alguien.
+///
+/// Se acota al rango en el botón, no después: un `+` que deja el número fuera y
+/// luego lo corrige por detrás enseña un valor que nunca existió.
+fn numero<T: egui::emath::Numeric>(
+    ui: &mut egui::Ui,
+    v: &mut T,
+    min: T,
+    max: T,
+    paso: f64,
+    adorno: impl FnOnce(egui::DragValue<'_>) -> egui::DragValue<'_>,
+) -> bool {
+    let mut cambiado = false;
+    // `fila` reparte de derecha a izquierda, así que lo primero que se añade es
+    // lo que queda más a la derecha. De ahí el orden `+`, número, `−`.
+    let boton = |ui: &mut egui::Ui, glifo: &str, signo: f64, v: &mut T| {
+        let r = ui.add_sized(
+            egui::vec2(theme::H_SM, theme::H_SM),
+            egui::Button::new(egui::RichText::new(glifo).size(theme::FS_BODY))
+                .rounding(theme::capsule(theme::H_SM)),
+        );
+        if r.clicked() {
+            let n = (v.to_f64() + signo * paso).clamp(min.to_f64(), max.to_f64());
+            *v = T::from_f64(n);
+            true
+        } else {
+            false
+        }
+    };
+    cambiado |= boton(ui, "+", 1.0, v);
+    let r = ui.add(adorno(egui::DragValue::new(v).range(min..=max)));
+    cambiado |= r.changed();
+    cambiado |= boton(ui, "−", -1.0, v);
+    cambiado
+}
+
 /// El alto de UNA opción del segmentado, y el aro de aire que la rodea.
 ///
 /// CON NOMBRE PORQUE DE LOS DOS SALE TODO LO DEMÁS: el radio del grupo es la
@@ -7734,7 +7796,11 @@ impl App {
                         } else if transcribiendo {
                             i18n::tr("Transcribiendo…").to_string()
                         } else {
-                            format!("Dictar — {}", modelo.message())
+                            // `trf` y no `format!`: el guion y el orden de las
+                            // dos partes son cosa de cada idioma, y con un
+                            // `format!` se quedaban en español aunque
+                            // `message()` ya viniera traducido.
+                            i18n::trf("Dictar — {estado}", &[("estado", &modelo.message())])
                         })
                         .clicked()
                         && !transcribiendo
@@ -7770,18 +7836,28 @@ impl App {
                     );
                     let usados = self.tabs[self.tab].loops;
                     if aresp
+                        // POR `trf` Y NO POR `format!`. Los dos textos que más se
+                        // consultan de esta fila —el operador viene aquí a saber
+                        // si Lucy va a ejecutar sola— salían en español en los
+                        // cinco idiomas. Es el mismo fallo que el del dictado, y
+                        // por el mismo motivo: un `format!` no pasa por la tabla,
+                        // y el guardián que vigila esto solo mira los `format!`
+                        // que tienen un `trf` cerca.
                         .on_hover_text(if auto {
-                            format!(
-                                "Automático encendido — {usados} de {} pasos usados.\n\
-                                 Lucy ejecuta sola los comandos que el guardrail deja \
-                                 pasar. Se para en los que no.",
-                                self.max_loops
+                            i18n::trf(
+                                "Automático encendido — {usados} de {max} pasos usados. Lucy \
+                                 ejecuta sola los comandos que el guardrail deja pasar. Se \
+                                 para en los que no.",
+                                &[
+                                    ("usados", &usados.to_string()),
+                                    ("max", &self.max_loops.to_string()),
+                                ],
                             )
                         } else {
-                            format!(
-                                "Automático apagado — cada comando lo apruebas tú.\n\
-                                 Encendido, Lucy encadena hasta {} pasos sola.",
-                                self.max_loops
+                            i18n::trf(
+                                "Automático apagado — cada comando lo apruebas tú. Encendido, \
+                                 Lucy encadena hasta {max} pasos sola.",
+                                &[("max", &self.max_loops.to_string())],
                             )
                         })
                         .clicked()
@@ -14723,11 +14799,12 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                     Some("comandos encadenados sin aprobar, por orden"),
                     false,
                     |ui| {
-                        ui.add(
-                            egui::DragValue::new(&mut tope)
-                                .range(MAX_LOOPS_MIN..=MAX_LOOPS_MAX)
-                                .speed(0.25),
-                        );
+                        // De uno en uno: cada paso es un comando que se ejecuta
+                        // solo en la máquina de alguien, así que la unidad en la
+                        // que se piensa este número es el paso.
+                        numero(ui, &mut tope, MAX_LOOPS_MIN, MAX_LOOPS_MAX, 1.0, |d| {
+                            d.speed(0.25)
+                        });
                     },
                 );
                 // El gasto se enseña JUNTO al tope, no solo el tope: «llevas
@@ -14750,13 +14827,11 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                     }),
                     false,
                     |ui| {
-                        ui.add(
-                            egui::DragValue::new(&mut tope_gasto)
-                                .range(0.0..=500.0)
-                                .speed(0.05)
-                                .prefix("$")
-                                .max_decimals(2),
-                        );
+                        // De cuarto en cuarto: es dinero, y en dinero nadie
+                        // piensa de céntimo en céntimo ni de dólar en dólar.
+                        numero(ui, &mut tope_gasto, 0.0, 500.0, 0.25, |d| {
+                            d.speed(0.05).prefix("$").max_decimals(2)
+                        });
                     },
                 );
                 // ── EL VIGILANTE ────────────────────────────────────────
@@ -15329,13 +15404,10 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                 let ultimo = campos.len() - 1;
                 for (i, (etiqueta, valor, min, max)) in campos.into_iter().enumerate() {
                     fila(ui, etiqueta, None, i == ultimo, |ui| {
-                        let r = ui.add(
-                            egui::DragValue::new(valor)
-                                .speed(0.5)
-                                .range(min..=max)
-                                .suffix(" %"),
-                        );
-                        if r.changed() {
+                        // De punto en punto: en un umbral, de 80 a 81 significa
+                        // algo, y las décimas que permite el arrastre son para
+                        // afinar, no para recorrer.
+                        if numero(ui, valor, min, max, 1.0, |d| d.speed(0.5).suffix(" %")) {
                             tocado = true;
                         }
                     });

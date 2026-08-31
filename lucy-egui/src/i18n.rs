@@ -525,11 +525,25 @@ pub const FRASES: &[Frase] = &[
         "Selbstintrospektion: Skills, MCPs, Frameworks",
     ),
     f!(
+        "Automático apagado — cada comando lo apruebas tú. Encendido, Lucy encadena hasta {max} pasos sola.",
+        "Auto mode off — you approve every command. Turned on, Lucy chains up to {max} steps on her own.",
+        "Automático desligado — cada comando aprova-lo tu. Ligado, a Lucy encadeia até {max} passos sozinha.",
+        "Mode auto désactivé — tu approuves chaque commande. Activé, Lucy enchaîne jusqu’à {max} étapes seule.",
+        "Automatik aus — du genehmigst jeden Befehl. Eingeschaltet verkettet Lucy bis zu {max} Schritte allein.",
+    ),
+    f!(
         "Automático en pausa",
         "Auto mode paused",
         "Automático em pausa",
         "Automatique en pause",
         "Automatik pausiert",
+    ),
+    f!(
+        "Automático encendido — {usados} de {max} pasos usados. Lucy ejecuta sola los comandos que el guardrail deja pasar. Se para en los que no.",
+        "Auto mode on — {usados} of {max} steps used. Lucy runs the commands the guardrail lets through on her own. She stops at the ones it does not.",
+        "Automático ligado — {usados} de {max} passos usados. A Lucy executa sozinha os comandos que o guardrail deixa passar. Para nos que não.",
+        "Mode auto activé — {usados} sur {max} étapes utilisées. Lucy exécute seule les commandes que le garde-fou laisse passer. Elle s’arrête sur les autres.",
+        "Automatik an — {usados} von {max} Schritten verbraucht. Lucy führt die Befehle, die das Guardrail durchlässt, allein aus. Bei den anderen hält sie an.",
     ),
     f!(
         "Avisar si el modelo se queda corto",
@@ -998,6 +1012,13 @@ pub const FRASES: &[Frase] = &[
         "Eine Regel festlegen, die Lucy immer anwendet",
     ),
     f!(
+        "Dictar — {estado}",
+        "Dictate — {estado}",
+        "Ditar — {estado}",
+        "Dicter — {estado}",
+        "Diktieren — {estado}",
+    ),
+    f!(
         "Dime de dónde: `/skills install C:\\ruta\\al\\skill`. Vale la carpeta de un \
          skill, o una que contenga varios — un repositorio descargado sirve tal cual.",
         "Tell me where: `/skills install C:\\path\\to\\skill`. A skill folder works, or one \
@@ -1120,6 +1141,13 @@ pub const FRASES: &[Frase] = &[
         "In {nombre} ausführen",
     ),
     f!(
+        "El dictado necesita el modelo de voz {modelo}, que no viene con Lucy: son cientos de megas y el instalador entero pesa veinte. Descárgalo y deja sus tres ficheros en «{ruta}».",
+        "Dictation needs the {modelo} voice model, which does not ship with Lucy: it is hundreds of megabytes and the whole installer weighs twenty. Download it and leave its three files in \"{ruta}\".",
+        "O ditado precisa do modelo de voz {modelo}, que não vem com a Lucy: são centenas de megas e o instalador inteiro pesa vinte. Descarrega-o e deixa os seus três ficheiros em «{ruta}».",
+        "La dictée a besoin du modèle vocal {modelo}, qui n’est pas fourni avec Lucy : il pèse des centaines de mégaoctets et l’installateur entier en fait vingt. Télécharge-le et laisse ses trois fichiers dans « {ruta} ».",
+        "Das Diktat braucht das Sprachmodell {modelo}, das nicht mit Lucy kommt: es sind Hunderte Megabyte und das ganze Installationsprogramm wiegt zwanzig. Lade es herunter und leg seine drei Dateien in «{ruta}» ab.",
+    ),
+    f!(
         "El equipo no informó de ningún disco.",
         "The machine reported no disks.",
         "O equipamento não indicou nenhum disco.",
@@ -1151,6 +1179,13 @@ pub const FRASES: &[Frase] = &[
          interne de Lucy, pas du fournisseur : renvoyez la commande.",
         "Der Thread mit der Antwort endete wortlos. Das ist ein Fehler in Lucy, nicht \
          beim Anbieter: Schick den Befehl noch einmal.",
+    ),
+    f!(
+        "El modelo de voz está incompleto en {dir}: falta {falta}. Suele ser una copia interrumpida — bórralo y vuelve a ponerlo.",
+        "The voice model is incomplete in {dir}: {falta} missing. Usually an interrupted copy — delete it and put it back.",
+        "O modelo de voz está incompleto em {dir}: falta {falta}. Costuma ser uma cópia interrompida — apaga-o e volta a pô-lo.",
+        "Le modèle vocal est incomplet dans {dir} : il manque {falta}. C’est souvent une copie interrompue — supprime-le et remets-le.",
+        "Das Sprachmodell ist unvollständig in {dir}: {falta} fehlt. Meist eine abgebrochene Kopie — lösch es und leg es neu ab.",
     ),
     f!(
         "El modelo se queda corto",
@@ -1946,6 +1981,13 @@ pub const FRASES: &[Frase] = &[
     ),
     f!("Minimizar", "Minimize", "Minimizar", "Réduire", "Minimieren"),
     f!("Modelo activo", "Active model", "Modelo ativo", "Modèle actif", "Aktives Modell"),
+    f!(
+        "Modelo de voz listo",
+        "Voice model ready",
+        "Modelo de voz pronto",
+        "Modèle vocal prêt",
+        "Sprachmodell bereit",
+    ),
     f!(
         "Modelo y comportamiento",
         "Model and behaviour",

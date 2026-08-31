@@ -68,17 +68,42 @@ impl Status {
     /// pasa: "falta el modelo" sin más deja a alguien mirando un botón muerto.
     pub fn message(&self) -> String {
         match self {
-            Self::Ready(_) => "Modelo de voz listo".into(),
-            Self::Incomplete { dir, missing } => format!(
-                "El modelo de voz está incompleto en {}: falta {}. \
-                 Suele ser una copia interrumpida — bórralo y reinstala.",
-                dir.display(),
-                missing.join(", ")
+            Self::Ready(_) => crate::i18n::tr("Modelo de voz listo").to_string(),
+            Self::Incomplete { dir, missing } => crate::i18n::trf(
+                "El modelo de voz está incompleto en {dir}: falta {falta}. Suele ser una \
+                 copia interrumpida — bórralo y vuelve a ponerlo.",
+                &[("dir", &dir.display().to_string()), ("falta", &missing.join(", "))],
             ),
-            Self::Missing => format!(
-                "El modelo de voz ({MODEL}) no está instalado. Viene con el instalador \
-                 de Lucy; en una compilación de desarrollo hay que ponerlo a mano en \
-                 `models/{MODEL}` junto al ejecutable."
+            // NO VIENE CON EL INSTALADOR, y este mensaje decía que sí.
+            //
+            // Reportado por el operador: instaló Lucy, el dictado le dijo que el
+            // modelo «viene con el instalador de Lucy», y no estaba. Comprobado:
+            // ni `lucy.nsi` ni `lucy.wxs` mencionan `models`, `whisper` ni un
+            // solo `.bin` — no lo empaquetan, y probablemente nunca lo hicieron.
+            //
+            // Y NO DEBERÍAN. `whisper-small` son unos cientos de megas contra los
+            // 19,6 MB que mide hoy el instalador entero; meterlo dentro
+            // multiplicaría por quince lo que se descarga todo el mundo para una
+            // función que no usa todo el mundo. Es el mismo razonamiento que
+            // deja a Ollama fuera.
+            //
+            // Así que lo que se arregla es el MENSAJE. Un aviso que manda a
+            // reinstalar para conseguir algo que la reinstalación no trae no es
+            // un aviso: es una tarde perdida.
+            Self::Missing => crate::i18n::trf(
+                "El dictado necesita el modelo de voz {modelo}, que no viene con Lucy: \
+                 son cientos de megas y el instalador entero pesa veinte. Descárgalo y \
+                 deja sus tres ficheros en «{ruta}».",
+                &[
+                    ("modelo", MODEL),
+                    (
+                        "ruta",
+                        &search_paths()
+                            .last()
+                            .map(|p| p.display().to_string())
+                            .unwrap_or_else(|| format!("models/{MODEL}")),
+                    ),
+                ],
             ),
         }
     }
@@ -158,7 +183,32 @@ mod tests {
         // "Falta el modelo" a secas deja a alguien mirando un botón muerto.
         let m = Status::Missing.message();
         assert!(m.contains(MODEL));
-        assert!(m.contains("models/"), "no dice dónde: {m}");
+        // LA RUTA DE VERDAD, no un `models/` de ejemplo. El mensaje ahora dice
+        // la carpeta exacta de esta máquina —con las barras que usa Windows— y
+        // pedir `models/` obligaba a escribir una ruta ilustrativa que quien la
+        // lee tiene que traducir a la suya. Se comprueba la carpeta, no el
+        // separador.
+        assert!(m.contains("models"), "no dice dónde: {m}");
+        assert!(
+            search_paths().iter().any(|p| m.contains(&p.display().to_string())),
+            "la ruta que da no es ninguna de las que busca: {m}"
+        );
+    }
+
+    #[test]
+    fn el_mensaje_de_ausente_no_promete_lo_que_el_instalador_no_trae() {
+        // EL FALLO QUE ESTO CIERRA, reportado por el operador: instaló Lucy, el
+        // dictado le dijo que el modelo «viene con el instalador de Lucy», y no
+        // estaba. Comprobado en `packaging/`: ni el NSIS ni el WiX mencionan
+        // `models`, `whisper` ni un solo `.bin`.
+        //
+        // Un aviso que manda a reinstalar para conseguir algo que la
+        // reinstalación no trae no es un aviso: es una tarde perdida.
+        let m = Status::Missing.message();
+        assert!(
+            !m.contains("instalador de Lucy") && !m.contains("reinstala"),
+            "vuelve a prometer que viene con el instalador: {m}"
+        );
     }
 
     #[test]
