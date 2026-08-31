@@ -264,6 +264,118 @@ impl Tanda {
     }
 }
 
+/// Lo que dice una pasada, EN CIFRAS Y NO EN PROSA.
+///
+/// ── POR QUÉ EXISTE ───────────────────────────────────────────────────────────
+///
+/// La nota se componía aquí, en español, y se guardaba así: «81 memorias
+/// miradas, 0 grupos, 0 fundidas». El shell la pintaba tal cual, así que la
+/// pestaña de Mantenimiento salía en español con la interfaz en inglés — y no
+/// había forma de arreglarlo desde el shell, porque lo que le llega es una frase
+/// ya montada.
+///
+/// El núcleo no sabe de idiomas y no tiene por qué: componer una frase es
+/// presentación. Lo que le toca es dar los NÚMEROS.
+///
+/// ── EL FORMATO ES LEGIBLE POR MÁQUINA, Y HAY UNA RAZÓN PARA CADA PARTE ───────
+///
+/// Se guarda `c|81|0|0` en vez de un JSON porque esta columna la lee una persona
+/// cuando algo va mal —es un registro— y `c|81|0|0` se entiende de un vistazo
+/// mientras que `{"tipo":"c","miradas":81,…}` no.
+///
+/// El motivo y el mensaje de fallo van AL FINAL y se leen con `splitn`: son texto
+/// libre y pueden traer una barra dentro. Partirlos por todas las barras
+/// convertiría un mensaje de error en tres campos rotos.
+///
+/// ── Y LAS FILAS QUE YA ESTÁN ─────────────────────────────────────────────────
+///
+/// Las que se escribieron antes de esto son prosa y no tienen barras. `Prosa` las
+/// recoge y se enseñan tal cual: son un registro histórico y reescribirlas sería
+/// falsificarlo. Salen en español, que es como se guardaron.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Cifras {
+    Consolidacion { miradas: usize, grupos: usize, fundidas: usize },
+    Patrones { elegibles: usize, grupos: usize, creados: usize, reforzados: usize },
+    SinPatrones { elegibles: usize, motivo: String },
+    Fallo(String),
+    /// Una nota anterior a este formato. Se enseña tal cual.
+    Prosa(String),
+}
+
+impl Cifras {
+    /// Lo que se guarda en la columna.
+    pub fn a_nota(&self) -> String {
+        match self {
+            Self::Consolidacion { miradas, grupos, fundidas } => {
+                format!("c|{miradas}|{grupos}|{fundidas}")
+            }
+            Self::Patrones { elegibles, grupos, creados, reforzados } => {
+                format!("p|{elegibles}|{grupos}|{creados}|{reforzados}")
+            }
+            Self::SinPatrones { elegibles, motivo } => format!("s|{elegibles}|{motivo}"),
+            Self::Fallo(e) => format!("f|{e}"),
+            // Una prosa no se vuelve a guardar; si alguien lo intenta, que se
+            // guarde tal cual y no un `Prosa(...)` con la envoltura dentro.
+            Self::Prosa(t) => t.clone(),
+        }
+    }
+
+    /// Lo que se lee de la columna. Lo que no encaje es prosa.
+    pub fn de_nota(s: &str) -> Self {
+        let n = |x: Option<&str>| x.and_then(|v| v.parse::<usize>().ok());
+        let p: Vec<&str> = s.splitn(2, '|').collect();
+        match (p.first().copied(), p.get(1).copied()) {
+            (Some("c"), Some(resto)) => {
+                let v: Vec<&str> = resto.split('|').collect();
+                match (n(v.first().copied()), n(v.get(1).copied()), n(v.get(2).copied())) {
+                    (Some(miradas), Some(grupos), Some(fundidas)) => {
+                        Self::Consolidacion { miradas, grupos, fundidas }
+                    }
+                    _ => Self::Prosa(s.to_string()),
+                }
+            }
+            (Some("p"), Some(resto)) => {
+                let v: Vec<&str> = resto.split('|').collect();
+                match (
+                    n(v.first().copied()),
+                    n(v.get(1).copied()),
+                    n(v.get(2).copied()),
+                    n(v.get(3).copied()),
+                ) {
+                    (Some(elegibles), Some(grupos), Some(creados), Some(reforzados)) => {
+                        Self::Patrones { elegibles, grupos, creados, reforzados }
+                    }
+                    _ => Self::Prosa(s.to_string()),
+                }
+            }
+            (Some("s"), Some(resto)) => match resto.split_once('|') {
+                Some((e, motivo)) => match n(Some(e)) {
+                    Some(elegibles) => {
+                        Self::SinPatrones { elegibles, motivo: motivo.to_string() }
+                    }
+                    None => Self::Prosa(s.to_string()),
+                },
+                None => Self::Prosa(s.to_string()),
+            },
+            (Some("f"), Some(e)) => Self::Fallo(e.to_string()),
+            _ => Self::Prosa(s.to_string()),
+        }
+    }
+
+    /// Si esta pasada CAMBIÓ algo en la memoria.
+    ///
+    /// Sale de las cifras y no de leer la nota, que es como estaba y como tiene
+    /// que seguir: el texto es libre y adivinarlo con un `contains` es una regla
+    /// que se rompe la primera vez que alguien reescriba una frase.
+    pub fn rindio(&self) -> bool {
+        match self {
+            Self::Consolidacion { fundidas, .. } => *fundidas > 0,
+            Self::Patrones { creados, reforzados, .. } => creados + reforzados > 0,
+            _ => false,
+        }
+    }
+}
+
 /// Corre UN trabajo, sin mirar el plazo, y lo anota. Devuelve la misma nota que
 /// queda en disco.
 ///
@@ -279,16 +391,14 @@ pub fn corre(job: &str, stop: &std::sync::atomic::AtomicBool) -> String {
     // terminara sin error: una pasada que mira cuarenta memorias y no funde
     // ninguna acabó bien y no rindió nada, y son justo las que hay que poder
     // contar seguidas.
-    let (nota, rindio) = match job {
+    let cifras = match job {
         CONSOLIDAR => match crate::consolidate::run(false) {
-            Ok(r) => (
-                format!(
-                    "{} memorias miradas, {} grupos, {} fundidas",
-                    r.scanned, r.clusters_found, r.memories_merged
-                ),
-                r.memories_merged > 0,
-            ),
-            Err(e) => (format!("falló: {e}"), false),
+            Ok(r) => Cifras::Consolidacion {
+                miradas: r.scanned,
+                grupos: r.clusters_found,
+                fundidas: r.memories_merged,
+            },
+            Err(e) => Cifras::Fallo(e),
         },
         INSIGHTS => {
             let r = crate::insights::run(stop);
@@ -306,22 +416,22 @@ pub fn corre(job: &str, stop: &std::sync::atomic::AtomicBool) -> String {
                 );
             }
             if r.creados + r.reforzados > 0 {
-                (
-                    format!(
-                        "{} elegibles, {} grupos, {} patrones nuevos, {} reforzados",
-                        r.elegibles, r.grupos, r.creados, r.reforzados
-                    ),
-                    true,
-                )
+                Cifras::Patrones {
+                    elegibles: r.elegibles,
+                    grupos: r.grupos,
+                    creados: r.creados,
+                    reforzados: r.reforzados,
+                }
             } else {
                 // Sin patrones, lo que interesa es POR QUÉ. Un cero pelado es
                 // indistinguible de una avería.
-                (format!("{} elegibles · {}", r.elegibles, r.motivo), false)
+                Cifras::SinPatrones { elegibles: r.elegibles, motivo: r.motivo }
             }
         }
-        otro => (format!("trabajo desconocido: {otro}"), false),
+        otro => Cifras::Fallo(format!("trabajo desconocido: {otro}")),
     };
-    let _ = marca_con(job, &nota, rindio);
+    let nota = cifras.a_nota();
+    let _ = marca_con(job, &nota, cifras.rindio());
     nota
 }
 
@@ -387,5 +497,80 @@ mod tests {
         // Los insights se REFUERZAN al reencontrarse: la frecuencia es lo que
         // convierte «una vez me pasó» en «esto pasa siempre».
         assert!(CADA_INSIGHTS < CADA_CONSOLIDAR);
+    }
+
+    // ── Las cifras de una pasada ─────────────────────────────────────────────
+
+    #[test]
+    fn las_cifras_van_y_vuelven_por_la_columna() {
+        // Lo que se guarda tiene que volver igual, o el shell compone una frase
+        // con otros números — que es peor que no componerla.
+        for c in [
+            Cifras::Consolidacion { miradas: 81, grupos: 0, fundidas: 0 },
+            Cifras::Consolidacion { miradas: 1200, grupos: 7, fundidas: 3 },
+            Cifras::Patrones { elegibles: 40, grupos: 1, creados: 1, reforzados: 0 },
+            Cifras::SinPatrones { elegibles: 0, motivo: "corpus demasiado pequeño".into() },
+            Cifras::Fallo("no se pudo abrir la base".into()),
+        ] {
+            assert_eq!(Cifras::de_nota(&c.a_nota()), c, "no redondea: {}", c.a_nota());
+        }
+    }
+
+    #[test]
+    fn un_motivo_con_barras_dentro_no_se_parte() {
+        // El motivo y el mensaje de fallo son TEXTO LIBRE: una ruta, la salida
+        // de un error. Partirlos por todas las barras convertiría un mensaje en
+        // tres campos rotos, y el operador vería media frase.
+        let feo = "no se pudo leer C:|raro|con barras";
+        let c = Cifras::SinPatrones { elegibles: 3, motivo: feo.into() };
+        assert_eq!(Cifras::de_nota(&c.a_nota()), c);
+        let f = Cifras::Fallo(feo.into());
+        assert_eq!(Cifras::de_nota(&f.a_nota()), f);
+    }
+
+    #[test]
+    fn las_notas_de_antes_se_ensenan_tal_cual() {
+        // LAS FILAS QUE YA ESTÁN EN LA BASE son prosa en español, escritas antes
+        // de este formato. Son un registro histórico: reescribirlas sería
+        // falsificarlo, y adivinar sus números de la frase sería peor.
+        for vieja in [
+            "81 memorias miradas, 0 grupos, 0 fundidas",
+            "40 elegibles, 1 grupos, 1 patrones nuevos, 0 reforzados",
+            "0 elegibles · corpus demasiado pequeño",
+            "",
+        ] {
+            assert_eq!(Cifras::de_nota(vieja), Cifras::Prosa(vieja.to_string()));
+        }
+    }
+
+    #[test]
+    fn una_nota_estropeada_no_inventa_numeros() {
+        // Una columna a medias —un corte de luz, una escritura interrumpida— no
+        // puede acabar en una frase que afirma cifras que nadie midió. Si no
+        // encaja, es prosa y se enseña como está.
+        for rota in ["c|81|0", "c|ochenta|0|0", "p|1|2|3", "s|x|motivo", "c|", "|", "z|1|2|3"] {
+            assert_eq!(
+                Cifras::de_nota(rota),
+                Cifras::Prosa(rota.to_string()),
+                "se tragó una nota rota: {rota}"
+            );
+        }
+    }
+
+    #[test]
+    fn rendir_sale_de_las_cifras_y_no_de_la_frase() {
+        // «Rindió» significa que CAMBIÓ algo en la memoria, no que el trabajo
+        // terminara sin error: una pasada que mira cuarenta memorias y no funde
+        // ninguna acabó bien y no rindió nada. Son justo las que hay que poder
+        // contar seguidas para saber si el trabajo sirve de algo.
+        assert!(!Cifras::Consolidacion { miradas: 81, grupos: 0, fundidas: 0 }.rindio());
+        assert!(Cifras::Consolidacion { miradas: 81, grupos: 2, fundidas: 1 }.rindio());
+        assert!(!Cifras::Patrones { elegibles: 40, grupos: 1, creados: 0, reforzados: 0 }.rindio());
+        assert!(Cifras::Patrones { elegibles: 40, grupos: 1, creados: 0, reforzados: 1 }.rindio());
+        assert!(!Cifras::SinPatrones { elegibles: 0, motivo: "x".into() }.rindio());
+        assert!(!Cifras::Fallo("x".into()).rindio());
+        // Y una nota vieja NO se da por rendida: no hay de dónde saberlo, y
+        // suponer que sí llenaría de falsos aciertos la racha.
+        assert!(!Cifras::Prosa("3 fundidas".into()).rindio());
     }
 }

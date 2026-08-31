@@ -87,6 +87,107 @@ impl Fuente {
     }
 }
 
+/// Cuántos atajos hacen falta para que valga la pena enseñarlos.
+///
+/// TRES. Con menos, la rejilla queda coja al lado de los cuatro de fábrica, y
+/// media pantalla propia y media genérica se lee peor que la genérica entera.
+///
+/// Vivía como un `3` suelto en el shell. Está aquí porque es lo que define
+/// «salió bien» para este módulo, y `escribe` lo necesita para saber cuándo
+/// parar de preguntar.
+pub const MIN_UTILES: usize = 3;
+
+/// Cuántos modelos se prueban antes de rendirse.
+///
+/// Tres. Cada intento es una petición con su plazo, y esto corre en un hilo de
+/// fondo cada doce horas: probar cinco no cuesta nada al operador, pero tampoco
+/// aporta — si los tres primeros no saben, el cuarto tampoco va a saber.
+pub const INTENTOS: usize = 3;
+
+/// Pide los atajos BAJANDO POR LA LISTA hasta que alguno sepa contestar.
+///
+/// ── POR QUÉ NO BASTA CON ELEGIR ──────────────────────────────────────────────
+///
+/// `elige` escoge el más pequeño, y el criterio que dice su propio comentario es
+/// «el más pequeño QUE SEPA CONTESTAR». Lo segundo no lo comprobaba nadie: se
+/// pedía a uno y, si no salía, se dejaban los de fábrica hasta el vencimiento
+/// siguiente. Doce horas.
+///
+/// Y no era una posibilidad teórica. Medido contra los seis modelos de una
+/// máquina real, con el mismo contexto:
+///
+/// ```text
+///   mistral:latest     0 atajos   escribe las etiquetas sin orden, y en inglés
+///   qwen3:latest       4 atajos   formato exacto, en español
+///   qwen3:0.6b         2 atajos   bien formado, pero las órdenes son demasiado
+///                                 cortas para ser una tarea
+///   deepseek-r1:1.5b   0 atajos   quema el presupuesto entero y escribe «ATAJO»
+///   deepseek-r1:7b     0 atajos   quema el presupuesto entero y no escribe nada
+/// ```
+///
+/// El único que sabe es `qwen3:latest` — y era justo el que `elige` mandaba al
+/// final, porque su etiqueta no dice el tamaño y lo desconocido se ordena como
+/// si fuera enorme. La heurística «prefiere el pequeño» degeneraba en «prefiere
+/// el que no puede».
+///
+/// ── PREGUNTAR ES LA ÚNICA FORMA DE SABER ─────────────────────────────────────
+///
+/// No hay manera de mirar un nombre de modelo y saber si sabrá seguir un formato:
+/// depende de la familia, del tamaño, del ajuste y de si es un razonador. Así que
+/// se baja por la lista en el orden de siempre —los pequeños primero, que es la
+/// preferencia correcta— y se para en el primero que dé suficientes.
+///
+/// El coste real es cero casi siempre: en cuanto uno responde bien, se para. Y
+/// esto corre cada doce horas en un hilo de fondo.
+pub fn escribe(
+    instalados: &[String],
+    privacidad: bool,
+    ctx: &str,
+) -> Option<(Vec<Chip>, u32, u32, String)> {
+    let mut ent_total = 0;
+    let mut sal_total = 0;
+    for m in candidatos(instalados).into_iter().take(INTENTOS) {
+        if let Ok((chips, ent, sal, _)) = pide(ctx, &m) {
+            // EL GASTO SE ACUMULA AUNQUE EL INTENTO NO SIRVA. Un modelo que
+            // contesta mal ha ocupado la máquina igual, y el cubo de «chips» del
+            // registro de gasto está para decir lo que cuesta esto DE VERDAD.
+            ent_total += ent;
+            sal_total += sal;
+            if chips.len() >= MIN_UTILES {
+                return Some((chips, ent_total, sal_total, m));
+            }
+        }
+    }
+    // Ninguno local supo. La nube, si la hay y si el modo privado lo permite.
+    if privacidad {
+        return None;
+    }
+    let m = crate::titles::baratos_con_clave().into_iter().next()?;
+    match nube(ctx, &m) {
+        Ok((chips, ent, sal, _)) if chips.len() >= MIN_UTILES => {
+            Some((chips, ent_total + ent, sal_total + sal, m))
+        }
+        _ => None,
+    }
+}
+
+/// Los modelos de texto instalados, del más pequeño al más grande.
+fn candidatos(instalados: &[String]) -> Vec<String> {
+    let mut v: Vec<&String> = instalados
+        .iter()
+        .filter(|m| {
+            let b = m.to_ascii_lowercase();
+            !b.contains("embed") && !b.contains("bge-") && !b.contains("minilm")
+        })
+        .collect();
+    v.sort_by(|a, b| {
+        let ta = crate::prompt::tam_b(a).unwrap_or(f32::INFINITY);
+        let tb = crate::prompt::tam_b(b).unwrap_or(f32::INFINITY);
+        ta.total_cmp(&tb).then(a.cmp(b))
+    });
+    v.into_iter().cloned().collect()
+}
+
 /// Local primero; si no hay, el de nube más barato; con privacidad, nadie.
 ///
 /// EL RESPALDO DE NUBE ES DEFENDIBLE AQUÍ Y NO EN CUALQUIER SITIO, y la razón es
@@ -134,22 +235,12 @@ errores repetidos. Si no hay nada mal, propón revisiones útiles y normales.\n\
 ///
 /// Los que no dicen su tamaño (`mistral:latest`) van al final: pueden ser
 /// enormes, y en la duda primero los que sabemos que son pequeños.
+/// ES SOLO EL PRIMERO DE LA COLA, y esa distinción importa. Elegir uno y darlo
+/// por bueno es lo que dejaba la pantalla con los atajos de fábrica durante doce
+/// horas cuando ese uno no sabía. Quien pide los atajos usa `escribe`, que baja
+/// por la cola. Esto se queda para decir a quién se preguntaría primero.
 pub fn elige(instalados: &[String]) -> Option<String> {
-    let mut texto: Vec<&String> = instalados
-        .iter()
-        .filter(|m| {
-            let b = m.to_ascii_lowercase();
-            // Los de embeddings no tienen `/api/chat`: pedírselo devuelve un
-            // error que parece de red y manda a mirar el sitio equivocado.
-            !b.contains("embed") && !b.contains("bge-") && !b.contains("minilm")
-        })
-        .collect();
-    texto.sort_by(|a, b| {
-        let ta = crate::prompt::tam_b(a).unwrap_or(f32::INFINITY);
-        let tb = crate::prompt::tam_b(b).unwrap_or(f32::INFINITY);
-        ta.total_cmp(&tb).then(a.cmp(b))
-    });
-    texto.first().map(|m| (*m).clone())
+    candidatos(instalados).into_iter().next()
 }
 
 /// El estado del equipo, en las pocas líneas que un modelo pequeño puede leer.
@@ -252,7 +343,23 @@ pub fn parse(salida: &str) -> Vec<Chip> {
                 c.is_whitespace() || matches!(c, '"' | '«' | '»' | '*' | '#' | ':')
             })
             .to_string();
-        let orden = orden.trim().to_string();
+        // LA ETIQUETA DEL SEGUNDO CAMPO, SI EL MODELO LA REPITE. El formato que
+        // se le pide es `ATAJO: etiqueta | orden`, y algunos escriben también el
+        // nombre del campo: `ATAJO: disco C ocupado | orden: Limpiar disco C`.
+        // Medido en la máquina del operador con `qwen3:0.6b`, tres de tres.
+        //
+        // Se colaba entero a la pantalla: el atajo decía «orden: Limpiar disco
+        // C». Y además se lleva por delante cuatro de los caracteres que cuentan
+        // para el mínimo, así que una orden corta y correcta podía caer del lado
+        // de fuera por culpa del prefijo.
+        let orden = orden.trim();
+        let orden = orden
+            .strip_prefix("orden:")
+            .or_else(|| orden.strip_prefix("Orden:"))
+            .or_else(|| orden.strip_prefix("ORDEN:"))
+            .unwrap_or(orden)
+            .trim()
+            .to_string();
         if et.is_empty() || et.chars().count() > MAX_ETIQUETA {
             continue;
         }
@@ -298,7 +405,7 @@ fn parece_comando(s: &str) -> bool {
 /// Devuelve además los tokens que dijo el proveedor, para que el gasto se apunte
 /// igual que el de un turno. Un coste que no se apunta es un coste que aparece
 /// en la factura sin haber salido nunca en la barra de estado.
-pub fn pide_a(ctx: &str, f: &Fuente) -> Result<(Vec<Chip>, u32, u32), String> {
+pub fn pide_a(ctx: &str, f: &Fuente) -> Result<(Vec<Chip>, u32, u32, String), String> {
     match f {
         Fuente::Local(m) => pide(ctx, m),
         Fuente::Nube(m) => nube(ctx, m),
@@ -306,7 +413,7 @@ pub fn pide_a(ctx: &str, f: &Fuente) -> Result<(Vec<Chip>, u32, u32), String> {
 }
 
 /// La nube, drenando el stream que ya usa el resto de la aplicación.
-fn nube(ctx: &str, modelo: &str) -> Result<(Vec<Chip>, u32, u32), String> {
+fn nube(ctx: &str, modelo: &str) -> Result<(Vec<Chip>, u32, u32, String), String> {
     use crate::chat::ChatEvent;
     use crate::turns::Turn;
     let turnos = vec![
@@ -328,7 +435,7 @@ fn nube(ctx: &str, modelo: &str) -> Result<(Vec<Chip>, u32, u32), String> {
             Err(_) => break,
         }
     }
-    Ok((parse(&texto), ent, sal))
+    Ok((parse(&texto), ent, sal, texto))
 }
 
 /// Pide los atajos a Ollama. BLOQUEANTE.
@@ -336,7 +443,7 @@ fn nube(ctx: &str, modelo: &str) -> Result<(Vec<Chip>, u32, u32), String> {
 /// DEVUELVE SUS RECUENTOS, por lo mismo que `titles::local`: Ollama los manda en
 /// la misma respuesta y descartarlos dejaba el cubo «chips» del gasto vacío para
 /// siempre, sin forma de distinguir «no cuesta» de «no se mide».
-pub fn pide(ctx: &str, modelo: &str) -> Result<(Vec<Chip>, u32, u32), String> {
+pub fn pide(ctx: &str, modelo: &str) -> Result<(Vec<Chip>, u32, u32, String), String> {
     let cuerpo = serde_json::json!({
         "model": modelo,
         "messages": [
@@ -344,10 +451,22 @@ pub fn pide(ctx: &str, modelo: &str) -> Result<(Vec<Chip>, u32, u32), String> {
             { "role": "user", "content": format!("Estado del equipo:\n\n{ctx}") },
         ],
         "stream": false,
-        // Sitio para cuatro líneas y para que un razonador piense antes: por
-        // debajo, `qwen3` gasta el presupuesto entero en `<think>` y cierra sin
-        // haber escrito ningún atajo.
-        "options": { "temperature": 0.4, "num_predict": 700 },
+        // APAGAR EL RAZONAMIENTO, que es lo que aquí faltaba.
+        //
+        // El comentario que había aquí documentaba el rodeo anterior: darle
+        // setecientos tokens «para que un razonador piense antes». No bastaba, y
+        // está medido contra el Ollama de esta máquina — `qwen3:0.6b`, que es el
+        // que `elige` escoge, gastaba CUATROCIENTOS tokens de salida para
+        // producir UN atajo. Y el shell descarta la tanda entera por debajo de
+        // tres, así que la pantalla de inicio enseñaba los de fábrica SIEMPRE.
+        //
+        // Con `think` en falso, el mismo modelo contesta en la primera línea.
+        // Es exactamente lo que ya se descubrió en `redacta` y que aquí no se
+        // había aplicado: los pequeños de hoy son razonadores, y a un razonador
+        // no se le da más presupuesto, se le apaga el rumiar.
+        "think": false,
+        // Y con eso sobra la mitad: cuatro atajos son cuatro líneas cortas.
+        "options": { "temperature": 0.4, "num_predict": 350 },
     });
     let resp = ureq::post(&format!("{OLLAMA}/api/chat"))
         .set("content-type", "application/json")
@@ -366,7 +485,13 @@ pub fn pide(ctx: &str, modelo: &str) -> Result<(Vec<Chip>, u32, u32), String> {
         .and_then(|c| c.as_str())
         .unwrap_or("");
     let (ent, sal) = crate::chat::tokens_ollama(&json);
-    Ok((parse(salida), ent, sal))
+    // SE DEVUELVE TAMBIÉN LO CRUDO, y no es un capricho de depuración: cuando el
+    // modelo contesta algo que el parser no reconoce, el shell se queda con cero
+    // atajos y no hay forma de saber si el modelo no contestó, contestó otra
+    // cosa, o el parser está mal. Es la diferencia entre arreglar esto en un
+    // minuto y suponer durante una tarde — ya pasó una vez, y la única pista era
+    // un recuento de tokens.
+    Ok((parse(salida), ent, sal, salida.to_string()))
 }
 
 #[cfg(test)]
@@ -394,6 +519,66 @@ mod tests {
         assert_eq!(m.as_deref(), Some("qwen3:1.7b"));
         // Pero si es lo único que hay, sirve.
         assert_eq!(elige(&["mistral:latest".into()]).as_deref(), Some("mistral:latest"));
+    }
+
+    #[test]
+    fn el_nombre_del_campo_no_es_parte_de_la_orden() {
+        // Visto tal cual en la máquina del operador, con `qwen3:0.6b`: el modelo
+        // repite el nombre del segundo campo dentro del campo. Sin quitarlo, el
+        // atajo aparecía en pantalla diciendo «orden: Limpiar el disco C».
+        let c = parse(
+            "ATAJO: disco C ocupado | orden: Limpiar el disco C de temporales\n\
+             ATAJO: memoria alta | Orden: Revisar los procesos que más ocupan\n\
+             ATAJO: servicios | ORDEN: Comprobar los servicios automáticos",
+        );
+        assert_eq!(c.len(), 3);
+        assert_eq!(c[0].orden, "Limpiar el disco C de temporales");
+        assert_eq!(c[1].orden, "Revisar los procesos que más ocupan");
+        assert_eq!(c[2].orden, "Comprobar los servicios automáticos");
+    }
+
+    #[test]
+    fn quitar_el_prefijo_pasa_antes_de_medir() {
+        // «orden:» son seis caracteres, y el mínimo son veinte. Si se midiera
+        // antes de quitarlo, una orden legítima pero justa entraría por el
+        // prefijo y no por lo que dice — o al revés, según el orden. Se mide
+        // SIEMPRE lo que va a ver el operador.
+        let corta = parse("ATAJO: disco | orden: limpiar ya");
+        assert!(corta.is_empty(), "«limpiar ya» son 11: no es una tarea");
+    }
+
+    #[test]
+    fn ir_al_final_de_la_cola_no_es_quedarse_fuera() {
+        // ESTE TEST EXISTE POR UN FALLO MEDIDO. Ir al final era inofensivo
+        // mientras se creyera que el primero siempre sabe contestar; en la
+        // máquina del operador el único de los cinco instalados que sabía era
+        // `qwen3:latest`, sin tamaño en la etiqueta, y por tanto el último.
+        // Como solo se preguntaba al primero, la pantalla se quedaba con los
+        // atajos de fábrica para siempre.
+        //
+        // Lo que se afirma aquí es que el sin tamaño SIGUE EN LA COLA. Si
+        // alguien vuelve a filtrarlos —«en la duda, fuera»— esto se cae.
+        let c = candidatos(&[
+            "mistral:latest".into(),
+            "qwen3:1.7b".into(),
+            "qwen3:0.6b".into(),
+        ]);
+        assert_eq!(c, vec!["qwen3:0.6b", "qwen3:1.7b", "mistral:latest"]);
+    }
+
+    #[test]
+    fn tres_intentos_no_uno_pero_tampoco_todos() {
+        // Preguntar a UNO solo es exactamente el fallo que se arregló: el único
+        // modelo de la máquina que sabía hacerlo era el último de la cola, y
+        // nadie llegaba hasta él. Bajar por la cola ENTERA tampoco vale: con seis
+        // instalados son seis peticiones con su plazo, y si los tres primeros no
+        // saben seguir un formato de dos campos, el cuarto tampoco.
+        assert!(INTENTOS > 1, "preguntar a uno solo es lo que estaba roto");
+        assert!(INTENTOS < 6, "la cola entera es un cuarto de hora de máquina");
+        // El listón vivía como un `3` suelto en el shell. Mientras estuvo allí,
+        // el núcleo no podía saber si lo devuelto servía, y por eso no podía
+        // probar con otro. Pedir más de los que caben no terminaría nunca.
+        assert!(MIN_UTILES <= MAX, "pedir más de los que caben no acaba nunca");
     }
 
     #[test]
@@ -522,6 +707,108 @@ mod tests {
         // escritos de otra manera, y con el respaldo de nube sería un goteo de
         // céntimos por reescribir lo que ya estaba bien.
         assert!(CADA_SECS >= 6 * 3_600, "un plazo corto convierte esto en un gasto");
+    }
+
+    /// Corre la cadena entera de atajos contra el Ollama de ESTA máquina.
+    ///
+    /// `cargo test -p lucy-core que_atajos_salen -- --ignored --nocapture`
+    ///
+    /// NO ES UNA COMPROBACIÓN, ES UN INSTRUMENTO. Está aquí porque el operador
+    /// preguntó si los atajos de la pantalla de inicio podían ser dinámicos — y
+    /// lo son desde hace tiempo: los escribe un modelo local. Lo que pasa es que
+    /// cuando no salen, NO SE VE NADA. El fallo se traga a propósito —avisar de
+    /// que no se pudo embellecer una pantalla vacía sería ruido— y el efecto
+    /// secundario es que la función es indistinguible de no existir.
+    ///
+    /// Esto la hace visible: qué modelo se elige, qué contesta, y si pasa el
+    /// listón de tres que exige el shell.
+    #[test]
+    #[ignore]
+    fn que_atajos_salen() {
+        let instalados = crate::chat::list_models();
+        println!("\nmodelos instalados: {instalados:?}");
+        for m in &instalados {
+            println!("   {m}  -> tamaño leído: {:?}", crate::prompt::tam_b(m));
+        }
+        let Some(f) = elige_fuente(&instalados, false) else {
+            println!("\nNO HAY QUIEN los escriba: por eso salen los de fábrica.");
+            return;
+        };
+        println!("\nelegido: {f:?}  (el más pequeño de los de texto)");
+
+        // Una foto plausible: el contexto es lo que el modelo va a mirar, y con
+        // ceros contestaría sobre una máquina que no existe.
+        let s = crate::system::SysSnapshot {
+            host: "WORSKTATION-16".into(),
+            os: "Windows 11 Pro".into(),
+            kernel: String::new(),
+            cpu_brand: "AMD Ryzen 9 8940HX".into(),
+            cpu_pct: 34.0,
+            per_core: vec![],
+            mem_used: 15_000_000_000,
+            mem_total: 33_500_000_000,
+            swap_used: 0,
+            swap_total: 0,
+            uptime_secs: 129_014,
+            cores: 32,
+            disks: vec![crate::system::DiskInfo {
+                name: "C".into(),
+                mount: "C:".into(),
+                total: 1_000_000_000_000,
+                avail: 470_000_000_000,
+            }],
+        };
+        let ctx = contexto(&s, &[], &[]);
+        println!("\ncontexto que se le manda:\n{ctx}\n");
+
+        // SE PRUEBAN TODOS, no solo el elegido. La pregunta que hay que
+        // contestar no es «¿funciona?» sino «¿con cuál funciona?», y eso decide
+        // si lo que hay que arreglar es el formato o la elección de modelo.
+        let candidatos: Vec<String> = instalados
+            .iter()
+            .filter(|m| {
+                let b = m.to_ascii_lowercase();
+                !b.contains("embed") && !b.contains("bge-") && !b.contains("minilm")
+            })
+            .cloned()
+            .collect();
+        for m in candidatos {
+            println!("\n══════ {m} ══════");
+            match pide(&ctx, &m) {
+                Ok((chips, ent, sal, crudo)) => {
+                    println!("--- tal cual ---\n{}\n---", crudo.trim());
+                    println!("{} atajos reconocidos ({ent} dentro, {sal} fuera)", chips.len());
+                    for c in &chips {
+                        println!("   «{}» -> {}", c.etiqueta, c.orden);
+                    }
+                    // El listón: por debajo de `MIN_UTILES` se descartan TODOS y
+                    // la pantalla se queda con los de fábrica.
+                    println!(
+                        "{}",
+                        if chips.len() >= MIN_UTILES {
+                            ">>> PASA el listón"
+                        } else {
+                            ">>> NO llega al listón: se prueba con el siguiente"
+                        }
+                    );
+                }
+                Err(e) => println!("falló: {e}"),
+            }
+        }
+
+        // Y AHORA LO QUE HACE LA APLICACIÓN DE VERDAD. Lo de arriba dice quién
+        // sabe; esto dice si lo que se pone en pantalla lo encuentra.
+        println!("\n═════════ lo que sale por la puerta ═════════");
+        match escribe(&instalados, false, &ctx) {
+            Some((chips, ent, sal, modelo)) => {
+                println!("lo resolvió «{modelo}» ({ent} dentro, {sal} fuera acumulados)");
+                for c in &chips {
+                    println!("   «{}» -> {}", c.etiqueta, c.orden);
+                }
+            }
+            None => println!("NINGUNO supo: la pantalla se queda con los de fábrica."),
+        }
+        println!();
     }
 
     #[test]
