@@ -149,6 +149,23 @@ fn main() -> eframe::Result {
                     .map(|v| theme::Mode::from_key(&v))
                     .unwrap_or(theme::Mode::Dark),
             );
+            // Y LA PALETA TAMBIÉN ANTES, por el mismo motivo y con el mismo
+            // efecto si se hace al revés. Esto se leía dentro de `App::new`, que
+            // corre DESPUÉS de `apply`, así que los cuatro colores que se copian
+            // dentro de los `Visuals` —el relleno de un `selectable_label`, el
+            // anillo de foco de los widgets de egui, la selección de texto y los
+            // enlaces— arrancaban SIEMPRE en esmeralda, aunque el operador
+            // tuviera guardada otra. Se veía en la vista de Memoria: con la
+            // paleta en violeta, la pestaña activa salía verde todos los días.
+            //
+            // Y solo se arreglaba de rebote, tocando el modo claro/oscuro, que
+            // era lo único que volvía a llamar a `apply_visuals`.
+            theme::set_paleta(
+                cc.storage
+                    .and_then(|s| s.get_string(K_PALETA))
+                    .map(|v| theme::paleta_de(&v))
+                    .unwrap_or(0),
+            );
             theme::apply(&cc.egui_ctx);
             // LA FORMA DE LA VENTANA, que hasta ahora no la ponía nadie.
             //
@@ -4893,12 +4910,12 @@ impl App {
         if let Some(n) = storage.and_then(|s| s.get_string(K_NAME)) {
             set_user_name(&n);
         }
-        theme::set_paleta(
-            storage
-                .and_then(|s| s.get_string(K_PALETA))
-                .map(|v| theme::paleta_de(&v))
-                .unwrap_or(0),
-        );
+        // LA PALETA YA SE PUSO EN `main`, antes de `theme::apply`. Aquí llegaba
+        // tarde: `App::new` corre después de aplicar los visuales, así que los
+        // cuatro colores que egui se copia dentro se quedaban en la paleta de
+        // fábrica. Se deja dicho en vez de borrar la línea a secas, porque el
+        // sitio natural para leer un ajuste guardado ES éste y quien venga a
+        // añadir el siguiente va a mirar aquí.
         set_motion(
             storage
                 .and_then(|s| s.get_string(K_MOTION))
@@ -14969,7 +14986,10 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
             set_motion(v);
         }
         if let Some(k) = nueva_paleta {
-            theme::set_paleta(k);
+            // `cambia_paleta` y no `set_paleta`: hay cuatro colores que viven
+            // dentro de los `Visuals` de egui y no se enteran de un cambio de
+            // acento hasta que alguien los vuelve a poner. Ver la función.
+            theme::cambia_paleta(ui.ctx(), k);
         }
         // ── este equipo ──────────────────────────────────────────────────────
         ui.add_space(GAP);
@@ -16242,7 +16262,9 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                     ui.painter().rect(
                         rr,
                         egui::Rounding::same(theme::R_MD),
-                        if rresp.hovered() { theme::bg3() } else { egui::Color32::TRANSPARENT },
+                        // `bg4` y no `bg3`: este botón vive dentro de una tarjeta
+                        // rellena con `bg2()`, y en claro las dos son `#FFFFFF`.
+                        if rresp.hovered() { theme::bg4() } else { egui::Color32::TRANSPARENT },
                         egui::Stroke::new(1.0_f32, theme::bdr()),
                     );
                     icons::draw(
@@ -17749,9 +17771,14 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
         );
         if sel {
             ui.painter().rect_filled(r, egui::Rounding::same(theme::R_SM), theme::acc_bg());
-        } else if resp.hovered() {
-            ui.painter().rect_filled(r, egui::Rounding::same(theme::R_SM), theme::bg3());
+        } else {
+            // `bg4` Y NO `bg3`: este carril se rellena con `bg2()`, y en el tema
+            // claro `bg2` y `bg3` son los dos `#FFFFFF` exacto. El hover de la
+            // lista de equipos era invisible, el mismo fallo que tenía el rail
+            // de módulos. Ver la nota de `theme::bg3`.
+            superficie(ui, &resp, r, egui::Rounding::same(theme::R_SM), theme::bg4());
         }
+        anillo(ui, &resp, r, egui::Rounding::same(theme::R_SM));
         // La pastilla de color a la izquierda: es lo que el operador asoció a
         // ese equipo al darlo de alta, y con ocho filas es lo que se busca antes
         // de leer el nombre.

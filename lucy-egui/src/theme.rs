@@ -150,6 +150,24 @@ pub fn bg2() -> Color32 {
     if light() { Color32::from_rgb(0xFF, 0xFF, 0xFF) } else { Color32::from_rgb(0x0E, 0x13, 0x19) }
 }
 /// `--surface-2` — tarjetas y controles en reposo.
+///
+/// ⚠ `bg2` Y `bg3` SON EL MISMO BLANCO EN EL TEMA CLARO, y de ahí salió una
+/// familia entera de fallos. La escalera tiene cuatro peldaños y en un tema claro
+/// no hay cuatro blancos distintos que sigan siendo blancos, así que los dos de
+/// en medio coinciden. No es un error: es lo que hace que el tema claro se vea
+/// como un tema claro y no como un gris.
+///
+/// LO QUE SÍ ES UN ERROR es apoyar en esa diferencia una señal de ESTADO. Un
+/// hover que pinta `bg3` sobre una superficie que ya es `bg2` no se ve — y no
+/// falla, no avisa, simplemente no pasa nada al pasar el ratón. Se encontró en
+/// tres sitios: el rail de módulos, la lista de equipos de NexShell y el botón
+/// de refresco del dashboard remoto. Los tres eran el elemento más usado de su
+/// pantalla.
+///
+/// LA REGLA: para el estado de un control, el salto va a `bg4`, que es el único
+/// peldaño distinto de los otros tres en los DOS temas. `bg3` sobre `bg()` sí
+/// vale —ahí la diferencia existe en ambos— y por eso las filas del visor de
+/// logs se quedan como están.
 pub fn bg3() -> Color32 {
     if light() { Color32::from_rgb(0xFF, 0xFF, 0xFF) } else { Color32::from_rgb(0x13, 0x1A, 0x22) }
 }
@@ -555,6 +573,37 @@ fn load_system_fonts(ctx: &egui::Context) {
     }
 
     ctx.set_fonts(fonts);
+}
+
+/// Cambia la paleta de acento Y VUELVE A APLICAR LOS VISUALES.
+///
+/// LO SEGUNDO ES LA MITAD QUE FALTABA, y el fallo se veía. Los colores que se
+/// consultan al dibujar —todo lo que llama a `acc()` en un `painter`— siguen la
+/// paleta al instante, pero hay CUATRO que se copian dentro de los `Visuals` de
+/// egui y se quedan ahí hasta que alguien los vuelva a poner:
+///
+///   · `selection.bg_fill`  — el relleno de un `selectable_label`
+///   · `selection.stroke`
+///   · `widgets.active.bg_stroke` — el anillo de foco de los widgets de egui
+///   · `hyperlink_color`
+///
+/// Con `set_paleta` a secas, cambiar de acento dejaba esos cuatro en el color
+/// anterior. Se veía sin buscarlo: en la vista de Memoria, con la paleta puesta
+/// en Violeta, la pestaña activa seguía saliendo VERDE — es un
+/// `selectable_label`, y su relleno es `selection.bg_fill`.
+///
+/// Y PASABA TAMBIÉN AL ARRANCAR, que es lo que lo hacía permanente. La paleta
+/// guardada se lee en `App::new`, que corre DESPUÉS de `apply`; así que quien no
+/// usara la esmeralda abría Lucy con esos cuatro en esmeralda todos los días, y
+/// solo se arreglaban de rebote si tocaba el modo claro/oscuro —lo único que
+/// volvía a llamar a `apply_visuals`—.
+///
+/// Es la misma forma que `switch` para el modo, y por eso vive al lado: dos
+/// funciones que hacen «cambia esto y vuelve a aplicar», para que no se pueda
+/// hacer lo uno sin lo otro.
+pub fn cambia_paleta(ctx: &egui::Context, i: usize) {
+    set_paleta(i);
+    apply_visuals(ctx);
 }
 
 /// Cambia el tema y lo vuelve a aplicar. Un solo sitio, para que no se pueda
@@ -1301,6 +1350,25 @@ mod tests {
                 "con alto {h} e inserción {p} el aro no es constante"
             );
         }
+    }
+
+    #[test]
+    fn bg3_no_sirve_como_estado_de_una_superficie_bg2() {
+        // LA REGLA, ESCRITA COMO ASERCIÓN. No se puede comprobar desde aquí
+        // sobre qué superficie cae cada control —eso vive en `main.rs`— pero sí
+        // se puede dejar clavado el HECHO del que salió la familia de fallos:
+        // en el tema claro, `bg2` y `bg3` son el mismo color. Quien vaya a
+        // apoyar un hover en esa diferencia se encuentra esto.
+        //
+        // Si algún día se separan, este test falla y hay que venir a leer por
+        // qué existía — que es exactamente lo que se quiere de un test así.
+        let _t = serie();
+        set_mode(Mode::Light);
+        assert_eq!(bg2(), bg3(), "en claro eran el mismo blanco; si ya no lo son, relee la nota de bg3");
+        assert_ne!(bg2(), bg4(), "bg4 es el único peldaño que sirve de estado en los dos temas");
+        set_mode(Mode::Dark);
+        assert_ne!(bg2(), bg3(), "en oscuro sí se distinguen");
+        assert_ne!(bg2(), bg4());
     }
 
     #[test]
