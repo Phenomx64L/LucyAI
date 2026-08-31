@@ -179,6 +179,23 @@ fn main() -> eframe::Result {
             // escritorio conserva. Ver `marco::redondea`.
             #[cfg(windows)]
             marco::redondea(cc);
+            // LA CARA DE LOS AVISOS. El icono de un globo de Windows no sale del
+            // XML: sale del acceso directo del menú de inicio que lleva el mismo
+            // AUMID con el que se publica. Sin él, el aviso llega —comprobado
+            // leyendo la base del centro de notificaciones— pero anónimo.
+            //
+            // Se hace aquí y no en el instalador porque el instalador solo cubre
+            // las instalaciones nuevas: no arregla la que ya está puesta de una
+            // versión anterior, ni la compilación de desarrollo, ni una copia
+            // portátil. Es idempotente y no toca nada si ya está.
+            //
+            // Un fallo NO impide arrancar: quedarse sin Lucy porque no se pudo
+            // escribir un acceso directo sería un mal negocio. Lo que se pierde
+            // es el icono del aviso.
+            #[cfg(windows)]
+            if let Err(e) = lucy_core::notify::registra_identidad() {
+                eprintln!("[lucy] los avisos saldrán sin icono: {e}");
+            }
             Ok(Box::new(App::new(cc.storage)))
         }),
     )
