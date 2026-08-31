@@ -3363,6 +3363,13 @@ pub const FRASES: &[Frase] = &[
     ),
     f!("estable", "steady", "estável", "stable", "stabil"),
     f!("este equipo", "this machine", "esta máquina", "ce poste", "dieser Rechner"),
+    f!(
+        "falló: {e}",
+        "failed: {e}",
+        "falhou: {e}",
+        "échec : {e}",
+        "fehlgeschlagen: {e}",
+    ),
     f!("fecha ilegible", "unreadable date", "data ilegível", "date illisible", "Datum unlesbar"),
     f!(
         "fijo, sin seguir a Windows",
@@ -3684,6 +3691,20 @@ pub const FRASES: &[Frase] = &[
         "{crashed} Dienst(e) mit Startfehler",
     ),
     f!(
+        "{elegibles} elegibles · {grupos} grupos · {creados} patrones nuevos · {reforzados} reforzados",
+        "{elegibles} eligible · {grupos} groups · {creados} new patterns · {reforzados} reinforced",
+        "{elegibles} elegíveis · {grupos} grupos · {creados} padrões novos · {reforzados} reforçados",
+        "{elegibles} éligibles · {grupos} groupes · {creados} nouveaux motifs · {reforzados} renforcés",
+        "{elegibles} infrage · {grupos} Gruppen · {creados} neue Muster · {reforzados} bestärkt",
+    ),
+    f!(
+        "{elegibles} elegibles · {motivo}",
+        "{elegibles} eligible · {motivo}",
+        "{elegibles} elegíveis · {motivo}",
+        "{elegibles} éligibles · {motivo}",
+        "{elegibles} infrage · {motivo}",
+    ),
+    f!(
         "{ent} tokens de entrada, {sal} de salida en esta terminal",
         "{ent} input tokens, {sal} output in this terminal",
         "{ent} tokens de entrada, {sal} de saída neste terminal",
@@ -3742,6 +3763,13 @@ pub const FRASES: &[Frase] = &[
         "{max} voltas a pedir ficheiros sem chegar a uma resposta. O turno volta para ti; o que foi lido está nesta mesma faixa.",
         "{max} tours à demander des fichiers sans arriver à une réponse. Le tour te revient ; ce qui a été lu est dans ce même fil.",
         "{max} Runden Dateiabfragen ohne Antwort. Du bist wieder dran; das Gelesene steht in derselben Spur.",
+    ),
+    f!(
+        "{miradas} memorias miradas · {grupos} grupos · {fundidas} fundidas",
+        "{miradas} memories looked at · {grupos} groups · {fundidas} merged",
+        "{miradas} memórias vistas · {grupos} grupos · {fundidas} fundidas",
+        "{miradas} mémoires examinées · {grupos} groupes · {fundidas} fusionnées",
+        "{miradas} Erinnerungen geprüft · {grupos} Gruppen · {fundidas} verschmolzen",
     ),
     f!(
         "{motivo}. Aprueba el paso para seguir.",

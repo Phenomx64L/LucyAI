@@ -2430,6 +2430,49 @@ fn dos_columnas(ui: &mut egui::Ui, col: f32, mut contenido: impl FnMut(&mut egui
 /// reordenar el panel, que con `ui.id()` la reiniciaba.
 ///
 /// Devuelve el índice pulsado, si se pulsó alguno.
+/// La nota de una pasada de mantenimiento, en el idioma de la interfaz.
+///
+/// LA FRASE SE COMPONE AQUÍ Y NO EN EL NÚCLEO, que es de donde venía. El núcleo
+/// no sabe de idiomas y no tiene por qué: componer una frase es presentación, y
+/// mientras lo hacía él, la pestaña de Mantenimiento salía en español con la
+/// interfaz en inglés sin que el shell pudiera hacer nada — lo que le llegaba era
+/// una frase ya montada.
+///
+/// Las notas anteriores a este cambio son prosa y se enseñan tal cual. Son un
+/// registro histórico: reescribirlas sería falsificarlo.
+fn nota_en_palabras(nota: &str) -> String {
+    use lucy_core::maintenance::Cifras;
+    match Cifras::de_nota(nota) {
+        Cifras::Consolidacion { miradas, grupos, fundidas } => i18n::trf(
+            "{miradas} memorias miradas · {grupos} grupos · {fundidas} fundidas",
+            &[
+                ("miradas", &miradas.to_string()),
+                ("grupos", &grupos.to_string()),
+                ("fundidas", &fundidas.to_string()),
+            ],
+        ),
+        Cifras::Patrones { elegibles, grupos, creados, reforzados } => i18n::trf(
+            "{elegibles} elegibles · {grupos} grupos · {creados} patrones nuevos · \
+             {reforzados} reforzados",
+            &[
+                ("elegibles", &elegibles.to_string()),
+                ("grupos", &grupos.to_string()),
+                ("creados", &creados.to_string()),
+                ("reforzados", &reforzados.to_string()),
+            ],
+        ),
+        // El motivo lo escribe el núcleo y también es prosa; se pasa por `tr` por
+        // si está en la tabla, y si no, sale como venga. Cubrirlo del todo es
+        // otro trabajo: son las razones de `insights::run`.
+        Cifras::SinPatrones { elegibles, motivo } => i18n::trf(
+            "{elegibles} elegibles · {motivo}",
+            &[("elegibles", &elegibles.to_string()), ("motivo", i18n::tr(&motivo))],
+        ),
+        Cifras::Fallo(e) => i18n::trf("falló: {e}", &[("e", &e)]),
+        Cifras::Prosa(t) => t,
+    }
+}
+
 /// Un número con sus dos botones, además del arrastre.
 ///
 /// ── EL FALLO QUE ESTO CIERRA ─────────────────────────────────────────────────
@@ -4719,12 +4762,12 @@ struct App {
     chips: Vec<lucy_core::suggest::Chip>,
     /// Cuándo se pidieron por última vez, en segundos desde la época.
     chips_ts: Option<i64>,
-    /// La petición en vuelo: `(modelo, rx)`.
+    /// La petición en vuelo. Trae el modelo DENTRO, porque `escribe` puede bajar
+    /// por varios antes de dar con uno que sepa, y el que se cobra es ese.
     #[allow(clippy::type_complexity)]
-    chips_rx: Option<(
-        String,
-        std::sync::mpsc::Receiver<Result<(Vec<lucy_core::suggest::Chip>, u32, u32), String>>,
-    )>,
+    chips_rx: Option<
+        std::sync::mpsc::Receiver<Option<(Vec<lucy_core::suggest::Chip>, u32, u32, String)>>,
+    >,
     /// Lo gastado en poner nombres, aparte.
     ///
     /// APARTE PORQUE SE TARIFA DISTINTO. El gasto de una pestaña se calcula con
@@ -8850,12 +8893,12 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
         if !lucy_core::suggest::vencido(self.chips_ts, ahora) {
             return;
         }
-        let Some(fuente) = lucy_core::suggest::elige_fuente(&self.models, self.privacy) else {
+        if lucy_core::suggest::elige_fuente(&self.models, self.privacy).is_none() {
             // Sin nadie que los escriba: se marca igual, o esto se preguntaría
             // en cada frame de la pantalla vacía.
             self.chips_ts = Some(ahora);
             return;
-        };
+        }
         // Solo los errores del log, no las dos mil líneas: al modelo le sobra
         // todo lo que salió bien, y con un 0.6B el contexto de más no es lento,
         // es peor — deja de mirar los datos y repite el formato del ejemplo.
@@ -8875,32 +8918,37 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
             })
             .unwrap_or_default();
         let ctx = lucy_core::suggest::contexto(&self.sys.snapshot(), &self.services, &errores);
-        let modelo = fuente.modelo().to_string();
+        // POR `escribe` Y NO POR UN MODELO SOLO. Se preguntaba a uno —el más
+        // pequeño— y si no sabía contestar, la pantalla se quedaba con los de
+        // fábrica hasta el vencimiento siguiente: doce horas. Medido en esta
+        // máquina, el único de los seis instalados que sabe hacerlo era
+        // justamente el que la elección mandaba al final. Ver `suggest::escribe`.
+        let instalados = self.models.clone();
+        let privado = self.privacy;
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let _ = tx.send(lucy_core::suggest::pide_a(&ctx, &fuente));
+            let _ = tx.send(lucy_core::suggest::escribe(&instalados, privado, &ctx));
         });
         self.chips_ts = Some(ahora);
-        self.chips_rx = Some((modelo, rx));
+        self.chips_rx = Some(rx);
     }
 
     /// Recoge los atajos que estaban en vuelo.
     fn pump_chips(&mut self) {
-        let Some((modelo, rx)) = &self.chips_rx else { return };
+        let Some(rx) = &self.chips_rx else { return };
         match rx.try_recv() {
             Ok(r) => {
-                let modelo = modelo.clone();
                 self.chips_rx = None;
                 // Un fallo se traga: los de fábrica siguen puestos y la pantalla
                 // queda como estaba. Avisar de que no se ha podido embellecer
                 // una pantalla vacía sería ruido sobre algo que nadie pidió.
-                if let Ok((chips, ent, sal)) = r {
-                    // NI UNO NI DOS: con menos de tres, la rejilla queda coja al
-                    // lado de los cuatro de fábrica, y media pantalla propia y
-                    // media genérica se lee peor que la genérica entera.
-                    if chips.len() >= 3 {
-                        self.chips = chips;
-                    }
+                //
+                // EL LISTÓN DE TRES VIVE AHORA EN `suggest::MIN_UTILES`, junto a
+                // quien lo usa para decidir si prueba con otro modelo. Estaba
+                // aquí como un `3` suelto, y el núcleo no podía saber cuándo
+                // había salido bien.
+                if let Some((chips, ent, sal, modelo)) = r {
+                    self.chips = chips;
                     if let Some(c) = lucy_core::pricing::cost(&modelo, ent, sal) {
                         self.gasto_titulos += c;
                     }
@@ -19896,7 +19944,9 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                             );
                             if !nota.is_empty() {
                                 ui.label(
-                                    egui::RichText::new(nota).small().color(theme::txt3()),
+                                    egui::RichText::new(nota_en_palabras(nota))
+                                        .small()
+                                        .color(theme::txt3()),
                                 );
                             }
                         }
