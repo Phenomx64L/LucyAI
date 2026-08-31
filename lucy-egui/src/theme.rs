@@ -447,6 +447,46 @@ pub const FS_HERO: f32 = 28.0;
 /// remotos, el saludo de la pantalla de bienvenida.
 pub const FS_DISPLAY: f32 = 22.0;
 
+// ── Alturas de control ───────────────────────────────────────────────────────
+//
+// HABÍA ESCALA DE RADIOS Y ESCALA TIPOGRÁFICA, PERO NO DE ALTURAS, y por eso se
+// midieron nueve alturas distintas de control en la aplicación. No era gente
+// eligiendo mal: era que no había de dónde elegir, así que cada sitio dejaba que
+// la altura la decidiera el tamaño de su texto.
+//
+// De ahí sale el `interact_size` de egui, que Lucy no fijaba: rige el suyo,
+// `vec2(40.0, 18.0)`, y con `button_padding` a 6 vertical eso da un botón de
+// unos 29-30 px de alto — mientras un `.small()` da 17-18 y un control pintado a
+// mano da lo que su autor pusiera. Tres alturas en la misma fila.
+//
+// LOS NÚMEROS SON MÚLTIPLOS DE CUATRO, que es el ritmo del resto del sistema, y
+// cubren los cuatro papeles que de verdad existen aquí.
+
+/// Un control dentro de otra cosa: un chip, una etiqueta pulsable.
+pub const H_XS: f32 = 20.0;
+/// El control de una fila: un segmentado, un botón secundario.
+pub const H_SM: f32 = 24.0;
+/// Un botón normal, un campo de texto.
+pub const H_MD: f32 = 28.0;
+/// Una acción principal, una fila de lista pulsable.
+pub const H_LG: f32 = 32.0;
+
+/// Lo que mide de alto una línea de texto de tamaño `fs`.
+///
+/// EL FACTOR 1,45 NO SALE DE AQUÍ: lo declara ya el cálculo de las alturas de
+/// tarjeta del Dashboard —«cada una es la suma de sus filas contando la altura
+/// real de línea de la fuente (≈ tamaño × 1.45)»— y estaba escrito ahí y
+/// aplicado a mano en cada suma. Con nombre, el día que se cambie la fuente hay
+/// UN sitio donde ajustarlo en vez de una arqueología por el fichero.
+///
+/// Aproximado a propósito: la altura real depende de la fuente concreta y de sus
+/// métricas, y para repartir aire sobra con esto. Donde hace falta el valor
+/// exacto —¿cabe este texto en esta caja?— está el arnés de `layout::measure`,
+/// que se lo pregunta a egui.
+pub fn linea(fs: f32) -> f32 {
+    fs * 1.45
+}
+
 /// `--ls-label` — `0.09em`, el tracking de los rótulos de instrumento.
 pub const LS_LABEL: f32 = 0.09;
 
@@ -736,6 +776,20 @@ fn apply_visuals(ctx: &egui::Context) {
     // de Lucy, que respira bastante más.
     style.spacing.item_spacing = egui::vec2(8.0, 8.0);
     style.spacing.button_padding = egui::vec2(10.0, 6.0);
+    // EL SUELO DE UN CONTROL, que no lo ponía nadie.
+    //
+    // Sin esto rige el de egui —`vec2(40.0, 18.0)`— y la altura de cada botón la
+    // decide el tamaño de su propio texto más el relleno. En la práctica eso son
+    // tres alturas conviviendo: un botón normal ronda los 29-30, uno `.small()`
+    // se queda en 17-18, y los pintados a mano miden lo que pusiera cada uno.
+    //
+    // Se fija SOLO EL ALTO. El ancho mínimo de 40 px de egui está bien y tocarlo
+    // ensancharía todos los botones cortos —«Sí», «OK», los de un glifo— sin que
+    // nadie lo haya pedido.
+    //
+    // Y es un MÍNIMO, no una altura: un botón con texto más alto sigue creciendo.
+    // Lo que hace es que los pequeños dejen de quedarse por debajo del ritmo.
+    style.spacing.interact_size.y = H_SM;
     style.spacing.menu_margin = egui::Margin::same(6.0);
     style.spacing.indent = 16.0;
     style.spacing.scroll.bar_width = 8.0;
@@ -1389,6 +1443,37 @@ mod tests {
             assert_ne!(bg2(), bg4(), "{m:?}: el hover del rail sería invisible");
         }
         set_mode(Mode::Dark);
+    }
+
+    #[test]
+    fn la_escala_de_alturas_esta_ordenada_y_va_de_cuatro_en_cuatro() {
+        let escala = [("XS", H_XS), ("SM", H_SM), ("MD", H_MD), ("LG", H_LG)];
+        for par in escala.windows(2) {
+            let ((na, a), (nb, b)) = (par[0], par[1]);
+            assert!(a < b, "{na} ({a}) no va por debajo de {nb} ({b})");
+        }
+        // EL RITMO DE CUATRO no es decoración: es lo que hace que dos controles
+        // de peldaños distintos sigan alineando sus bordes cuando se apilan, y
+        // lo que evita que aparezca un «casi» —un 26, un 30— que rompe la rejilla
+        // sin que nadie sepa por qué.
+        for (n, h) in escala {
+            assert_eq!(h % 4.0, 0.0, "{n} ({h}) no es múltiplo de cuatro");
+        }
+        // Y el mínimo que Lucy le impone a egui tiene que SER uno de ellos: si
+        // se le pone un número suelto, todos los botones de la aplicación se
+        // quedan a una altura que no está en la escala.
+        assert_eq!(H_SM, 24.0);
+    }
+
+    #[test]
+    fn una_capsula_de_la_escala_de_alturas_es_media_altura() {
+        // Los chips y las píldoras piden su radio como `capsule(H_*)`. Si algún
+        // día una altura deja de ser par, el radio cae en medio píxel y el
+        // teselador redondea distinto arriba que abajo.
+        for (n, h) in [("XS", H_XS), ("SM", H_SM), ("MD", H_MD), ("LG", H_LG)] {
+            assert_eq!(capsule(h), Rounding::same(h / 2.0), "{n}");
+            assert_eq!(h % 2.0, 0.0, "{n} ({h}) es impar: su cápsula cae en medio píxel");
+        }
     }
 
     #[test]

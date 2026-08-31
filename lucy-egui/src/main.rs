@@ -1952,6 +1952,25 @@ fn fmt_uptime(secs: u64) -> String {
 /// Separación única entre tarjetas. Una sola, para que columnas y filas casen.
 const GAP: f32 = 10.0;
 
+/// El escalón entre SECCIONES, que es otra cosa que la separación entre celdas.
+///
+/// `GAP` era las dos: el hueco de la rejilla —el que hace que columnas y filas
+/// casen, y que por eso no se puede tocar— y también lo que separaba dos paneles
+/// enteros de Configuración o dos bloques del Dashboard. Con el mismo número, la
+/// pantalla no tiene jerarquía vertical: dos celdas de una tabla están tan lejos
+/// como «Modelo y comportamiento» de «Interfaz», así que el ojo no encuentra
+/// dónde acaba un asunto y empieza el siguiente y hay que leer los rótulos para
+/// saberlo.
+///
+/// El doble, y no un número nuevo: que sea múltiplo mantiene el ritmo. Y `GAP`
+/// se queda EXACTAMENTE donde estaba —`cell_w` y `fit_cols` no se tocan—, que es
+/// lo que rompería la rejilla que tanto costó cuadrar.
+///
+/// El coste, medido: en Configuración son seis huecos por columna, o sea 60 px
+/// más de recorrido; en el Dashboard, dos, o sea 20. A cambio de que se vea de un
+/// vistazo cuántos asuntos hay en la pantalla.
+const GAP_SECCION: f32 = GAP * 2.0;
+
 // Alturas de tarjeta del Dashboard. Se calculan, no se tantean: cada una es la
 // suma de sus filas contando la altura real de línea de la fuente (≈ tamaño ×
 // 1.45) más los márgenes. Sobrar unos píxeles no se ve; faltar uno recorta el
@@ -2211,7 +2230,25 @@ fn fila(
     // en español, que es lo que ya salía.
     let etiqueta = i18n::tr(etiqueta);
     let sub = sub.map(i18n::tr);
-    let alto = if sub.is_some() { 42.0 } else { 32.0 };
+    // LAS DOS FILAS RESPIRAN LO MISMO, y no lo hacían.
+    //
+    // Medido con el factor de altura de línea que este fichero ya declara: el
+    // texto de una fila con subtítulo mide 12×1,45 + 2 de separación + 11×1,45 =
+    // 35,4 px, y la banda eran 42 — o sea 3,3 px de aire por lado. La fila SIN
+    // subtítulo mide 17,4 en una banda de 32: 7,3 por lado.
+    //
+    // La apretada era la de DOS LÍNEAS, que es la forma normal —casi todas las
+    // filas de Configuración llevan explicación—, así que el ritmo vertical de
+    // la pantalla lo marcaba la excepción.
+    //
+    // Cincuenta iguala las dos en 7,3 por lado. La de una línea NO se toca:
+    // subirla a 36 le daría 9,3 y volvería a descompensar, en el otro sentido.
+    let texto_alto = if sub.is_some() {
+        theme::linea(theme::FS_FOOTNOTE) + 2.0 + theme::linea(theme::FS_CAPTION)
+    } else {
+        theme::linea(theme::FS_FOOTNOTE)
+    };
+    let alto = if sub.is_some() { 50.0 } else { 32.0 };
     // DOS MITADES CON ANCHO FIJO, y ninguna puede empujar a la otra.
     //
     // Aquí hubo antes un reparto de derecha a izquierda —el control primero, la
@@ -2248,6 +2285,18 @@ fn fila(
                 |ui| {
                     ui.set_max_width(w_etiqueta);
                     ui.spacing_mut().item_spacing.y = 2.0;
+                    // CENTRADA A MANO, y hace falta. El bloque se pide con la
+                    // altura EXACTA de la banda y con `top_down`, así que no
+                    // queda holgura que egui pueda repartir: el texto se pega
+                    // arriba. El control, en cambio, va por `right`, que reparte
+                    // centrado — y ese desnivel se repetía en las cuarenta y
+                    // cuatro filas de Configuración.
+                    //
+                    // Se empuja la mitad de lo que sobra. Si la etiqueta envuelve
+                    // a más líneas de las previstas, `max(0.0)` deja el empujón
+                    // en cero y el texto vuelve a empezar arriba, que es lo
+                    // correcto: entonces no sobra nada que repartir.
+                    ui.add_space(((alto - texto_alto) * 0.5).max(0.0));
                     ui.label(
                         egui::RichText::new(etiqueta)
                             .size(theme::FS_FOOTNOTE)
@@ -2372,7 +2421,7 @@ fn dos_columnas(ui: &mut egui::Ui, col: f32, mut contenido: impl FnMut(&mut egui
 /// sitios —que es como estaban— cambiar la altura del control obligaba a
 /// acordarse de cuatro números más, y el que se olvidara rompía la
 /// concentricidad sin dar ningún error.
-const SEG_H: f32 = 24.0;
+const SEG_H: f32 = theme::H_SM;
 const SEG_PAD: f32 = 3.0;
 
 fn segmentado(
@@ -2526,11 +2575,11 @@ fn tag_chip(ui: &mut egui::Ui, texto: &str) -> bool {
         ui.fonts(|f| f.layout_no_wrap(texto.to_string(), font.clone(), theme::txt3()).size().x);
     let w = medido.min((ui.available_width() - 14.0).max(32.0));
     let (rect, resp) =
-        ui.allocate_exact_size(egui::vec2(w + 14.0, 18.0), egui::Sense::click());
+        ui.allocate_exact_size(egui::vec2(w + 14.0, theme::H_XS), egui::Sense::click());
     let hov = resp.hovered();
     ui.painter().rect(
         rect,
-        egui::Rounding::same(9.0),
+        theme::capsule(theme::H_XS),
         if hov { theme::bg4() } else { theme::bg3() },
         egui::Stroke::new(1.0_f32, theme::bdr()),
     );
@@ -2560,10 +2609,11 @@ fn insignia(ui: &mut egui::Ui, texto: &str, ok: bool) {
     // queda crecido al fotograma siguiente. Un chip envenena la vista entera.
     let medido = ui.fonts(|f| f.layout_no_wrap(texto.to_string(), font.clone(), color).size().x);
     let w = medido.min((ui.available_width() - 28.0).max(40.0));
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(w + 28.0, 22.0), egui::Sense::hover());
+    let (rect, _) =
+        ui.allocate_exact_size(egui::vec2(w + 28.0, theme::H_XS), egui::Sense::hover());
     ui.painter().rect(
         rect,
-        egui::Rounding::same(11.0),
+        theme::capsule(theme::H_XS),
         fondo,
         egui::Stroke::new(1.0_f32, if ok { theme::acc_line() } else { theme::bdr() }),
     );
@@ -3198,7 +3248,7 @@ fn host_pill(ui: &mut egui::Ui, icon: icons::Icon, name: &str) -> egui::Response
     let fijo = 10.0 + iw + 6.0 + 6.0 + chev + 10.0;
     let nw = medido.min((ui.available_width() - fijo).max(40.0));
     let (rect, resp) =
-        ui.allocate_exact_size(egui::vec2(fijo + nw, 24.0), egui::Sense::click());
+        ui.allocate_exact_size(egui::vec2(fijo + nw, theme::H_SM), egui::Sense::click());
     ui.painter().rect(
         rect,
         egui::Rounding::same(theme::R_SM),
@@ -3389,10 +3439,11 @@ fn chip(ui: &mut egui::Ui, icon: icons::Icon, label: &str) -> bool {
     // frases— hacía crecer la fila y con ella el contenido de lo que la
     // contuviera.
     let w = chip_w(ui, label).min(ui.available_width().max(60.0));
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 30.0), egui::Sense::click());
+    let (rect, resp) =
+        ui.allocate_exact_size(egui::vec2(w, theme::H_LG), egui::Sense::click());
     ui.painter().rect(
         rect,
-        egui::Rounding::same(999.0),
+        theme::capsule(theme::H_LG),
         if resp.hovered() { theme::bg4() } else { theme::bg3() },
         egui::Stroke::new(
             1.0_f32,
@@ -4013,7 +4064,7 @@ fn inv_tarjeta(ui: &mut egui::Ui, label: &str, n: Option<usize>, fallo: bool, on
 /// Una fila del desplegable de equipos: nombre a la izquierda, tipo a la derecha.
 fn lv_opcion(ui: &mut egui::Ui, nombre: &str, tipo: &str, sel: bool) -> bool {
     let (rect, resp) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width().max(198.0), 28.0),
+        egui::vec2(ui.available_width().max(198.0), theme::H_MD),
         egui::Sense::click(),
     );
     if resp.hovered() {
@@ -14878,7 +14929,7 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
         // Todo sale de la lista YA CACHEADA y de una función pura: esto no
         // cuesta una petición por frame, que fue el fallo de `list_models` sin
         // plazo y no se repite.
-        ui.add_space(GAP);
+        ui.add_space(GAP_SECCION);
         let vivo = !self.models.is_empty();
         let n_modelos = self.models.len();
         let embebedor = self
@@ -14965,7 +15016,7 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
         }
 
         // ── interfaz ─────────────────────────────────────────────────────────
-        ui.add_space(GAP);
+        ui.add_space(GAP_SECCION);
         let mut nuevo_tema: Option<theme::Mode> = None;
         let mut nuevo_motion: Option<bool> = None;
         let mut nueva_paleta: Option<usize> = None;
@@ -15139,7 +15190,7 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
             theme::cambia_paleta(ui.ctx(), k);
         }
         // ── este equipo ──────────────────────────────────────────────────────
-        ui.add_space(GAP);
+        ui.add_space(GAP_SECCION);
         let elev = match lucy_core::elevate::state() {
             lucy_core::elevate::Elevation::Already => ("Administrador", true),
             lucy_core::elevate::Elevation::CanPrompt => ("Sin privilegios · UAC disponible", false),
@@ -15195,7 +15246,7 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                 }
             },
         );
-        ui.add_space(GAP);
+        ui.add_space(GAP_SECCION);
         self.cfg_umbrales(ui, col);
     }
 
@@ -15457,7 +15508,7 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
         // todos los prompts a partir de entonces. Un almacén así sin forma de
         // verlo ni de vaciarlo no es una memoria: es algo que se te queda
         // pegado.
-        ui.add_space(GAP);
+        ui.add_space(GAP_SECCION);
         let perfil = lucy_core::profile::all().unwrap_or_default();
         let mut olvidar: Option<String> = None;
         let n_perfil = perfil.len();
@@ -15526,7 +15577,7 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
         }
 
         // ── skills ───────────────────────────────────────────────────────────
-        ui.add_space(GAP);
+        ui.add_space(GAP_SECCION);
         let mut instalar = false;
         let mut quitar: Option<String> = None;
         // APAGAR NO ES BORRAR. Lo que se quiere casi siempre es «ahora no» —el
@@ -16536,7 +16587,7 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                             }
                         });
                     });
-                    ui.add_space(GAP);
+                    ui.add_space(GAP_SECCION);
                 }
 
                 // ── KPI ──────────────────────────────────────────────────────
@@ -16641,7 +16692,7 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                         );
                     });
                 });
-                ui.add_space(GAP);
+                ui.add_space(GAP_SECCION);
 
                 // ── red + servicios ──────────────────────────────────────────
                 let netw = cell_w(full, 4);
