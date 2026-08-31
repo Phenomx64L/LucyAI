@@ -5034,13 +5034,37 @@ const K_WS_PLEGADO: &str = "lucy.ws_plegado";
 /// CON LA CLAVE DE LA V1 dentro (`es`, `en`, `pt`…), no con un índice: un índice
 /// se rompe en cuanto se añade un idioma en medio de la lista, y lo que quedaría
 /// guardado sería «el tercero», que mañana es otro.
-/// Cuándo se pidieron por última vez los atajos de la pantalla vacía.
+/// Cuándo se pidieron por última vez los atajos de la pantalla vacía, y cuáles
+/// salieron. VAN JUNTOS, y esa es toda la pieza.
 ///
-/// SE GUARDA LA MARCA Y NO LOS ATAJOS. Se recalculan al arrancar si toca, y en
-/// medio día el equipo puede haber cambiado: guardarlos enseñaría al abrir unos
-/// atajos que hablan de un servicio que ya arrancó. La marca sola basta para no
-/// pedirlos cinco veces al día.
+/// ── LO QUE DECÍA ANTES, Y POR QUÉ ERA MEDIA VERDAD ───────────────────────────
+///
+/// Aquí ponía: «SE GUARDA LA MARCA Y NO LOS ATAJOS. Se recalculan al arrancar si
+/// toca». El razonamiento era bueno —en medio día el equipo cambia, y guardarlos
+/// enseñaría al abrir unos atajos que hablan de un servicio que ya arrancó— pero
+/// se le escapó QUIÉN DECIDE SI TOCA: la marca. Que sí sobrevivía.
+///
+/// Así que al arrancar, los atajos salían vacíos —se ven los cuatro de fábrica— y
+/// la marca, recién puesta, decía que aún no tocaba pedirlos. Nunca se pedían.
+/// Cerrar Lucy más de una vez cada doce horas hacía la función IMPOSIBLE, no
+/// improbable. El operador nunca vio un atajo escrito por su máquina.
+///
+/// ── LA REGLA AHORA ───────────────────────────────────────────────────────────
+///
+/// Son UN SOLO HECHO: «estos atajos, de este momento». Se guardan juntos y se
+/// leen juntos. La caducidad de medio día sigue gobernando lo viejo, que es lo
+/// que el comentario de antes quería y no conseguía.
+///
+/// Y LA CLAVE VACÍA SIGNIFICA ALGO. Si la marca está pero la clave de los atajos
+/// NO EXISTE, esos datos son de antes de este arreglo: la marca no vale nada y se
+/// tira. Si la clave existe y está vacía, se preguntó y nadie supo contestar —eso
+/// sí es una respuesta, y la marca la protege para no llamar cada arranque a una
+/// puerta que ya dijo que no.
 const K_CHIPS_TS: &str = "lucy.chips_ts";
+/// Los atajos que acompañan a [`K_CHIPS_TS`]. En el mismo formato de líneas que
+/// escribe el modelo, para releerlos con `suggest::parse` y no con un lector
+/// nuevo que tendría sus propios fallos.
+const K_CHIPS: &str = "lucy.chips";
 const K_LANG: &str = "lucy.idioma";
 const K_TONO: &str = "lucy.tono";
 /// Si Lucy avisa cuando el modelo elegido se queda corto.
@@ -5420,8 +5444,16 @@ impl App {
             claves_probadas: std::collections::HashMap::new(),
             prueba_rx: Vec::new(),
             titulo_rx: Vec::new(),
-            chips: Vec::new(),
+            chips: storage
+                .and_then(|s| s.get_string(K_CHIPS))
+                .map(|s| lucy_core::suggest::parse(&s))
+                .unwrap_or_default(),
+            // EL `filter` NO SOBRA. Sin él, una instalación de antes de este
+            // arreglo —marca sí, atajos no— seguiría creyendo que ya preguntó, y
+            // el arreglo tardaría medio día en notarse. Con él, la marca huérfana
+            // se tira una vez y a partir de ahí las dos claves viajan juntas.
             chips_ts: storage
+                .filter(|s| s.get_string(K_CHIPS).is_some())
                 .and_then(|s| s.get_string(K_CHIPS_TS))
                 .and_then(|v| v.parse().ok()),
             chips_rx: None,
@@ -6069,8 +6101,12 @@ impl eframe::App for App {
         storage.set_string(K_REDACTA, lucy_core::redacta::activa().to_string());
         storage.set_string(K_WS_PLEGADO, self.ws_plegado.to_string());
         storage.set_string(K_LANG, i18n::lang().clave().to_string());
+        // LAS DOS CLAVES O NINGUNA. Escribir la marca sin los atajos es
+        // exactamente el estado que hacía imposible la función: al abrir, atajos
+        // vacíos y una marca diciendo que ya se preguntó. Ver [`K_CHIPS_TS`].
         if let Some(t) = self.chips_ts {
             storage.set_string(K_CHIPS_TS, t.to_string());
+            storage.set_string(K_CHIPS, lucy_core::suggest::a_lineas(&self.chips));
         }
         storage.set_string(K_TONO, self.tono.key().to_string());
         storage.set_string(K_RUTA, self.enrutado.to_string());
