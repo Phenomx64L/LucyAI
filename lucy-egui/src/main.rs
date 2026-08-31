@@ -2454,7 +2454,19 @@ fn segmentado(
                         superficie(ui, &resp, rect, theme::capsule(SEG_H), theme::bg4());
                     }
                     anillo(ui, &resp, rect, theme::capsule(SEG_H));
-                    ui.painter().text(
+                    // RECORTADO A SU COLUMNA. MEDIDO: con el control a 220 px
+                    // de ancho, cada opción se lleva 52 y la etiqueta más larga
+                    // pide 59. Siete píxeles fuera por opción — y como esto es
+                    // `painter().text()`, se pintaban encima de la opción de al
+                    // lado en vez de cortarse.
+                    //
+                    // El reparto de arriba ya acota el ANCHO de la columna
+                    // contra el sitio disponible; lo que faltaba era que el
+                    // texto respetara la columna que le tocó. Se recorta y no se
+                    // encoge la letra: un segmentado con cada opción en un
+                    // cuerpo distinto se lee peor que uno con una etiqueta
+                    // cortada, y el orden de las opciones ya dice cuál es cuál.
+                    ui.painter().with_clip_rect(rect).text(
                         rect.center(),
                         egui::Align2::CENTER_CENTER,
                         i18n::tr(o),
@@ -2535,7 +2547,13 @@ fn insignia(ui: &mut egui::Ui, texto: &str, ok: bool) {
     let color = if ok { theme::acc() } else { theme::txt3() };
     let fondo = if ok { theme::acc_bg() } else { theme::bg3() };
     let font = egui::FontId::proportional(theme::FS_CAPTION);
-    let w = ui.fonts(|f| f.layout_no_wrap(texto.to_string(), font.clone(), color).size().x);
+    // EL ANCHO SE PIDE TOPADO CONTRA LO QUE HAY, no entero. Se derivaba del
+    // texto y se reservaba completo: una insignia es un widget que ASIGNA sitio,
+    // así que con un texto largo hacía crecer el `min_rect` de quien la
+    // contiene — y si eso es un `ScrollArea`, su ancho de contenido crece y se
+    // queda crecido al fotograma siguiente. Un chip envenena la vista entera.
+    let medido = ui.fonts(|f| f.layout_no_wrap(texto.to_string(), font.clone(), color).size().x);
+    let w = medido.min((ui.available_width() - 28.0).max(40.0));
     let (rect, _) = ui.allocate_exact_size(egui::vec2(w + 28.0, 22.0), egui::Sense::hover());
     ui.painter().rect(
         rect,
@@ -2548,7 +2566,9 @@ fn insignia(ui: &mut egui::Ui, texto: &str, ok: bool) {
         3.0,
         color,
     );
-    ui.painter().text(
+    // Y el texto recortado a su caja: topar el ancho sin recortar la pintura
+    // deja la letra saliéndose de una píldora que ya no la contiene.
+    ui.painter().with_clip_rect(rect).text(
         egui::pos2(rect.left() + 19.0, rect.center().y),
         egui::Align2::LEFT_CENTER,
         texto,
@@ -2579,12 +2599,22 @@ fn section(ui: &mut egui::Ui, title: &str, sub: Option<String>) {
         // Como `fila` y `panel`: traduce el ayudante, no el sitio de llamada.
         // Por aquí pasan los rótulos del Dashboard —«Núcleos», «Discos», «Top
         // procesos»— y de las tablas de Inventario.
-        ui.add(egui::Label::new(theme::instrument_label(i18n::tr(title), theme::faint())));
+        // TRUNCADOS LOS DOS. `row_align` es un `horizontal`, y en un horizontal
+        // un `Label` hereda «no partas»: crece hasta donde haga falta y empuja.
+        // Con «Top procesos» en español no se nota; con el rótulo de una tabla
+        // de Inventario en alemán, sí.
+        ui.add(
+            egui::Label::new(theme::instrument_label(i18n::tr(title), theme::faint()))
+                .truncate(),
+        );
         if let Some(s) = sub {
-            ui.label(
-                egui::RichText::new(s)
-                    .size(theme::FS_CAPTION)
-                    .color(theme::faint()),
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(s)
+                        .size(theme::FS_CAPTION)
+                        .color(theme::faint()),
+                )
+                .truncate(),
             );
         }
     });
@@ -3334,8 +3364,12 @@ fn chip_w(ui: &egui::Ui, label: &str) -> f32 {
 
 /// Chip de sugerencia del estado vacío.
 fn chip(ui: &mut egui::Ui, icon: icons::Icon, label: &str) -> bool {
-    let (rect, resp) =
-        ui.allocate_exact_size(egui::vec2(chip_w(ui, label), 30.0), egui::Sense::click());
+    // Topado contra lo disponible, por lo mismo que `insignia`: el ancho salía
+    // del texto y se pedía entero, así que una sugerencia larga —y las hay, son
+    // frases— hacía crecer la fila y con ella el contenido de lo que la
+    // contuviera.
+    let w = chip_w(ui, label).min(ui.available_width().max(60.0));
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 30.0), egui::Sense::click());
     ui.painter().rect(
         rect,
         egui::Rounding::same(999.0),
@@ -3354,7 +3388,7 @@ fn chip(ui: &mut egui::Ui, icon: icons::Icon, label: &str) -> bool {
         15.0,
         theme::acc(),
     );
-    ui.painter().text(
+    ui.painter().with_clip_rect(rect.shrink2(egui::vec2(12.0, 0.0))).text(
         egui::pos2(rect.left() + 36.0, cy),
         egui::Align2::LEFT_CENTER,
         label,
@@ -3924,13 +3958,29 @@ fn inv_tarjeta(ui: &mut egui::Ui, label: &str, n: Option<usize>, fallo: bool, on
         egui::FontId::proportional(24.0),
         color,
     );
-    ui.painter().text(
-        egui::pos2(rect.center().x, rect.bottom() - 16.0),
-        egui::Align2::CENTER_CENTER,
-        label.to_uppercase(),
-        egui::FontId::proportional(theme::FS_CAPTION),
-        if on { theme::acc() } else { theme::txt3() },
-    );
+    // RECORTADO AL ANCHO DE LA BALDOSA, que es fijo y no da para todos los
+    // idiomas.
+    //
+    // MEDIDO en la caja de 118 px: «Puertos» pide 47 y «Software» 58, así que en
+    // español cabe de sobra. Pero «Programas instalados» pide 134 y su alemán,
+    // «Installierte Programme», 139 — veintiún píxeles fuera por cada lado. Y
+    // como esto es `painter().text()`, no se recortaba solo: se pintaba encima
+    // de la baldosa de al lado, y con cinco categorías en fila eso son rótulos
+    // superpuestos.
+    //
+    // Se recorta y no se envuelve: la baldosa mide 66 px de alto con la cifra
+    // ocupando la mitad, así que una segunda línea no cabría. Y la letra inicial
+    // basta para distinguir cinco categorías que además están siempre en el
+    // mismo orden.
+    ui.painter()
+        .with_clip_rect(rect.shrink2(egui::vec2(4.0, 0.0)))
+        .text(
+            egui::pos2(rect.center().x, rect.bottom() - 16.0),
+            egui::Align2::CENTER_CENTER,
+            label.to_uppercase(),
+            egui::FontId::proportional(theme::FS_CAPTION),
+            if on { theme::acc() } else { theme::txt3() },
+        );
     if fallo {
         resp.clone().on_hover_text(i18n::tr("No se pudo consultar — el motivo está arriba."));
     }
@@ -3946,18 +3996,40 @@ fn lv_opcion(ui: &mut egui::Ui, nombre: &str, tipo: &str, sel: bool) -> bool {
     if resp.hovered() {
         ui.painter().rect_filled(rect, egui::Rounding::same(theme::R_SM), theme::bg4());
     }
-    ui.painter().text(
-        egui::pos2(rect.left() + 9.0, rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        nombre,
-        egui::FontId::proportional(theme::FS_FOOTNOTE),
-        if sel { theme::acc() } else { theme::txt2() },
-    );
+    // EL NOMBRE SE RECORTA CONTRA EL TIPO, que es lo que hace su gemela
+    // `host_option` y esta no hacía.
+    //
+    // MEDIDO: en una caja de 210 px, un nombre de equipo real más su transporte
+    // más los márgenes piden 358. `painter().text()` no envuelve ni recorta
+    // NUNCA — pinta donde se le diga aunque caiga fuera— así que el nombre se
+    // comía el «winrm» de la derecha y seguía hasta que lo cortaba el borde del
+    // desplegable, a media letra.
+    //
+    // Y el transporte es justo lo que no se puede perder: el comentario de
+    // `host_option` lo dice con todas las letras — un equipo con nombre largo no
+    // debe poder esconder CÓMO se llega a él. Se mide su ancho, se le reserva, y
+    // el nombre se pinta a través de un painter recortado a lo que queda.
+    let fuente_tipo = egui::FontId::monospace(theme::FS_CAPTION);
+    let w_tipo = ui.fonts(|f| {
+        f.layout_no_wrap(tipo.to_string(), fuente_tipo.clone(), theme::faint()).size().x
+    });
+    ui.painter()
+        .with_clip_rect(egui::Rect::from_min_max(
+            egui::pos2(rect.left() + 9.0, rect.top()),
+            egui::pos2((rect.right() - 9.0 - w_tipo - 8.0).max(rect.left() + 9.0), rect.bottom()),
+        ))
+        .text(
+            egui::pos2(rect.left() + 9.0, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            nombre,
+            egui::FontId::proportional(theme::FS_FOOTNOTE),
+            if sel { theme::acc() } else { theme::txt2() },
+        );
     ui.painter().text(
         egui::pos2(rect.right() - 9.0, rect.center().y),
         egui::Align2::RIGHT_CENTER,
         tipo,
-        egui::FontId::monospace(theme::FS_CAPTION),
+        fuente_tipo,
         theme::faint(),
     );
     resp.clicked()
@@ -18850,19 +18922,29 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
     }
 
     fn mem_tab_cristales(&mut self, ui: &mut egui::Ui) {
+        // MEDIDO: esta cabecera pedía 790 px pasara lo que pasara. Con la
+        // ventana a 520 se salía por 270, y con ella se iba el ancho del
+        // contenido del `ScrollArea` de más abajo — el mismo mecanismo que
+        // rompía los títulos de los cristales.
+        //
+        // La frase va DEBAJO del botón y no a su lado. En un `horizontal` un
+        // `Label` no parte, así que ponerla ahí obliga a elegir entre truncar una
+        // explicación —que entonces no explica— o dejar que empuje. Debajo
+        // envuelve, que es lo que hace la prosa.
         ui.horizontal(|ui| {
             if ui.button(i18n::tr("↻ Recargar")).clicked() {
                 self.cristales = Some(lucy_core::crystals::list(100));
             }
-            ui.label(
-                egui::RichText::new(
-                    "Cada cristal es una sesión destilada. Se escriben solos al cerrar turnos; \
-                     sus lecciones ya son memorias y sobreviven aunque borres el cristal.",
-                )
-                .size(theme::FS_CAPTION)
-                .color(theme::faint()),
-            );
         });
+        ui.add_space(4.0);
+        ui.label(
+            egui::RichText::new(i18n::tr(
+                "Cada cristal es una sesión destilada. Se escriben solos al cerrar turnos; \
+                 sus lecciones ya son memorias y sobreviven aunque borres el cristal.",
+            ))
+            .size(theme::FS_CAPTION)
+            .color(theme::faint()),
+        );
         ui.add_space(4.0);
         let mut borrar: Option<i64> = None;
         let mut armar: Option<i64> = None;
@@ -18885,8 +18967,42 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                 egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                     for c in v {
                         egui::Frame::group(ui.style()).show(ui, |ui| {
+                            // EL ANCHO SE REPARTE ANTES DE DIBUJAR NADA, que es
+                            // el patrón que ya usa `fila` y por el mismo motivo.
+                            //
+                            // Aquí había un `ui.label` con la narrativa entera
+                            // dentro de un `ui.horizontal`, y un `Label` en un
+                            // horizontal HEREDA «no partas»: crecía hasta donde
+                            // hiciera falta. Con una narrativa de dos líneas, el
+                            // título se salía por el borde derecho de la ventana
+                            // y empujaba fuera el botón de borrar y la hora.
+                            //
+                            // Y NO SE QUEDABA AHÍ. Ese desbordamiento infla el
+                            // ancho del CONTENIDO del `ScrollArea`, y ese ancho
+                            // persiste al fotograma siguiente: a partir de
+                            // entonces `available_width()` viene inflado para
+                            // todo lo de dentro, así que los hitos y las
+                            // lecciones —que sí envuelven— envolvían a un ancho
+                            // mayor que la ventana y también se salían. Un solo
+                            // desborde envenenaba la lista entera, que es lo que
+                            // se veía en el pantallazo: los cuatro cristales
+                            // cortados por la misma vertical.
+                            let total = ui.available_width();
+                            let w_der = 96.0;
+                            let w_tit = (total - w_der - GAP).max(160.0);
                             ui.horizontal(|ui| {
-                                ui.label(egui::RichText::new(&c.narrativa).strong());
+                                ui.allocate_ui_with_layout(
+                                    egui::vec2(w_tit, 0.0),
+                                    egui::Layout::top_down(egui::Align::LEFT),
+                                    |ui| {
+                                        ui.add(
+                                            egui::Label::new(
+                                                egui::RichText::new(&c.narrativa).strong(),
+                                            )
+                                            .wrap(),
+                                        );
+                                    },
+                                );
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),
                                     |ui| {
@@ -19692,6 +19808,8 @@ mod layout {
         out
     }
 
+    // TEMPORAL: verificación de los nueve desbordes reportados.
+
     /// Un comando de los que salen de verdad: largo y sin sitios donde partir.
     ///
     /// Los tres recortes de texto de esta noche los produjo texto así. Un
@@ -19835,6 +19953,105 @@ mod layout {
             r.width() <= w + 1.0,
             "el mensaje de Lucy mide {:.0} px en {w:.0} de conversación: se recorta",
             r.width()
+        );
+    }
+
+    #[test]
+    fn la_cabecera_de_un_cristal_no_se_sale_por_estrecha_que_sea_la_ventana() {
+        // EL FALLO QUE ESTO CIERRA, y lo vio el operador antes que nadie: en
+        // Memoria › Cristales, los títulos salían cortados por el borde derecho
+        // de la ventana. La narrativa de un cristal es una frase entera y se
+        // pintaba con un `ui.label` dentro de un `ui.horizontal` — que hereda
+        // «no partas» y crece hasta donde haga falta.
+        //
+        // Y ARRASTRABA EL RESTO. Ese desbordamiento infla el ancho del contenido
+        // del `ScrollArea`, y ese ancho persiste al fotograma siguiente: los
+        // hitos y las lecciones, que SÍ envuelven, envolvían entonces a un ancho
+        // mayor que la ventana. Por eso en el pantallazo salían cortados los
+        // cuatro cristales por la misma vertical, no solo los títulos.
+        //
+        // Se mide con narrativas de verdad, de las que escribe el destilador.
+        let largas = [
+            "La skill se creó para mejorar el proyecto o workflows en GoAnywhere MFT, \
+             evitando comandos o variables no documentadas. Lucy registró la skill y la \
+             aplicó a la creación de proyectos.",
+            "Se comprobó que todos los programas del sistema registrados en el gestor de \
+             paquetes de Windows cuyas versiones se conocen con certeza están completamente \
+             actualizadas. Sin embargo, quedan varios con versión indeterminada.",
+            "corto",
+        ];
+        // La cabecera, con el reparto de ahora o con el `label` pelado de antes.
+        // Las dos formas dentro de una caja del ancho EXACTO de la ventana, que
+        // es como viven de verdad: dentro del `Frame::group` de un cristal.
+        let cabecera = |ancho: f32, n: &'static str, reparte: bool| -> egui::Rect {
+            measure(ancho, |ui| {
+                ui.allocate_ui_with_layout(
+                    egui::vec2(ancho, 0.0),
+                    egui::Layout::top_down(egui::Align::LEFT),
+                    |ui| {
+                        let total = ui.available_width();
+                        let w_der = 96.0;
+                        let w_tit = (total - w_der - GAP).max(160.0);
+                        ui.horizontal(|ui| {
+                            if reparte {
+                                ui.allocate_ui_with_layout(
+                                    egui::vec2(w_tit, 0.0),
+                                    egui::Layout::top_down(egui::Align::LEFT),
+                                    |ui| {
+                                        ui.add(
+                                            egui::Label::new(
+                                                egui::RichText::new(n).strong(),
+                                            )
+                                            .wrap(),
+                                        );
+                                    },
+                                );
+                            } else {
+                                // La forma que estaba: un `Label` suelto en un
+                                // `horizontal`, sin nada que lo acote.
+                                ui.label(egui::RichText::new(n).strong());
+                            }
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    let _ = ui.button("🗑");
+                                    ui.label(egui::RichText::new("4h ago").small().weak());
+                                },
+                            );
+                        });
+                    },
+                );
+            })
+        };
+
+        for ancho in [1600.0_f32, 1180.0, 900.0, 620.0] {
+            for n in largas {
+                let r = cabecera(ancho, n, true);
+                assert!(
+                    r.width() <= ancho + 1.0,
+                    "a {ancho} px la cabecera mide {:.0}: se sale por {:.0}",
+                    r.width(),
+                    r.width() - ancho
+                );
+            }
+        }
+
+        // ── Y QUE EL TEST TENGA DIENTES ─────────────────────────────────────
+        //
+        // Un test que pasa con el arreglo Y con el fallo no comprueba nada, y
+        // eso ya pasó hoy: los cuatro tests de la superelipse pasaban tan
+        // contentos con el contorno cruzado, porque comprobaban propiedades que
+        // el fallo respetaba. Así que aquí se mide TAMBIÉN la forma vieja y se
+        // exige que desborde.
+        //
+        // Medido con el arnés: la narrativa suelta en un `horizontal` pide 1300
+        // px pase lo que pase con la ventana.
+        let roto = cabecera(620.0, largas[0], false);
+        assert!(
+            roto.width() > 620.0 + 1.0,
+            "la forma vieja tampoco desbordaba a 620 px ({:.0}): este test no \
+             comprueba nada",
+            roto.width()
         );
     }
 
