@@ -447,6 +447,270 @@ pub fn escapa_xml(s: &str) -> String {
 /// Separado de quien lo ejecuta para poder probarlo sin Windows delante: lo que
 /// se puede equivocar aquí es el escapado y la forma del XML, y las dos se leen
 /// en una cadena.
+/// Deja en el menú de inicio el acceso directo que le da CARA a los avisos.
+///
+/// ── POR QUÉ HACE FALTA ───────────────────────────────────────────────────────
+///
+/// Reportado: «las notificaciones que genera Lucy llegan cortadas y sin su
+/// icono». Lo del icono se midió leyendo el disco, no deduciéndolo:
+///
+/// ```text
+///   %APPDATA%\…\Start Menu\Programs\Lucy\Lucy.lnk   862 bytes
+///   ¿contiene «IvanEduardoLuna.Lucy»?               NO
+/// ```
+///
+/// Un `.lnk` pelado, sin almacén de propiedades. Y ahí está todo: EL ICONO DE UN
+/// GLOBO NO VIENE DEL XML. Windows lo saca del acceso directo del menú de inicio
+/// cuyo `System.AppUserModel.ID` coincide con el que se usó al publicarlo. Sin
+/// ese acceso directo, el aviso llega —está comprobado, se lee en la base del
+/// centro de notificaciones— pero sin icono y sin nombre de aplicación.
+///
+/// ── POR QUÉ LO HACE LUCY Y NO EL INSTALADOR ──────────────────────────────────
+///
+/// El instalador también lo hace: `lucy.wxs` pone la propiedad en su acceso
+/// directo. Pero eso solo arregla las instalaciones NUEVAS, y no arregla nada de
+/// esto:
+///
+///   · la Lucy que ya está instalada de un MSI anterior —el caso de ahora—;
+///   · la compilación de desarrollo, que no pasa por instalador;
+///   · una copia portátil en un USB;
+///   · un menú de inicio que el operador reorganizó.
+///
+/// Un aviso sin cara es un aviso que se ignora. Que dependa de por qué vía se
+/// instaló es una fragilidad que no hace falta tener.
+///
+/// EN `%APPDATA%` Y NO EN `%PROGRAMDATA%`: es el menú de inicio del usuario, así
+/// que no hace falta ser administrador. Lucy se ejecuta elevada a menudo y
+/// escribir ahí crearía un acceso directo que el usuario no puede tocar.
+///
+/// ── POR QUÉ CON POWERSHELL ───────────────────────────────────────────────────
+///
+/// Poner esa propiedad exige COM —`IShellLink` más `IPropertyStore`— y ninguna
+/// de las dos está en el `WScript.Shell` que crea accesos directos. En Rust
+/// serían un par de cientos de líneas de interoperación a mano. Lucy ya lanza
+/// PowerShell para todo, y `Add-Type` compila el trozo de C# que sí sabe hacerlo.
+///
+/// Es idempotente: si el acceso directo ya está y ya apunta a este ejecutable,
+/// no se toca. Se llama una vez al arrancar.
+/// Qué acceso directo hay que tocar: `(ruta, destino, hay_que_reparar_uno)`.
+///
+/// SE REPARA EL QUE HAYA ANTES DE CREAR OTRO. El instalador deja el suyo en
+/// `Programs\Lucy\Lucy.lnk`, dentro de su carpeta. Crear uno nuevo al lado
+/// dejaría al operador con DOS entradas de Lucy en el menú de inicio, una de
+/// ellas apuntando a donde estuviera corriendo el ejecutable — que en una
+/// compilación de desarrollo es un `target\debug` que no debería salir en el
+/// menú de nadie.
+///
+/// Así que si hay uno instalado, se le añade la propiedad y se le deja su
+/// destino. Solo cuando no hay ninguno se crea, y entonces sí apunta a este
+/// ejecutable, porque es el único que se conoce.
+#[cfg(windows)]
+fn donde_va() -> Result<(String, String, bool), String> {
+    let programas = std::path::PathBuf::from(
+        std::env::var("APPDATA").map_err(|_| "sin APPDATA".to_string())?,
+    )
+    .join(r"Microsoft\Windows\Start Menu\Programs");
+
+    // Los sitios donde el instalador lo deja, en orden de preferencia.
+    for candidato in [programas.join(r"Lucy\Lucy.lnk"), programas.join("Lucy.lnk")] {
+        if candidato.exists() {
+            return Ok((candidato.display().to_string(), String::new(), true));
+        }
+    }
+    let exe = std::env::current_exe()
+        .map_err(|e| format!("sin ruta del ejecutable: {e}"))?
+        .display()
+        .to_string();
+    Ok((programas.join("Lucy.lnk").display().to_string(), exe, false))
+}
+
+#[cfg(windows)]
+pub fn registra_identidad() -> Result<(), String> {
+    // YA ESTÁ: NO SE TOCA, venga de donde venga el acceso directo. La condición
+    // llevaba además un `!reparar` que la anulaba justo en el caso normal —hay
+    // uno instalado, o sea `reparar`— así que se reescribía en cada arranque.
+    // Eso cambia la fecha del fichero del menú de inicio de alguien cada vez que
+    // abre el programa, que es la clase de huella que no se espera de una
+    // aplicación que no se está actualizando.
+    if identidad_registrada() {
+        return Ok(());
+    }
+    let (lnk, exe, _) = donde_va()?;
+
+    // El C# es el mínimo que hace falta: crear el enlace y escribirle UNA
+    // propiedad. `PKEY_AppUserModel_ID` es `{9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3}`
+    // con el identificador 5 — la constante está publicada y no se deduce del
+    // código, así que va escrita al lado de su nombre.
+    let script = format!(
+        r#"
+$ErrorActionPreference = 'Stop'
+$lnk = '{lnk}'
+$exe = '{exe}'
+Add-Type -Language CSharp -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+[StructLayout(LayoutKind.Sequential, Pack = 4)]
+public struct PropertyKey {{ public Guid fmtid; public uint pid; }}
+[StructLayout(LayoutKind.Sequential)]
+public struct PropVariant {{
+  public ushort vt; ushort r1, r2, r3; public IntPtr p; int p2;
+}}
+[ComImport, Guid("00021401-0000-0000-C000-000000000046")]
+public class ShellLink {{ }}
+[ComImport, Guid("000214F9-0000-0000-C000-000000000046"),
+ InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface IShellLinkW {{
+  void GetPath(System.Text.StringBuilder p, int c, IntPtr d, int f);
+  void GetIDList(out IntPtr p); void SetIDList(IntPtr p);
+  void GetDescription(System.Text.StringBuilder n, int c);
+  void SetDescription(string n);
+  void GetWorkingDirectory(System.Text.StringBuilder d, int c);
+  void SetWorkingDirectory(string d);
+  void GetArguments(System.Text.StringBuilder a, int c);
+  void SetArguments(string a);
+  void GetHotkey(out short h); void SetHotkey(short h);
+  void GetShowCmd(out int c); void SetShowCmd(int c);
+  void GetIconLocation(System.Text.StringBuilder i, int c, out int n);
+  void SetIconLocation(string i, int n);
+  void SetRelativePath(string p, int r);
+  void Resolve(IntPtr h, int f);
+  void SetPath(string p);
+}}
+[ComImport, Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99"),
+ InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface IPropertyStore {{
+  void GetCount(out uint c); void GetAt(uint i, out PropertyKey k);
+  void GetValue(ref PropertyKey k, out PropVariant v);
+  void SetValue(ref PropertyKey k, ref PropVariant v);
+  void Commit();
+}}
+[ComImport, Guid("0000010b-0000-0000-C000-000000000046"),
+ InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface IPersistFile {{
+  void GetClassID(out Guid c); void IsDirty();
+  void Load(string f, int m); void Save(string f, bool r);
+  void SaveCompleted(string f); void GetCurFile(out IntPtr f);
+}}
+public static class Lnk {{
+  [DllImport("ole32.dll")] static extern int PropVariantClear(ref PropVariant v);
+  // VT_LPWSTR. El PROPVARIANT se arma A MANO en vez de con
+  // `InitPropVariantFromString`: esa funcion NO esta exportada por propsys.dll
+  // —es un inline de las cabeceras del SDK— y la importacion falla con «no se
+  // puede encontrar el punto de entrada». Medido, no supuesto.
+  //
+  // Armarlo es poner el tipo y un puntero a la cadena reservada con el
+  // asignador de COM, que es de donde `PropVariantClear` la va a liberar.
+  const ushort VT_LPWSTR = 31;
+  public static void Escribe(string ruta, string destino, string aumid) {{
+    var sl = (IShellLinkW)new ShellLink();
+    if (destino.Length == 0) {{
+      // REPARAR uno que ya existe: se carga y se le deja su destino, su icono y
+      // lo que el operador le hubiera puesto. Solo se le añade la propiedad.
+      ((IPersistFile)sl).Load(ruta, 2);
+    }} else {{
+      sl.SetPath(destino);
+      sl.SetIconLocation(destino, 0);
+    }}
+    var ps = (IPropertyStore)sl;
+    // PKEY_AppUserModel_ID
+    var k = new PropertyKey {{
+      fmtid = new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"), pid = 5 }};
+    var v = new PropVariant();
+    v.vt = VT_LPWSTR;
+    v.p = Marshal.StringToCoTaskMemUni(aumid);
+    ps.SetValue(ref k, ref v);
+    ps.Commit();
+    PropVariantClear(ref v);
+    ((IPersistFile)sl).Save(ruta, true);
+  }}
+}}
+'@
+[Lnk]::Escribe($lnk, $exe, '{AUMID}')
+"#
+    );
+    let (_, err, ok) = crate::shell::run_powershell_utf8(&script)?;
+    if ok {
+        Ok(())
+    } else {
+        Err(para_el_globo(&err))
+    }
+}
+
+/// Si el acceso directo del menú de inicio ya lleva la identidad de Lucy.
+///
+/// Se mira el fichero en crudo: la propiedad se guarda como una cadena UTF-16
+/// dentro del almacén del `.lnk`, así que buscarla ahí es exacto y no cuesta
+/// abrir COM. Un `.lnk` sin almacén son unos ochocientos bytes; con él, mil y
+/// pico.
+///
+/// SE PRUEBAN LOS DOS DESPLAZAMIENTOS, y no es celo: es el fallo que tuvo esta
+/// función. Un `.lnk` es un formato binario con campos de longitud variable, así
+/// que una cadena UTF-16 de dentro NO tiene por qué empezar en un byte par —
+/// medido: la de aquí empieza en impar—. Leyendo solo desde el cero, esto
+/// contestaba «no está» con la propiedad delante.
+///
+/// Y no era inocuo: devolver siempre `false` hace que `registra_identidad` dé
+/// por reparar lo que ya estaba bien, y reescriba el acceso directo del operador
+/// en cada arranque.
+#[cfg(windows)]
+pub fn identidad_registrada() -> bool {
+    let Ok((lnk, _, _)) = donde_va() else { return false };
+    let Ok(bytes) = std::fs::read(&lnk) else { return false };
+    (0..2).any(|off| {
+        let u: Vec<u16> = bytes[off..]
+            .chunks_exact(2)
+            .map(|p| u16::from_le_bytes([p[0], p[1]]))
+            .collect();
+        String::from_utf16_lossy(&u).contains(AUMID)
+    })
+}
+
+/// Lo que cabe en un globo de Windows, cortado POR PALABRAS y con marca.
+///
+/// ── EL FALLO QUE ESTO CIERRA ─────────────────────────────────────────────────
+///
+/// Reportado con una captura: «las notificaciones que genera Lucy llegan
+/// cortadas». Y lo estaban — leído del propio centro de notificaciones de
+/// Windows, un aviso de Lucy acababa así:
+///
+/// ```text
+///   …Compruebe que el nombre del equ
+/// ```
+///
+/// A media palabra y sin nada que dijera que faltaba algo. Eso no se lee como un
+/// texto recortado: se lee como un programa roto.
+///
+/// El corte estaba además en el sitio equivocado —en el síntoma, antes de
+/// construir el aviso— así que el REGISTRO guardaba también el texto mutilado. Y
+/// el registro es justo lo que existe para conservar lo que el globo no puede:
+/// el globo se va de pantalla en segundos, la fila se queda.
+///
+/// ── POR PALABRAS Y CON PUNTOS SUSPENSIVOS ────────────────────────────────────
+///
+/// Cortar por caracteres parte «equipo» en «equ», y eso hace dudar de si el
+/// programa se ha caído a mitad de frase. Cortar por la última palabra entera y
+/// cerrar con «…» dice dos cosas a la vez: que se acabó el sitio y que hay más
+/// donde mirar.
+///
+/// El tope es generoso a propósito. `hint-maxLines="4"` da al globo cuatro
+/// líneas, y trescientos caracteres es lo que cabe en ellas sin que Windows
+/// ponga su propio recorte, que sí es por caracteres y sí es mudo.
+pub fn para_el_globo(s: &str) -> String {
+    /// Lo que cabe en las cuatro líneas de un globo.
+    const TOPE: usize = 300;
+
+    let limpio: String = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    if limpio.chars().count() <= TOPE {
+        return limpio;
+    }
+    // Se corta en el último espacio que quepa. Si no hay ninguno —una ruta
+    // larguísima sin espacios, que las hay— se corta donde toque: mejor una
+    // palabra partida que un globo vacío.
+    let cabe: String = limpio.chars().take(TOPE).collect();
+    let corte = cabe.rfind(' ').unwrap_or(cabe.len());
+    format!("{}…", cabe[..corte].trim_end())
+}
+
 pub fn build_toast(a: &Aviso) -> String {
     // `ToastGeneric` con dos textos es la plantilla que entiende todo Windows 10
     // y 11 sin depender de que la aplicación tenga paquete. El `duration` largo
@@ -458,12 +722,16 @@ pub fn build_toast(a: &Aviso) -> String {
     } else {
         format!("<text placement=\"attribution\">{}</text>", escapa_xml(&a.equipo))
     };
+    // `hint-maxLines="4"` en el cuerpo: por defecto el globo da DOS líneas y lo
+    // demás no se ve — ni al desplegarlo. Cuatro es el máximo que admite la
+    // plantilla, y es la diferencia entre leer un error de WinRM y leer su
+    // primera mitad.
     let xml = format!(
         "<toast{dur}><visual><binding template=\"ToastGeneric\">\
-         <text>{}</text><text>{}</text>{equipo}\
+         <text>{}</text><text hint-maxLines=\"4\">{}</text>{equipo}\
          </binding></visual></toast>",
         escapa_xml(&a.titulo),
-        escapa_xml(&a.cuerpo),
+        escapa_xml(&para_el_globo(&a.cuerpo)),
     );
     // UN SOLO INTENTO, y aquí hubo una identidad prestada que quité.
     //
@@ -749,5 +1017,171 @@ mod tests {
         // Un valor que no reconoce no revienta ni se inventa una alarma: cae en
         // el nivel de en medio, que es el que menos afirma.
         assert_eq!(de_num(99), Nivel::Aviso);
+    }
+
+    #[test]
+    fn lo_que_no_cabe_se_corta_por_palabras_y_se_nota() {
+        // EL FALLO, tal cual salió del centro de notificaciones de Windows: el
+        // aviso acababa en «…el nombre del equ». A media palabra y sin decirlo.
+        let winrm = "No se ha podido sondear WIN-AD: Error de conexión al servidor remoto \
+                     192.168.1.100. Mensaje de error: WinRM no puede completar la operación. \
+                     Compruebe que el nombre del equipo es válido, que se puede alcanzar por \
+                     red y que hay una excepción de firewall para el servicio WinRM que \
+                     permita accesos desde este equipo.";
+        let g = para_el_globo(winrm);
+
+        assert!(g.ends_with('…'), "se cortó sin decir que faltaba: {g:?}");
+        // Ni una palabra partida: lo que va antes de los puntos suspensivos es
+        // el texto original hasta un espacio.
+        let sin_puntos = g.trim_end_matches('…');
+        assert!(
+            winrm.starts_with(sin_puntos),
+            "lo que queda no es un prefijo del original"
+        );
+        assert!(
+            winrm[sin_puntos.len()..].starts_with(' '),
+            "cortó a media palabra: acaba en {:?}",
+            sin_puntos.rsplit(' ').next().unwrap_or("")
+        );
+    }
+
+    #[test]
+    fn lo_que_cabe_llega_entero_y_sin_marca() {
+        // Un aviso normal no lleva puntos suspensivos: la marca tiene que
+        // significar «hay más», y si sale siempre no significa nada.
+        let corto = "El disco C: va al 91 % — quedan 84,2 GB de 931,5.";
+        assert_eq!(para_el_globo(corto), corto);
+        assert!(!para_el_globo(corto).ends_with('…'));
+    }
+
+    #[test]
+    fn un_texto_sin_espacios_no_deja_el_globo_vacio() {
+        // Una ruta larguísima sin un solo espacio. Cortar por palabras no puede
+        // ser una excusa para no cortar: mejor una palabra partida que nada.
+        let ruta = "C:".to_string() + &"\\carpeta_muy_larga".repeat(40);
+        let g = para_el_globo(&ruta);
+        assert!(g.chars().count() > 100, "se quedó en nada: {}", g.chars().count());
+        assert!(g.ends_with('…'));
+    }
+
+    #[test]
+    fn el_registro_se_queda_con_el_error_entero() {
+        // EL CORTE ESTABA EN EL SITIO EQUIVOCADO. Se hacía en el síntoma, antes
+        // de construir el aviso, así que el registro guardaba también el texto
+        // mutilado — y el registro es lo único que queda cuando el globo se va
+        // de pantalla.
+        //
+        // El de WinRM es de los que dicen lo importante al FINAL: la primera
+        // mitad es «no se pudo conectar» y la segunda, qué comprobar.
+        let largo = "Error de conexión al servidor remoto 192.168.1.100. ".to_string()
+            + &"Compruebe el firewall y el servicio WinRM. ".repeat(12);
+        let s = crate::watch::observa_caido("WIN-AD", &largo);
+        let cuerpo = &s[0].cuerpo;
+        assert!(
+            cuerpo.contains("servicio WinRM"),
+            "el registro perdió el final del error"
+        );
+        assert!(
+            cuerpo.chars().count() > 300,
+            "el aviso llega recortado al registro: {} caracteres",
+            cuerpo.chars().count()
+        );
+        // Y el globo sí lo corta, que es donde toca.
+        assert!(para_el_globo(cuerpo).chars().count() <= 301);
+    }
+
+    /// Escribe el acceso directo y comprueba que lleva la identidad.
+    ///
+    /// `cargo test -p lucy-core registra_la_identidad -- --ignored --nocapture`
+    ///
+    /// IGNORADO PORQUE ESCRIBE EN EL MENÚ DE INICIO del usuario, y un test que
+    /// modifica el escritorio de quien lo corre no puede formar parte de la
+    /// pasada normal. Pero existe, porque lo contrario —fiarse de que un trozo
+    /// de C# generado dentro de un `format!` hace lo que dice— ya ha salido mal
+    /// en este proyecto.
+    #[cfg(windows)]
+    #[test]
+    #[ignore]
+    fn registra_la_identidad() {
+        println!("antes: identidad registrada = {}", identidad_registrada());
+        match registra_identidad() {
+            Ok(()) => println!("escrito"),
+            Err(e) => panic!("no se pudo escribir: {e}"),
+        }
+        assert!(
+            identidad_registrada(),
+            "el acceso directo se escribió pero NO lleva el AUMID: la propiedad \
+             no llegó al almacén"
+        );
+        println!("después: identidad registrada = true");
+    }
+
+    /// Vuelca lo que Windows tiene DE VERDAD en su centro de notificaciones.
+    ///
+    /// `cargo test -p lucy-core que_hay_en_el_centro -- --ignored --nocapture`
+    ///
+    /// NO ES UNA COMPROBACIÓN, ES UN INSTRUMENTO, y por eso va marcado como
+    /// ignorado: no afirma nada, enseña. Está aquí porque esta clase de fallo ya
+    /// ha engañado dos veces en este proyecto — las dos concluyendo «Windows no
+    /// entrega» al leer una instantánea sin su `-wal`, y las dos desmentidas por
+    /// un pantallazo del operador.
+    ///
+    /// Enseña la identidad con la que llegó cada aviso, que es lo que decide si
+    /// sale con el icono de Lucy o sin él: el icono no viene del XML, viene del
+    /// acceso directo del menú de inicio que lleva ese mismo AUMID.
+    #[test]
+    #[ignore]
+    fn que_hay_en_el_centro() {
+        let dir = std::path::PathBuf::from(std::env::var("LOCALAPPDATA").unwrap())
+            .join("Microsoft\\Windows\\Notifications");
+        let copia = std::env::temp_dir().join("lucy-wpn-volcado.db");
+        std::fs::copy(dir.join("wpndatabase.db"), &copia).unwrap();
+        // EL `-wal` TAMBIÉN. Sin él la copia es una base perfectamente válida
+        // con datos viejos: no da error, simplemente miente sobre lo reciente.
+        let wal = dir.join("wpndatabase.db-wal");
+        if wal.exists() {
+            let _ = std::fs::copy(&wal, copia.with_extension("db-wal"));
+        }
+        let c = rusqlite::Connection::open_with_flags(
+            &copia,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        let mut st = c
+            .prepare(
+                "SELECT h.PrimaryId, n.Payload
+                 FROM Notification n
+                 JOIN NotificationHandler h ON h.RecordId = n.HandlerId
+                 WHERE n.Type = 'toast'
+                 ORDER BY n.ArrivalTime DESC LIMIT 25",
+            )
+            .unwrap();
+        let filas: Vec<(String, String)> = st
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    String::from_utf8_lossy(&r.get::<_, Vec<u8>>(1)?).to_string(),
+                ))
+            })
+            .unwrap()
+            .filter_map(|x| x.ok())
+            .collect();
+        println!("\n{} toasts en el centro\n", filas.len());
+        for (quien, payload) in &filas {
+            let textos: Vec<&str> = payload
+                .split("<text")
+                .skip(1)
+                .filter_map(|t| t.split_once('>').and_then(|(_, r)| r.split_once("</text>")))
+                .map(|(t, _)| t)
+                .collect();
+            println!("  [{quien}]");
+            for t in textos {
+                println!("      {}", t.trim());
+            }
+            if payload.contains("appLogoOverride") {
+                println!("      (lleva imagen propia)");
+            }
+        }
+        println!();
     }
 }

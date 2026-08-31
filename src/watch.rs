@@ -507,7 +507,15 @@ pub fn observa_caido(equipo: &str, error: &str) -> Vec<Sintoma> {
         nivel: Nivel::Critico,
         asunto: format!("Equipo {equipo}"),
         titulo: format!("{equipo} no responde"),
-        cuerpo: format!("No se ha podido sondear {equipo}: {}", recorta(error, 140)),
+        // EL ERROR ENTERO, y el recorte donde toca.
+        //
+        // Aquí se cortaba a 140 caracteres con un `take`, así que el REGISTRO
+        // —que es lo único que queda cuando el globo se va de pantalla— guardaba
+        // el mensaje mutilado. Y el de WinRM es de los que dicen lo importante
+        // al final: «compruebe que el servicio WinRM se está ejecutando».
+        //
+        // Quien tiene un límite es el globo, no el aviso. Ver `notify::para_el_globo`.
+        cuerpo: format!("No se ha podido sondear {equipo}: {}", una_linea(error)),
         cuerpo_ok: format!("{equipo} vuelve a responder."),
         equipo: equipo.to_string(),
     }]
@@ -531,9 +539,12 @@ pub fn observa_sin_credencial(equipo: &str) -> Vec<Sintoma> {
     }]
 }
 
-fn recorta(s: &str, n: usize) -> String {
-    let limpio = s.split_whitespace().collect::<Vec<_>>().join(" ");
-    limpio.chars().take(n).collect()
+/// Un error de varias líneas, en una sola.
+///
+/// Los de WinRM y los de `ssh` vienen con saltos y sangría del transporte, y un
+/// aviso es una frase. No recorta: eso es cosa del globo, no del registro.
+fn una_linea(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Una pasada sobre los equipos remotos dados de alta.
