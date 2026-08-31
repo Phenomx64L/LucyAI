@@ -2518,7 +2518,13 @@ fn mem_tags(crudo: &str) -> Vec<String> {
 /// con lo que sí quiere decir algo. Aquí el color se gana, no se reparte.
 fn tag_chip(ui: &mut egui::Ui, texto: &str) -> bool {
     let font = egui::FontId::proportional(theme::FS_CAPTION);
-    let w = ui.fonts(|f| f.layout_no_wrap(texto.to_string(), font.clone(), theme::txt3()).size().x);
+    // Topado contra lo disponible, como `insignia` y `chip`. Las etiquetas de
+    // una memoria las escriben el operador y el modelo, sin tope de longitud, y
+    // van en fila dentro del `ScrollArea` de la lista: una sola larga hacía
+    // crecer el ancho del contenido y con él toda la vista de Memoria.
+    let medido =
+        ui.fonts(|f| f.layout_no_wrap(texto.to_string(), font.clone(), theme::txt3()).size().x);
+    let w = medido.min((ui.available_width() - 14.0).max(32.0));
     let (rect, resp) =
         ui.allocate_exact_size(egui::vec2(w + 14.0, 18.0), egui::Sense::click());
     let hov = resp.hovered();
@@ -2528,7 +2534,7 @@ fn tag_chip(ui: &mut egui::Ui, texto: &str) -> bool {
         if hov { theme::bg4() } else { theme::bg3() },
         egui::Stroke::new(1.0_f32, theme::bdr()),
     );
-    ui.painter().text(
+    ui.painter().with_clip_rect(rect).text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
         texto,
@@ -3178,12 +3184,21 @@ fn disk_card(
 /// hace que se lea como un selector y no como un botón cualquiera.
 fn host_pill(ui: &mut egui::Ui, icon: icons::Icon, name: &str) -> egui::Response {
     let font = egui::FontId::proportional(theme::FS_FOOTNOTE);
-    let nw = ui.fonts(|f| f.layout_no_wrap(name.to_string(), font.clone(), theme::txt3()).size().x);
+    let medido =
+        ui.fonts(|f| f.layout_no_wrap(name.to_string(), font.clone(), theme::txt3()).size().x);
     let (iw, chev) = (15.0, 13.0);
-    let (rect, resp) = ui.allocate_exact_size(
-        egui::vec2(10.0 + iw + 6.0 + nw + 6.0 + chev + 10.0, 24.0),
-        egui::Sense::click(),
-    );
+    // EL NOMBRE SE TOPA CONTRA LO QUE QUEDA. Medido: la píldora pedía 357 px
+    // fijos —el ancho del nombre más los adornos— sin mirar el sitio que había.
+    // Con un nombre de dominio entero, la cabecera de la vista empujaba fuera lo
+    // que tuviera al lado.
+    //
+    // El chevrón NUNCA se pierde: es lo que dice que esto es un desplegable, y
+    // sin él la píldora se lee como una etiqueta. Por eso se descuenta antes de
+    // repartir, y lo que se recorta es el nombre.
+    let fijo = 10.0 + iw + 6.0 + 6.0 + chev + 10.0;
+    let nw = medido.min((ui.available_width() - fijo).max(40.0));
+    let (rect, resp) =
+        ui.allocate_exact_size(egui::vec2(fijo + nw, 24.0), egui::Sense::click());
     ui.painter().rect(
         rect,
         egui::Rounding::same(theme::R_SM),
@@ -3198,13 +3213,18 @@ fn host_pill(ui: &mut egui::Ui, icon: icons::Icon, name: &str) -> egui::Response
         15.0,
         theme::acc(),
     );
-    ui.painter().text(
-        egui::pos2(rect.left() + 10.0 + iw + 6.0, cy),
-        egui::Align2::LEFT_CENTER,
-        name,
-        font,
-        theme::txt3(),
-    );
+    ui.painter()
+        .with_clip_rect(egui::Rect::from_min_max(
+            egui::pos2(rect.left() + 10.0 + iw + 6.0, rect.top()),
+            egui::pos2(rect.right() - 10.0 - chev - 6.0, rect.bottom()),
+        ))
+        .text(
+            egui::pos2(rect.left() + 10.0 + iw + 6.0, cy),
+            egui::Align2::LEFT_CENTER,
+            name,
+            font,
+            theme::txt3(),
+        );
     icons::draw(
         ui.painter(),
         icons::Icon::ChevronDown,
@@ -3898,7 +3918,10 @@ fn cmp_tarjeta(ui: &mut egui::Ui, ancho: f32, n: usize, label: &str, col: egui::
         egui::FontId::proportional(30.0),
         col,
     );
-    ui.painter().text(
+    // Recortado a la tarjeta. `ancho` lo reparte quien la llama entre las tres
+    // que hay, así que con la ventana estrecha se encoge — y «CONFORMES»,
+    // «AVISOS» y «FALLAS» se traducen a palabras más largas en alemán.
+    ui.painter().with_clip_rect(rect.shrink2(egui::vec2(12.0, 0.0))).text(
         egui::pos2(rect.left() + 24.0, rect.top() + 68.0),
         egui::Align2::LEFT_CENTER,
         label,
@@ -8294,7 +8317,13 @@ fn orden_de_ventana(icon: icons::Icon, maximizada: bool) -> egui::ViewportComman
                             if resp.clicked() {
                                 pulsado = Some(cmd);
                             }
-                            let p = ui.painter();
+                            // RECORTADAS A LA FILA. La orden cabe siempre —son
+                            // cortas y suyo es el hueco de 120 px—, pero la
+                            // descripción es una frase y se traduce: en alemán
+                            // pasa de largo, y con la ventana estrecha se salía
+                            // por el borde del popup pintando sobre lo que
+                            // hubiera detrás.
+                            let p = ui.painter().with_clip_rect(r);
                             p.text(
                                 egui::pos2(r.left() + 10.0, r.center().y),
                                 egui::Align2::LEFT_CENTER,
@@ -17916,7 +17945,12 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
             egui::Rounding::same(2.0),
             color,
         );
-        let p = ui.painter();
+        // RECORTADOS A LA FILA. El nombre lo pone el operador al dar de alta el
+        // equipo y el subtítulo lleva la dirección y el puerto —
+        // «192.168.1.100:5985 · Windows (WinRM)»—, que en un carril de 232 px no
+        // cabe. Sin recorte se salía por la derecha del panel y se pintaba
+        // encima de la terminal que tiene al lado.
+        let p = ui.painter().with_clip_rect(r.shrink2(egui::vec2(6.0, 0.0)));
         p.text(
             egui::pos2(r.left() + 16.0, r.top() + 12.0),
             egui::Align2::LEFT_CENTER,
