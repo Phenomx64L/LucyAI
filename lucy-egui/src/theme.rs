@@ -787,21 +787,56 @@ pub fn superelipse(rect: egui::Rect, radio: f32) -> Vec<egui::Pos2> {
 
     let (x0, y0, x1, y1) = (rect.min.x, rect.min.y, rect.max.x, rect.max.y);
     let mut p = Vec::with_capacity(POR_ESQUINA * 4 + 4);
-    // Las cuatro esquinas, en sentido horario desde la superior derecha. El
-    // orden importa: `convex_polygon` no reordena nada.
-    for (dx, dy) in &cuadrante {
+
+    // EL SENTIDO DE GIRO TIENE QUE SER EL MISMO EN LAS CUATRO ESQUINAS Y EN EL
+    // RECORRIDO, y aquí no lo era: las esquinas se visitaban en horario y cada
+    // una se trazaba en antihorario. El resultado es un LAZO en cada esquina —el
+    // contorno se cruza consigo mismo— y lo que se veía eran muescas diagonales
+    // y picos triangulares saliendo de las tarjetas del Dashboard.
+    //
+    // `convex_polygon` no reordena nada ni avisa: da por hecho que los puntos
+    // vienen en orden. Un polígono cruzado no es un error para él, es una figura
+    // rara que tesela sin quejarse.
+    //
+    // Horario en coordenadas de pantalla —con la Y hacia abajo— es: por el borde
+    // de arriba hacia la derecha, bajar por el derecho, por el de abajo hacia la
+    // izquierda, y subir por el izquierdo. Cada esquina se recorre en ese mismo
+    // sentido, y por eso dos van al derecho y dos al revés: `cuadrante` va de
+    // (r,0) a (0,r), y según en qué esquina se aplique eso avanza con el giro o
+    // en contra.
+    //
+    // Se entra por el borde de arriba, justo antes de la esquina derecha.
+    for (dx, dy) in cuadrante.iter().rev() {
         p.push(egui::pos2(x1 - r + dx, y0 + r - dy));
     }
-    for (dx, dy) in cuadrante.iter().rev() {
+    for (dx, dy) in &cuadrante {
         p.push(egui::pos2(x1 - r + dx, y1 - r + dy));
     }
-    for (dx, dy) in &cuadrante {
+    for (dx, dy) in cuadrante.iter().rev() {
         p.push(egui::pos2(x0 + r - dx, y1 - r + dy));
     }
-    for (dx, dy) in cuadrante.iter().rev() {
+    for (dx, dy) in &cuadrante {
         p.push(egui::pos2(x0 + r - dx, y0 + r - dy));
     }
     p
+}
+
+/// El área con signo de un polígono. Positiva si va en horario con la Y hacia
+/// abajo, que es como se dibuja en pantalla.
+///
+/// SIRVE PARA DETECTAR UN CONTORNO CRUZADO, que es lo que ninguno de los otros
+/// tests veía: un lazo cancela área contra sí mismo, así que un polígono que se
+/// cruza mide mucho menos de lo que ocupa su silueta. Comprobar que el área es
+/// la que debería ser es comprobar que no hay lazo.
+#[cfg(test)]
+fn area_con_signo(p: &[egui::Pos2]) -> f32 {
+    let mut s = 0.0;
+    for i in 0..p.len() {
+        let a = p[i];
+        let b = p[(i + 1) % p.len()];
+        s += a.x * b.y - b.x * a.y;
+    }
+    s / 2.0
 }
 
 /// La sombra de lo que FLOTA, en una sola función.
@@ -1136,6 +1171,53 @@ mod tests {
             assert!(
                 r.contains(*q),
                 "el punto {q:?} se sale de {r:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn el_contorno_no_se_cruza_consigo_mismo() {
+        // EL TEST QUE FALTABA, y su ausencia costó una regresión que se vio en
+        // pantalla: las esquinas se visitaban en horario y cada una se trazaba
+        // en antihorario, así que el contorno hacía un LAZO en cada esquina. En
+        // el Dashboard salían muescas diagonales y picos triangulares.
+        //
+        // Los otros cuatro tests pasaban tan contentos: comprobaban que los
+        // puntos están dentro del rect, que tocan los cuatro lados y que la
+        // esquina llega cerca del vértice. Un contorno cruzado cumple las tres.
+        //
+        // El área con signo sí lo ve. Un lazo cancela área contra sí mismo, así
+        // que la figura mide mucho menos que su silueta; y el signo, además,
+        // dice el sentido de giro.
+        let lado = 200.0_f32;
+        let r = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(lado, lado));
+        let radio = 24.0_f32;
+        let a = area_con_signo(&superelipse(r, radio));
+
+        assert!(a > 0.0, "el contorno va en sentido antihorario: área {a}");
+        // Una superelipse de exponente 5 recorta muy poco de cada esquina: menos
+        // del 4 % del área total con este radio. Con un lazo se perdería mucho
+        // más que eso.
+        let total = lado * lado;
+        assert!(
+            a > total * 0.94,
+            "el área es {a:.0} de {total:.0}: falta demasiada, el contorno se cruza"
+        );
+        assert!(a <= total, "el área es mayor que el rectángulo que la contiene");
+    }
+
+    #[test]
+    fn el_sentido_de_giro_no_depende_del_radio() {
+        // El orden de los cuatro tramos es fijo, pero el de dentro de cada uno
+        // cambia según la esquina. Un radio distinto no debería poder invertir
+        // nada — y si algún día alguien toca el bucle, esto lo dice.
+        let r = egui::Rect::from_min_size(egui::pos2(5.0, 7.0), egui::vec2(160.0, 90.0));
+        for radio in [1.0_f32, 6.0, 12.0, 24.0, 45.0] {
+            let a = area_con_signo(&superelipse(r, radio));
+            assert!(a > 0.0, "con radio {radio} el giro se invierte: área {a}");
+            assert!(
+                a > r.width() * r.height() * 0.85,
+                "con radio {radio} el área cae a {a:.0}: hay lazo"
             );
         }
     }

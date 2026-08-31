@@ -6148,9 +6148,17 @@ impl eframe::App for App {
             .resizable(false)
             .frame(egui::Frame::none().fill(theme::bg2()).inner_margin(egui::Margin::symmetric(0.0, 10.0)))
             .show(ctx, |ui| {
-                // El rect de la primera entrada, del que sale la posición de la
-                // píldora deslizante. `None` hasta que se dibuja la primera.
-                let mut primera_fila: Option<egui::Rect> = None;
+                // EL HUECO DE LA PÍLDORA, RESERVADO ANTES DEL BUCLE.
+                //
+                // Va aquí y no dentro por dos razones a la vez. Tiene que
+                // quedar POR DEBAJO de los iconos y los rótulos, y en modo
+                // inmediato eso significa pintarla antes — pero su posición no
+                // se sabe hasta haber recorrido las ocho entradas. Reservar el
+                // sitio y rellenarlo al final resuelve las dos: es el mismo
+                // truco que usa `marco_continuo`.
+                let hueco = ui.painter().add(egui::Shape::Noop);
+                // El rect de la entrada ACTIVA, tal y como haya quedado.
+                let mut activa: Option<egui::Rect> = None;
                 for v in View::ALL {
                     let label = v.label();
                     let active = self.view == v;
@@ -6196,37 +6204,11 @@ impl eframe::App for App {
                     // «Configuración» saliéndose por los lados. Insertando solo
                     // la píldora, el texto conserva los 96 px enteros.
                     let pastilla = resp.rect.shrink2(egui::vec2(8.0, 3.0));
-                    // LA MISMA PÍLDORA DESLIZANTE QUE EL SEGMENTADO, y por su
-                    // mismo motivo, que ya está escrito ahí: el movimiento
-                    // CONECTA el sitio donde estaba con el sitio donde está, así
-                    // que el ojo sigue el cambio. Cambiar de módulo es la
-                    // transición más frecuente de toda la aplicación y era la que
-                    // saltaba — el indicador desaparecía de una fila y aparecía
-                    // en otra, y había que volver a buscarlo.
-                    //
-                    // Se pinta UNA sola vez, en la primera entrada del bucle y en
-                    // la posición interpolada. Dibujarla dentro del `if active`
-                    // de cada entrada es lo que la hacía saltar: entonces no hay
-                    // una píldora que se mueve, hay ocho que se encienden.
-                    if primera_fila.is_none() {
-                        primera_fila = Some(pastilla);
-                        let destino = View::ALL.iter().position(|x| *x == self.view).unwrap_or(0);
-                        let pos = if motion() {
-                            ui.ctx().animate_value_with_time(
-                                egui::Id::new("rail-pos"),
-                                destino as f32,
-                                theme::DUR_FAST,
-                            )
-                        } else {
-                            destino as f32
-                        };
-                        ui.painter().rect_filled(
-                            pastilla.translate(egui::vec2(0.0, pos * 46.0)),
-                            egui::Rounding::same(theme::R_MD),
-                            theme::acc().linear_multiply(0.10),
-                        );
-                    }
-                    if !active {
+                    // La entrada activa solo se APUNTA; su píldora se pinta al
+                    // salir del bucle, en el hueco reservado arriba.
+                    if active {
+                        activa = Some(pastilla);
+                    } else {
                         // `bg4` Y NO `bg3`, QUE EN CLARO ERA INVISIBLE. El rail se
                         // rellena con `bg2()`, y en el tema claro `bg2` y `bg3`
                         // son los dos `#FFFFFF` exacto: blanco sobre blanco. O sea
@@ -6262,6 +6244,45 @@ impl eframe::App for App {
                         // justo medio punto por encima.
                         egui::FontId::proportional(theme::FS_MICRO),
                         fg,
+                    );
+                }
+
+                // ── LA PÍLDORA, YA CON LAS OCHO ENTRADAS COLOCADAS ───────────
+                //
+                // Se desliza de un módulo a otro en vez de saltar, por el mismo
+                // motivo que la del segmentado y que ya está escrito allí: el
+                // movimiento CONECTA el sitio donde estaba con el sitio donde
+                // está, así que el ojo sigue el cambio en vez de tener que
+                // volver a buscarlo. Cambiar de módulo es la transición más
+                // frecuente de toda la aplicación.
+                //
+                // SE INTERPOLA LA Y REAL DE LA ENTRADA ACTIVA, y no un índice
+                // multiplicado por una altura. Eso último fue el fallo: la
+                // píldora avanzaba `índice · 46` mientras las entradas avanzaban
+                // 46 MÁS los 8 de `item_spacing.y` que pone el tema. El desvío
+                // crecía con el índice —8 px en la segunda, 48 en la séptima— así
+                // que los dos primeros módulos parecían correctos y los de abajo
+                // marcaban el de encima. Preguntándole a la entrada dónde ha
+                // quedado no hay separación que se pueda olvidar.
+                if let Some(p) = activa {
+                    let y = if motion() {
+                        ui.ctx().animate_value_with_time(
+                            egui::Id::new("rail-y"),
+                            p.top(),
+                            theme::DUR_FAST,
+                        )
+                    } else {
+                        p.top()
+                    };
+                    let desliz =
+                        egui::Rect::from_min_size(egui::pos2(p.left(), y), p.size());
+                    ui.painter().set(
+                        hueco,
+                        egui::Shape::rect_filled(
+                            desliz,
+                            egui::Rounding::same(theme::R_MD),
+                            theme::acc().linear_multiply(0.10),
+                        ),
                     );
                 }
             });
