@@ -99,10 +99,37 @@ pub const MIN_UTILES: usize = 3;
 
 /// Cuántos modelos se prueban antes de rendirse.
 ///
-/// Tres. Cada intento es una petición con su plazo, y esto corre en un hilo de
-/// fondo cada doce horas: probar cinco no cuesta nada al operador, pero tampoco
-/// aporta — si los tres primeros no saben, el cuarto tampoco va a saber.
-pub const INTENTOS: usize = 3;
+/// ── AQUÍ PONÍA TRES, Y TRES ERA EL MISMO FALLO OTRA VEZ ──────────────────────
+///
+/// La razón escrita era: «si los tres primeros no saben, el cuarto tampoco va a
+/// saber». Suena sensato y es falso, y lo desmiente la misma máquina que motivó
+/// todo esto. Sus modelos, en el orden en que se prueban:
+///
+/// ```text
+///   1. qwen3:0.6b          2 atajos   órdenes demasiado cortas
+///   2. deepseek-r1:1.5b    0 atajos   quema el presupuesto y escribe «ATAJO»
+///   3. deepseek-r1:7b      0-3        español pobre, gasta todo el presupuesto
+///   ─────────────────────────────── aquí paraba
+///   4. mistral:latest      0 atajos   sin la orden, y en inglés
+///   5. qwen3:latest        4 atajos   formato exacto, en español   <- EL BUENO
+/// ```
+///
+/// El corte caía JUSTO ANTES del único que sabe. Y no es mala suerte: es
+/// estructural. Se ordena por tamaño, los que no lo dicen en la etiqueta —los
+/// `:latest`— van al final, y esos son precisamente los generalistas bien
+/// ajustados. Un tope pequeño los excluye a todos por sistema.
+///
+/// ── SEIS, Y EL TOPE ES UN SEGURO, NO UNA POLÍTICA ────────────────────────────
+///
+/// Seis cubre lo que hay instalado en una máquina normal. La preferencia por el
+/// pequeño no cambia —sigue mandando el orden— pero ahora la cola se recorre
+/// entera antes de rendirse.
+///
+/// El coste medido de probarlos TODOS en esa máquina: 61 segundos, una vez cada
+/// doce horas, en un hilo de fondo, y solo si ninguno acierta antes. El tope
+/// existe para que una máquina con cuarenta modelos instalados no se pase una
+/// tarde preguntando, no para ahorrar un minuto cada medio día.
+pub const INTENTOS: usize = 6;
 
 /// Pide los atajos BAJANDO POR LA LISTA hasta que alguno sepa contestar.
 ///
@@ -135,10 +162,16 @@ pub const INTENTOS: usize = 3;
 /// No hay manera de mirar un nombre de modelo y saber si sabrá seguir un formato:
 /// depende de la familia, del tamaño, del ajuste y de si es un razonador. Así que
 /// se baja por la lista en el orden de siempre —los pequeños primero, que es la
-/// preferencia correcta— y se para en el primero que dé suficientes.
+/// preferencia correcta— preguntando.
 ///
-/// El coste real es cero casi siempre: en cuanto uno responde bien, se para. Y
-/// esto corre cada doce horas en un hilo de fondo.
+/// SE QUEDA EL MEJOR DE LOS PROBADOS, no el primero que llegue al mínimo, y se
+/// para en cuanto alguien llena la rejilla. Ver el cuerpo: pararse en el primero
+/// aterrizaba en un `deepseek-r1:7b` que daba justo tres atajos en español roto
+/// teniendo dos puestos más abajo uno que daba cuatro bien escritos.
+///
+/// El coste: una sola petición cuando el primero contesta con la rejilla llena;
+/// la cola entera —61 a 90 segundos medidos— cuando nadie lo consigue. En un hilo
+/// de fondo, una vez cada doce horas.
 pub fn escribe(
     instalados: &[String],
     privacidad: bool,
@@ -146,6 +179,7 @@ pub fn escribe(
 ) -> Option<(Vec<Chip>, u32, u32, String)> {
     let mut ent_total = 0;
     let mut sal_total = 0;
+    let mut mejor: Option<(Vec<Chip>, String)> = None;
     for m in candidatos(instalados).into_iter().take(INTENTOS) {
         if let Ok((chips, ent, sal, _)) = pide(ctx, &m) {
             // EL GASTO SE ACUMULA AUNQUE EL INTENTO NO SIRVA. Un modelo que
@@ -153,9 +187,29 @@ pub fn escribe(
             // registro de gasto está para decir lo que cuesta esto DE VERDAD.
             ent_total += ent;
             sal_total += sal;
-            if chips.len() >= MIN_UTILES {
-                return Some((chips, ent_total, sal_total, m));
+            // ── EL MEJOR DE LOS PROBADOS, NO EL PRIMERO QUE PASE ─────────────
+            //
+            // Pararse en el primero que llega a tres aterriza en lo mediocre
+            // habiendo algo mejor más abajo. Medido en la máquina del operador:
+            // `deepseek-r1:7b` es el tercero y da justo tres, con un español
+            // roto —«Disc espacio limitado», «Muestre un alerta sobre el alto de
+            // consumo»— mientras `qwen3:latest`, el quinto, da cuatro bien
+            // escritos. Con el corte en el primero, los buenos no se veían nunca.
+            if chips.len() > mejor.as_ref().map_or(0, |(c, _): &(Vec<Chip>, String)| c.len()) {
+                mejor = Some((chips, m));
             }
+            // SALIDA TEMPRANA CON LA REJILLA LLENA. Nadie puede dar más de
+            // `MAX`, así que seguir preguntando no puede mejorar nada: sería
+            // ocupar la máquina para confirmar lo que ya se tiene. En un equipo
+            // donde el primero conteste bien, esto sigue siendo UNA petición.
+            if mejor.as_ref().is_some_and(|(c, _)| c.len() >= MAX) {
+                break;
+            }
+        }
+    }
+    if let Some((chips, m)) = mejor {
+        if chips.len() >= MIN_UTILES {
+            return Some((chips, ent_total, sal_total, m));
         }
     }
     // Ninguno local supo. La nube, si la hay y si el modo privado lo permite.
@@ -386,6 +440,28 @@ pub fn parse(salida: &str) -> Vec<Chip> {
     out
 }
 
+/// Escribe los atajos EN EL MISMO FORMATO EN QUE LLEGARON, para guardarlos.
+///
+/// ── POR QUÉ NO ES JSON ───────────────────────────────────────────────────────
+///
+/// Porque el lector ya existe. `parse` lleva siete pruebas encima —el bloque de
+/// pensamiento, los adornos del modelo, la etiqueta repetida, el comando que se
+/// hace pasar por orden— y todo eso vale igual para una línea que viene del disco
+/// que para una que viene de Ollama. Un formato nuevo sería un segundo lector con
+/// sus propios fallos, para el mismo dato.
+///
+/// Y la vuelta es idempotente por construcción: lo que sale de `parse` ya pasó
+/// todos los filtros, así que volver a pasarlo no le quita nada. Hay una prueba
+/// que lo fija, porque «por construcción» es exactamente el tipo de afirmación
+/// que deja de ser cierta cuando alguien toca un filtro.
+pub fn a_lineas(chips: &[Chip]) -> String {
+    chips
+        .iter()
+        .map(|c| format!("ATAJO: {} | {}", c.etiqueta, c.orden))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// ¿Esto es un comando en vez de una instrucción?
 fn parece_comando(s: &str) -> bool {
     let b = s.to_ascii_lowercase();
@@ -495,6 +571,15 @@ pub fn pide(ctx: &str, modelo: &str) -> Result<(Vec<Chip>, u32, u32, String), St
 }
 
 #[cfg(test)]
+// Igual que en `maintenance`: varias aserciones de aquí comparan CONSTANTES
+// entre sí. Clippy las ve evaluables en compilación y avisa; no son aserciones
+// muertas sino guardas de invariante. Fijan una relación de diseño —el tope de
+// intentos tiene que llegar al final de una cola normal, el listón de útiles no
+// puede pedir más de los que caben— para que cambiar un número rompa el test en
+// vez de cambiar el comportamiento en silencio. Que estuviera suelto es lo que
+// permitió que `INTENTOS` valiera tres y cortara justo antes del único modelo
+// que sabía contestar.
+#[allow(clippy::assertions_on_constants)]
 mod tests {
     use super::*;
 
@@ -519,6 +604,40 @@ mod tests {
         assert_eq!(m.as_deref(), Some("qwen3:1.7b"));
         // Pero si es lo único que hay, sirve.
         assert_eq!(elige(&["mistral:latest".into()]).as_deref(), Some("mistral:latest"));
+    }
+
+    #[test]
+    fn guardar_y_volver_a_leer_devuelve_los_mismos_atajos() {
+        // La ida y vuelta por disco. Si alguien endurece un filtro de `parse` sin
+        // pensar en esto, los atajos guardados ayer dejan de leerse hoy y la
+        // pantalla vuelve a los de fábrica sin que nada falle a la vista.
+        let orig = parse(
+            "ATAJO: Disco C | Revisa el espacio en disco para evitar saturación\n\
+             ATAJO: Uso CPU | Comprueba si hay procesos que consuman excesivo CPU\n\
+             ATAJO: Servicios | Asegúrate de que los servicios críticos estén arriba",
+        );
+        assert_eq!(orig.len(), 3);
+        assert_eq!(parse(&a_lineas(&orig)), orig, "la vuelta cambió los atajos");
+        // Y una vuelta más: si la primera es estable, todas lo son.
+        assert_eq!(parse(&a_lineas(&parse(&a_lineas(&orig)))), orig);
+    }
+
+    #[test]
+    fn sin_atajos_guardados_no_hay_linea_que_leer() {
+        // El caso de «se preguntó y nadie supo». Debe dar la vuelta sin inventar
+        // una línea vacía que `parse` tenga que descartar.
+        assert_eq!(a_lineas(&[]), "");
+        assert!(parse("").is_empty());
+    }
+
+    #[test]
+    fn una_barra_dentro_de_la_orden_sobrevive_al_disco() {
+        // `split_once` parte por la PRIMERA barra, así que la orden puede llevar
+        // más. Guardarla y releerla tiene que dar exactamente lo mismo.
+        let c = parse("ATAJO: Servicios | Revisa el estado de spooler | print | wuauserv");
+        assert_eq!(c.len(), 1);
+        assert_eq!(c[0].orden, "Revisa el estado de spooler | print | wuauserv");
+        assert_eq!(parse(&a_lineas(&c)), c);
     }
 
     #[test]
@@ -567,14 +686,18 @@ mod tests {
     }
 
     #[test]
-    fn tres_intentos_no_uno_pero_tampoco_todos() {
-        // Preguntar a UNO solo es exactamente el fallo que se arregló: el único
-        // modelo de la máquina que sabía hacerlo era el último de la cola, y
-        // nadie llegaba hasta él. Bajar por la cola ENTERA tampoco vale: con seis
-        // instalados son seis peticiones con su plazo, y si los tres primeros no
-        // saben seguir un formato de dos campos, el cuarto tampoco.
+    fn los_intentos_llegan_al_final_de_una_cola_normal() {
+        // Preguntar a UNO solo es el fallo que se arregló. Pero pararse en TRES
+        // era el mismo fallo con otro número: en la máquina medida, el corte caía
+        // justo antes del quinto, que era el único que sabía — y no por mala
+        // suerte, sino porque los `:latest` no dicen su tamaño y van al final.
+        //
+        // Cinco modelos de texto es lo normal en una máquina con Ollama. El tope
+        // tiene que dejar sitio a todos, y sigue existiendo solo como seguro
+        // contra una máquina con cuarenta instalados.
         assert!(INTENTOS > 1, "preguntar a uno solo es lo que estaba roto");
-        assert!(INTENTOS < 6, "la cola entera es un cuarto de hora de máquina");
+        assert!(INTENTOS >= 5, "un tope corto excluye por sistema a los `:latest`");
+        assert!(INTENTOS <= 8, "esto es un seguro, no una barrida");
         // El listón vivía como un `3` suelto en el shell. Mientras estuvo allí,
         // el núcleo no podía saber si lo devuelto servía, y por eso no podía
         // probar con otro. Pedir más de los que caben no terminaría nunca.
