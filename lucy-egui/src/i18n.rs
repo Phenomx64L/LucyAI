@@ -507,6 +507,13 @@ pub const FRASES: &[Frase] = &[
     ),
     f!("Aquí estamos", "Here we are", "Aqui estamos", "On y est", "Da sind wir"),
     f!("Archivo", "Archive", "Arquivo", "Fichiers", "Archiv"),
+    f!(
+        "Arrancamos",
+        "Getting started",
+        "Arrancamos",
+        "On démarre",
+        "Los geht’s",
+    ),
     f!("Artefactos", "Artifacts", "Artefactos", "Artefacts", "Artefakte"),
     f!("Atención", "Warning", "Atenção", "Attention", "Achtung"),
     f!("Auditoría", "Audit", "Auditoria", "Audit", "Audit"),
@@ -578,6 +585,34 @@ pub const FRASES: &[Frase] = &[
         "Vom Guardrail blockiert: {motivo}",
     ),
     f!("Buen día", "Good day", "Boa tarde", "Bonne journée", "Guten Tag"),
+    f!(
+        "Buena noche",
+        "Evening",
+        "Boa noite",
+        "Bonne soirée",
+        "Schönen Abend",
+    ),
+    f!(
+        "Buena tarde",
+        "Afternoon",
+        "Boa tarde",
+        "Bel après-midi",
+        "Schönen Nachmittag",
+    ),
+    f!(
+        "Buenas noches",
+        "Good evening",
+        "Boa noite",
+        "Bonsoir",
+        "Guten Abend",
+    ),
+    f!(
+        "Buenas tardes",
+        "Good afternoon",
+        "Boa tarde",
+        "Bon après-midi",
+        "Guten Tag",
+    ),
     f!("Buenos días", "Good morning", "Bom dia", "Bonjour", "Guten Morgen"),
     f!("Buscando…", "Searching…", "A procurar…", "Recherche…", "Suche läuft…"),
     f!(
@@ -1211,6 +1246,13 @@ pub const FRASES: &[Frase] = &[
         "Vectorisation {h}/{total}…",
         "Einbetten {h}/{total}…",
     ),
+    f!(
+        "Empezamos",
+        "Here we go",
+        "Começamos",
+        "On commence",
+        "Wir fangen an",
+    ),
     f!("Enviar", "Send", "Enviar", "Envoyer", "Senden"),
     f!("Equilibrado", "Balanced", "Equilibrado", "Équilibré", "Ausgewogen"),
     f!(
@@ -1242,6 +1284,13 @@ pub const FRASES: &[Frase] = &[
         "Erro de ligação",
         "Erreur de connexion",
         "Verbindungsfehler",
+    ),
+    f!(
+        "Errores recientes",
+        "Recent errors",
+        "Erros recentes",
+        "Erreurs récentes",
+        "Aktuelle Fehler",
     ),
     f!(
         "Escanea el software instalado en busca de vulnerabilidades conocidas y dime cómo parcharlas.",
@@ -2384,6 +2433,13 @@ pub const FRASES: &[Frase] = &[
         "Tester la connexion",
         "Verbindung testen",
     ),
+    f!(
+        "Procesos que más ocupan",
+        "Top processes",
+        "Processos que mais ocupam",
+        "Processus les plus lourds",
+        "Größte Prozesse",
+    ),
     f!("Protocolo", "Protocol", "Protocolo", "Protocole", "Protokoll"),
     f!(
         "Proyección de polaridad de un texto",
@@ -2655,6 +2711,13 @@ pub const FRASES: &[Frase] = &[
         "Migra-se o bloco inteiro ou não se migra.",
         "Le bloc se migre en entier, ou pas du tout.",
         "Der Block wird ganz migriert oder gar nicht.",
+    ),
+    f!(
+        "Seguimos",
+        "Still at it",
+        "Continuamos",
+        "On continue",
+        "Weiter geht’s",
     ),
     f!("Servicios", "Services", "Serviços", "Services", "Dienste"),
     f!(
@@ -3028,6 +3091,13 @@ pub const FRASES: &[Frase] = &[
         "Voltar ao inventário",
         "Retour à l'inventaire",
         "Zurück zum Inventar",
+    ),
+    f!(
+        "Vulnerabilidades",
+        "Vulnerabilities",
+        "Vulnerabilidades",
+        "Vulnérabilités",
+        "Schwachstellen",
     ),
     f!(
         "Windows pedirá confirmación (UAC)",

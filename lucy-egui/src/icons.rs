@@ -96,6 +96,12 @@ pub enum Icon {
     Bolt,
     /// `chevron-down`.
     ChevronDown,
+    /// `chevron-right` — plegar hacia la derecha.
+    ///
+    /// APUNTA A DONDE SE VA LA COSA, que es lo único que un chevrón dice. El
+    /// botón de plegar el carril llevaba el de abajo mientras el panel se iba
+    /// hacia la DERECHA: la flecha prometía un desplegable y hacía otra cosa.
+    ChevronRight,
     /// `paperclip`.
     Clip,
     /// `microphone`.
@@ -294,6 +300,9 @@ impl Icon {
                 (19.0, 10.5), (13.0, 10.5), (13.0, 3.0),
             ])],
             Self::ChevronDown => &[Seg::Path(&[(6.0, 9.0), (12.0, 15.0), (18.0, 9.0)])],
+            // El mismo trazo girado un cuarto: de (6,9)-(12,15)-(18,9) a
+            // (9,6)-(15,12)-(9,18). Mismo grosor, mismo tamaño, misma familia.
+            Self::ChevronRight => &[Seg::Path(&[(9.0, 6.0), (15.0, 12.0), (9.0, 18.0)])],
             Self::Clip => &[Seg::Path(&[
                 (15.0, 7.0), (8.5, 13.5), (8.5, 16.0), (10.5, 18.0), (13.0, 18.0),
                 (19.5, 11.5), (19.5, 7.5), (16.5, 4.5), (12.5, 4.5), (5.0, 12.0),
@@ -427,7 +436,7 @@ impl Icon {
     pub const ALL: &'static [Icon] = &[
         Self::Grid, Self::Sparkles, Self::Terminal, Self::FileText, Self::Database,
         Self::Shield, Self::Memory, Self::Settings, Self::Refresh, Self::Bolt,
-        Self::ChevronDown, Self::Clip, Self::Mic, Self::ArrowUp, Self::Plus,
+        Self::ChevronDown, Self::ChevronRight, Self::Clip, Self::Mic, Self::ArrowUp, Self::Plus,
         Self::Close, Self::Copy, Self::Desktop, Self::Server, Self::Pencil,
         Self::Minimize, Self::Maximize, Self::Restore, Self::Pause, Self::Play,
         Self::Cpu, Self::Ram, Self::Disk, Self::Network, Self::Help,

@@ -10915,7 +10915,11 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                 let (r, resp) =
                     ui.allocate_exact_size(egui::vec2(22.0, 22.0), egui::Sense::click());
                 let c = if resp.hovered() { theme::txt() } else { theme::faint() };
-                icons::draw(ui.painter(), icons::Icon::ChevronDown, r.center(), 13.0, c);
+                // APUNTA A DONDE SE VA EL CARRIL. Llevaba el chevrón de ABAJO
+                // mientras el panel se pliega hacia la DERECHA: una flecha que
+                // señala un sitio y hace otra cosa promete un desplegable, y lo
+                // que hace es llevarse medio panel.
+                icons::draw(ui.painter(), icons::Icon::ChevronRight, r.center(), 13.0, c);
                 if resp
                     .on_hover_text(i18n::tr("Plegar el carril — vuelve con el botón de la cabecera"))
                     .clicked()
@@ -14781,8 +14785,13 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                 fila(
                     ui,
                     "Que un modelo local reescriba los avisos",
+                    // El hueco de veintiséis espacios que había en medio de esta
+                    // frase no era sangría: estaba DENTRO de la cadena, así que
+                    // se pintaba. En la pantalla se leía «hoy con un modelo» y
+                    // luego un vacío antes de «pequeño».
                     Some(
-                        "las cifras se comprueban una a una contra la medición; hoy con un modelo                          pequeño la plantilla suele salir mejor",
+                        "las cifras se comprueban una a una contra la medición; hoy con un \
+                         modelo pequeño la plantilla suele salir mejor",
                     ),
                     false,
                     |ui| {
@@ -15463,10 +15472,12 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                 }
                 ui.add_space(8.0);
                 ui.label(
-                    egui::RichText::new(
+                    // La traducción de esta frase ya estaba escrita en los cinco
+                    // idiomas; lo que faltaba era el `tr` de aquí.
+                    egui::RichText::new(i18n::tr(
                         "Se guardan en el Credential Manager de Windows, en el mismo sitio del \
                          que las lee la app de escritorio. Ollama no necesita clave: es local.",
-                    )
+                    ))
                     .size(theme::FS_CAPTION)
                     .color(theme::faint()),
                 );
@@ -19709,10 +19720,12 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
 
     fn mem_tab_mantenimiento(&mut self, ui: &mut egui::Ui) {
         ui.label(
-            egui::RichText::new(
+            // Traducida a los cinco idiomas desde que se escribió la pantalla, y
+            // sin usar: faltaba el `tr`.
+            egui::RichText::new(i18n::tr(
                 "Los dos trabajos corren solos por vencimiento — también si el programa \
                  estuvo cerrado cuando tocaba. Esto es para no esperar al plazo.",
-            )
+            ))
             .size(theme::FS_CAPTION)
             .color(theme::faint()),
         );
