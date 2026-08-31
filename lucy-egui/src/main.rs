@@ -1965,7 +1965,53 @@ const KPI_H: f32 = 156.0;
 // cuentas contaba la línea del «+N más», que aparece justo cuando el equipo
 // tiene muchos servicios caídos y se montaba encima del rótulo de «Núcleos».
 // Medido con el arnés de los tests: 123 px de contenido en una caja de 106.
+//
+// YA NO SE USA PARA DIBUJAR, y se queda a propósito: es la MEDIDA contra la que
+// se comprueba la fórmula que la sustituye. Los 124 salieron de medir con el
+// arnés de los tests, no de tantear, y perder ese número sería perder la única
+// referencia que dice si la cuenta nueva se ha movido. Ver
+// `el_peor_caso_de_la_fila_de_servicios_sigue_siendo_el_de_antes`.
+#[allow(dead_code)]
 const NET_H: f32 = 124.0;
+
+/// Lo que mide la fila de RED y SERVICIOS con lo que de verdad se va a pintar.
+///
+/// `NET_H` ES EL PEOR CASO Y SE USABA SIEMPRE. Está calculada para tres filas de
+/// servicios más la línea de «+N más», que es lo que ocupa un equipo con muchos
+/// caídos — y eso está bien, porque faltar un píxel recorta el texto de abajo.
+/// Lo que no estaba bien es cobrarlo cuando no hace falta: con dos servicios
+/// detenidos y la ventana ancha se pinta UNA fila, y sobraban cuarenta y ocho
+/// píxeles de nada debajo. En la de Red, que no tiene nada que crecer, sobraban
+/// siempre.
+///
+/// LAS DOS TARJETAS COMPARTEN ALTO, y por eso esto devuelve un solo número. La
+/// regla de la rejilla del Dashboard es que las tarjetas de una fila miden
+/// igual: es lo que hace que se lea como una rejilla y no como cajas sueltas.
+/// Lo que cambia es que ese número ya no es una constante, sino la más alta de
+/// las dos — que sigue siendo tan calculable como antes.
+///
+/// La cuenta es la misma que documenta `NET_H`, con las filas como variable.
+fn fila_red_h(filas: usize, hay_mas: bool, sin_caidos: bool) -> f32 {
+    /// Rótulo de instrumento más el hueco que va debajo.
+    const CABECERA: f32 = 16.0 + 10.0;
+    /// Relleno de la tarjeta, arriba y abajo.
+    const RELLENO: f32 = 14.0 * 2.0;
+    /// Una fila de servicios.
+    const FILA: f32 = 18.0;
+    /// Una línea suelta a `FS_CAPTION` — el «+N más» y el «✓ todos en marcha».
+    const LINEA: f32 = 16.0;
+
+    // La de Red no tiene nada que crecer: rótulo, hueco y la fila de tasas.
+    let red = CABECERA + 22.0 + RELLENO;
+    let servicios = CABECERA
+        + if sin_caidos {
+            LINEA
+        } else {
+            filas as f32 * FILA + if hay_mas { LINEA } else { 0.0 }
+        }
+        + RELLENO;
+    red.max(servicios)
+}
 /// Alto de la tira de núcleos. UNA fila, pase lo que pase con la cuenta.
 ///
 /// Antes eran tarjetas de 44 px en rejilla: con treinta y dos núcleos, tres
@@ -16500,9 +16546,21 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                 let netw = cell_w(full, 4);
                 let svw = full - netw - GAP;
                 let services = &self.services;
+                // EL REPARTO SE HACE ANTES DE PEDIR LA ALTURA, no dentro de la
+                // tarjeta. Es la misma cuenta que había ahí abajo, sacada aquí
+                // porque de ella depende cuánto mide la fila — y una altura que
+                // se decide después de haber reservado la caja no sirve de nada.
+                let sv_inner = svw - 28.0;
+                let sv_cols = fit_cols(sv_inner, 230.0).max(1);
+                let sv_cap = sv_cols * 3;
+                let sv_ocultos = services.len().saturating_sub(sv_cap);
+                let sv_visibles =
+                    if sv_ocultos > 0 { sv_cap - 1 } else { services.len() };
+                let sv_filas = sv_visibles.div_ceil(sv_cols);
+                let alto = fila_red_h(sv_filas, sv_ocultos > 0, services.is_empty());
                 block(ui, ent[2], |ui| {
-                    row(ui, NET_H, |ui| {
-                        card(ui, egui::vec2(netw, NET_H), 14.0, |ui| {
+                    row(ui, alto, |ui| {
+                        card(ui, egui::vec2(netw, alto), 14.0, |ui| {
                             panel_title(ui, icons::Icon::Network, "Red");
                             ui.add_space(10.0);
                             row_align(ui, 22.0, egui::Align::Max, |ui| {
@@ -16528,7 +16586,7 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                         });
 
                         let svc_stamp = self.svc_stamp.clone();
-                        card(ui, egui::vec2(svw, NET_H), 14.0, |ui| {
+                        card(ui, egui::vec2(svw, alto), 14.0, |ui| {
                             row_align(ui, 16.0, egui::Align::Center, |ui| {
                                 panel_title(ui, icons::Icon::Server, "Servicios detenidos");
                                 // SU PROPIA HORA. Esta lista llega cada treinta
@@ -16557,13 +16615,12 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                                 );
                                 return;
                             }
-                            let inner = svw - 28.0;
-                            let scols = fit_cols(inner, 230.0);
-                            let cap = scols * 3;
-                            let hidden = services.len().saturating_sub(cap);
-                            let shown = if hidden > 0 { cap - 1 } else { services.len() };
-                            let cw = cell_w(inner, scols);
-                            for line in services[..shown].chunks(scols) {
+                            // El reparto ya está hecho arriba, antes de reservar
+                            // la caja: recalcularlo aquí sería tener dos cuentas
+                            // que hay que mantener iguales, y la que se desvíe
+                            // deja la tarjeta con el alto de la otra.
+                            let cw = cell_w(sv_inner, sv_cols);
+                            for line in services[..sv_visibles].chunks(sv_cols) {
                                 row(ui, 18.0, |ui| {
                                     for sv in line {
                                         if svc_row(ui, cw, &sv.name, sv.crashed()) {
@@ -16572,14 +16629,14 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                                     }
                                 });
                             }
-                            if hidden > 0 {
+                            if sv_ocultos > 0 {
                                 // Se sacrifica un hueco para decir cuántos
                                 // quedan: una lista recortada en silencio miente
                                 // sobre el estado del equipo.
                                 ui.label(
                                     egui::RichText::new(i18n::trf(
                                         "+{n} más",
-                                        &[("n", &(hidden + 1).to_string())],
+                                        &[("n", &(sv_ocultos + 1).to_string())],
                                     ))
                                         .size(theme::FS_CAPTION)
                                         .color(theme::faint()),
@@ -19779,6 +19836,55 @@ mod layout {
             "el mensaje de Lucy mide {:.0} px en {w:.0} de conversación: se recorta",
             r.width()
         );
+    }
+
+    #[test]
+    fn el_peor_caso_de_la_fila_de_servicios_sigue_siendo_el_de_antes() {
+        // LA ASERCIÓN QUE AUTORIZA HABER QUITADO LA CONSTANTE DEL CAMINO.
+        //
+        // `NET_H` = 124 se calculó midiendo: tres filas de servicios más la
+        // línea de «+N más» son 123 px de contenido, y una caja de 106 los
+        // recortaba — eso ya pasó una vez y está escrito en su comentario. Lo
+        // que cambia ahora es que ese alto se pide solo cuando hace falta.
+        //
+        // Si `fila_red_h` se separa de `NET_H` en el peor caso, es que la cuenta
+        // se ha movido y el texto de abajo vuelve a estar en peligro. Por eso la
+        // constante se queda: no como valor que se usa, sino como la medida
+        // contra la que se comprueba la fórmula.
+        assert_eq!(
+            fila_red_h(3, true, false),
+            NET_H,
+            "el peor caso ya no mide lo que se midió: la cuenta se ha movido"
+        );
+    }
+
+    #[test]
+    fn con_pocos_servicios_la_fila_no_reserva_el_peor_caso() {
+        // El caso de todos los días: dos servicios detenidos y la ventana ancha,
+        // así que caben en una fila. Antes se reservaban los 124 igual.
+        let una = fila_red_h(1, false, false);
+        assert!(una < NET_H, "una sola fila sigue pidiendo el peor caso: {una}");
+
+        // Pero NUNCA por debajo de lo que necesita la tarjeta de Red, que
+        // comparte fila y no tiene nada que encoger. Ése es el suelo, y es la
+        // razón de que la función devuelva un máximo y no la suma de servicios.
+        let suelo = fila_red_h(0, false, true);
+        assert!(
+            una >= suelo,
+            "con más contenido la fila encoge: {una} contra {suelo}"
+        );
+        assert!(suelo >= 76.0, "la tarjeta de Red no cabe en {suelo}");
+
+        // Y crece de forma monótona: cada fila de servicios suma, ninguna resta.
+        for n in 1..3 {
+            assert!(
+                fila_red_h(n + 1, false, false) >= fila_red_h(n, false, false),
+                "con {} filas mide menos que con {n}",
+                n + 1
+            );
+        }
+        // La línea de «+N más» también ocupa.
+        assert!(fila_red_h(2, true, false) > fila_red_h(2, false, false));
     }
 
     #[test]
