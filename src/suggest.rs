@@ -874,11 +874,16 @@ mod tests {
             swap_total: 0,
             uptime_secs: 129_014,
             cores: 32,
+            nucleos_fisicos: 0,
+            cpu_mhz: 0,
             disks: vec![crate::system::DiskInfo {
                 name: "C".into(),
                 mount: "C:".into(),
                 total: 1_000_000_000_000,
                 avail: 470_000_000_000,
+                soporte: crate::system::Soporte::Desconocido,
+                fs: String::new(),
+                extraible: false,
             }],
         };
         let ctx = contexto(&s, &[], &[]);
@@ -949,6 +954,8 @@ mod tests {
             swap_total: 0,
             uptime_secs: 0,
             cores: 8,
+            nucleos_fisicos: 0,
+            cpu_mhz: 0,
             disks: Vec::new(),
         };
         let caidos = vec![crate::system::DownService { name: "Spooler".into(), exit_code: 0 }];

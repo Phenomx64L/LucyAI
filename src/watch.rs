@@ -957,6 +957,8 @@ mod tests {
             swap_total: 0,
             uptime_secs: 0,
             cores: 4,
+            nucleos_fisicos: 0,
+            cpu_mhz: 0,
             disks: vec![],
         };
         let limpios = vec![
@@ -1001,6 +1003,8 @@ mod tests {
             swap_total: 0,
             uptime_secs: 0,
             cores: 4,
+            nucleos_fisicos: 0,
+            cpu_mhz: 0,
             disks: vec![],
         };
         let sin_medir = observa_local(&s, None, &Umbrales::default());
@@ -1040,6 +1044,8 @@ mod tests {
             swap_total: 0,
             uptime_secs: 0,
             cores: 1,
+            nucleos_fisicos: 0,
+            cpu_mhz: 0,
             disks: vec![],
         };
         let v = observa_local(&s, Some(&[]), &Umbrales::default());
@@ -1058,6 +1064,9 @@ mod tests {
                 mount: "D:\\".into(),
                 total: 1_000,
                 avail: 900,
+                soporte: crate::system::Soporte::Desconocido,
+                fs: String::new(),
+                extraible: false,
             }],
             ..s
         };
@@ -1085,11 +1094,16 @@ mod tests {
             swap_total: 0,
             uptime_secs: 0,
             cores: 1,
+            nucleos_fisicos: 0,
+            cpu_mhz: 0,
             disks: vec![crate::system::DiskInfo {
                 name: "Datos de Iván".into(),
                 mount: "D:\\".into(),
                 total: 1_000,
                 avail: 10,
+                soporte: crate::system::Soporte::Desconocido,
+                fs: String::new(),
+                extraible: false,
             }],
         };
         let v = observa_local(&s, Some(&[]), &Umbrales::default());
@@ -1114,11 +1128,16 @@ mod tests {
             swap_total: 0,
             uptime_secs: 0,
             cores: 1,
+            nucleos_fisicos: 0,
+            cpu_mhz: 0,
             disks: vec![crate::system::DiskInfo {
                 name: "vacío".into(),
                 mount: "E:\\".into(),
                 total: 0,
                 avail: 0,
+                soporte: crate::system::Soporte::Desconocido,
+                fs: String::new(),
+                extraible: false,
             }],
         };
         let v = observa_local(&s, Some(&[]), &Umbrales::default());
@@ -1164,11 +1183,16 @@ mod tests {
                 swap_total: 0,
                 uptime_secs: 0,
                 cores: 1,
+                nucleos_fisicos: 0,
+                cpu_mhz: 0,
                 disks: vec![crate::system::DiskInfo {
                     name: "Sistema".into(),
                     mount: "C:".into(),
                     total: 1_000,
                     avail: 10,
+                    soporte: crate::system::Soporte::Desconocido,
+                    fs: String::new(),
+                    extraible: false,
                 }],
             },
             Some(&[]),

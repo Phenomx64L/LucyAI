@@ -1204,11 +1204,16 @@ mod tests {
             swap_total: 0,
             uptime_secs: 3600,
             cores: 32,
+            nucleos_fisicos: 0,
+            cpu_mhz: 0,
             disks: vec![DiskInfo {
                 name: "Local Disk".into(),
                 mount: "C:\\".into(),
                 total: 1_000_000_000_000,
                 avail: 710_000_000_000,
+                soporte: crate::system::Soporte::Desconocido,
+                fs: String::new(),
+                extraible: false,
             }],
         }
     }

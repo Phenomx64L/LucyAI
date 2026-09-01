@@ -16,6 +16,42 @@ pub struct DiskInfo {
     pub mount: String,
     pub total: u64,
     pub avail: u64,
+    /// De qué está hecho. Lo da `sysinfo` y se estaba tirando.
+    pub soporte: Soporte,
+    /// El sistema de ficheros: `NTFS`, `exFAT`, `ReFS`…
+    ///
+    /// NO ES DECORACIÓN en una herramienta de administración: un volumen `exFAT`
+    /// no tiene permisos ni instantáneas, y `ReFS` cambia lo que se puede hacer
+    /// con una copia de seguridad. Verlo aquí evita ir a mirarlo a otra parte.
+    pub fs: String,
+    /// Un USB o una tarjeta. Un aviso de «se llena en tres días» sobre un disco
+    /// que se va a desenchufar dentro de un rato no es un aviso.
+    pub extraible: bool,
+}
+
+/// De qué está hecho un volumen.
+///
+/// PROPIO Y NO EL `DiskKind` DE SYSINFO, para que el tipo no cruce la frontera
+/// del núcleo. `DiskKind::Unknown(i64)` lleva además un número que no significa
+/// nada fuera de la plataforma, y enseñarlo sería enseñar ruido.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Soporte {
+    Ssd,
+    Hdd,
+    #[default]
+    Desconocido,
+}
+
+impl Soporte {
+    /// El nombre corto, para la pantalla. Vacío cuando no se sabe: un «tipo:
+    /// desconocido» ocupa una línea para no decir nada.
+    pub fn etiqueta(self) -> &'static str {
+        match self {
+            Soporte::Ssd => "SSD",
+            Soporte::Hdd => "HDD",
+            Soporte::Desconocido => "",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -31,8 +67,49 @@ pub struct SysSnapshot {
     pub swap_used: u64,
     pub swap_total: u64,
     pub uptime_secs: u64,
+    /// Los HILOS, que es lo que el sistema reparte y lo que mide `per_core`.
     pub cores: usize,
+    /// Los núcleos FÍSICOS. En un equipo con SMT son la mitad, y la diferencia
+    /// no es trivia: treinta y dos hilos sobre dieciséis núcleos no rinden como
+    /// treinta y dos núcleos, y quien dimensiona una carga necesita el segundo
+    /// número. `0` cuando la plataforma no lo dice.
+    pub nucleos_fisicos: usize,
+    /// Megahercios del primer núcleo. `0` si no se sabe.
+    pub cpu_mhz: u64,
     pub disks: Vec<DiskInfo>,
+}
+
+/// La marca del procesador, sin la letra pequeña del fabricante.
+///
+/// ── POR QUÉ SE LIMPIA Y NO SE ENSEÑA TAL CUAL ────────────────────────────────
+///
+/// Lo que devuelve `sysinfo` en esta máquina es
+/// `"AMD Ryzen 9 8940HX with Radeon Graphics"`, y en las de Intel
+/// `"Intel(R) Xeon(R) Platinum 8490H"`. Las marcas registradas y la coletilla
+/// de la gráfica integrada son la mitad de los caracteres y no dicen nada que
+/// el operador no sepa — pero SÍ deciden si la línea cabe en la cabecera.
+///
+/// Se quita lo que sobra y no se recorta por longitud: cortar por caracteres
+/// dejaría «Intel(R) Xeon(R) Platinum 84…», que pierde justo el modelo, que es
+/// lo único que se venía a leer.
+pub fn marca_corta(bruto: &str) -> String {
+    let mut s = bruto.replace("(R)", "").replace("(TM)", "").replace("(tm)", "");
+    // «with Radeon Graphics», «w/ Radeon Graphics»: la gráfica integrada no es
+    // el procesador que se está mirando.
+    for corte in [" with Radeon", " with Graphics", " w/ Radeon"] {
+        if let Some(i) = s.find(corte) {
+            s.truncate(i);
+        }
+    }
+    // «Intel Core i7-1185G7 CPU @ 3.00GHz»: la frecuencia se enseña aparte y
+    // medida, no copiada de un nombre que no se actualiza al escalar.
+    for corte in [" CPU @", " @ "] {
+        if let Some(i) = s.find(corte) {
+            s.truncate(i);
+        }
+    }
+    // Los espacios dobles que dejan los recortes de arriba.
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 #[cfg(test)]
@@ -96,6 +173,91 @@ mod tests {
         assert_eq!(a.os, b.os);
         assert_eq!(a.kernel, b.kernel);
         assert_eq!(a.cpu_brand, b.cpu_brand);
+        assert_eq!(a.nucleos_fisicos, b.nucleos_fisicos);
+        assert_eq!(a.cpu_mhz, b.cpu_mhz);
+    }
+
+    #[test]
+    fn el_sistema_operativo_dice_la_edicion_y_no_solo_la_familia() {
+        // MEDIDO EN ESTA MÁQUINA: `System::name()` devuelve «Windows» a secas, y
+        // con eso la tarjeta de Sistema gastaba una de sus tres líneas en decir
+        // algo que ya se sabía al abrir el programa. `long_os_version()` devuelve
+        // «Windows 11 Pro» — que sí distingue una estación de un servidor, que es
+        // justo lo que un administrador necesita saber de un equipo remoto.
+        let s = SysMonitor::new().snapshot();
+        assert!(!s.os.is_empty(), "el sistema operativo vino vacío");
+        assert!(
+            s.os.split_whitespace().count() > 1 || s.os.len() > 10,
+            "el SO volvió a la versión corta: {:?}",
+            s.os
+        );
+    }
+
+    #[test]
+    fn los_hilos_y_los_nucleos_fisicos_son_dos_numeros_distintos() {
+        // La tarjeta decía «32 núcleos» y eran HILOS. En un equipo con SMT son
+        // el doble de los núcleos de verdad, y quien dimensiona una carga con el
+        // número equivocado la dimensiona al doble.
+        let s = SysMonitor::new().snapshot();
+        assert!(s.cores > 0, "sin hilos no hay máquina");
+        assert_eq!(s.cores, s.per_core.len(), "la tira de núcleos pinta los hilos");
+        if s.nucleos_fisicos > 0 {
+            assert!(
+                s.nucleos_fisicos <= s.cores,
+                "más núcleos físicos ({}) que hilos ({})",
+                s.nucleos_fisicos,
+                s.cores
+            );
+        }
+    }
+
+    #[test]
+    fn la_marca_del_procesador_pierde_la_letra_pequena_y_no_el_modelo() {
+        // Las tres formas que se han visto de verdad. Lo que NO puede pasar es
+        // perder el modelo, que es lo único que se venía a leer.
+        assert_eq!(
+            marca_corta("AMD Ryzen 9 8940HX with Radeon Graphics"),
+            "AMD Ryzen 9 8940HX"
+        );
+        assert_eq!(
+            marca_corta("Intel(R) Xeon(R) Platinum 8490H"),
+            "Intel Xeon Platinum 8490H"
+        );
+        assert_eq!(
+            marca_corta("Intel(R) Core(TM) i7-1185G7 CPU @ 3.00GHz"),
+            "Intel Core i7-1185G7"
+        );
+    }
+
+    #[test]
+    fn una_marca_que_no_lleva_nada_que_quitar_sale_igual() {
+        // El caso que rompería un recorte por longitud: aquí no sobra nada, y
+        // devolver algo distinto de lo que entró sería inventar.
+        assert_eq!(marca_corta("Apple M2 Pro"), "Apple M2 Pro");
+        assert_eq!(marca_corta(""), "");
+    }
+
+    #[test]
+    fn un_soporte_desconocido_no_ocupa_sitio_en_pantalla() {
+        // Una etiqueta «desconocido» gasta una línea para no decir nada. Vacía,
+        // quien pinta la salta sin tener que saber de este enum.
+        assert_eq!(Soporte::Ssd.etiqueta(), "SSD");
+        assert_eq!(Soporte::Hdd.etiqueta(), "HDD");
+        assert_eq!(Soporte::Desconocido.etiqueta(), "");
+        assert_eq!(Soporte::default(), Soporte::Desconocido);
+    }
+
+    #[test]
+    fn los_discos_traen_de_que_estan_hechos() {
+        // Los tres campos venían en la MISMA lectura y se tiraban al construir
+        // `DiskInfo`. No cuestan una consulta más.
+        let s = SysMonitor::new().snapshot();
+        for d in &s.disks {
+            assert!(d.total > 0, "un volumen sin tamaño: {:?}", d.mount);
+            // El sistema de ficheros lo dice cualquier volumen montado. Si esto
+            // se cae es que alguien volvió a tirar el campo al copiar.
+            assert!(!d.fs.is_empty(), "volumen {:?} sin sistema de ficheros", d.mount);
+        }
     }
 
     #[test]
@@ -270,6 +432,8 @@ struct Fijos {
     os: String,
     kernel: String,
     cpu_brand: String,
+    nucleos_fisicos: usize,
+    cpu_mhz: u64,
 }
 
 impl Default for SysMonitor {
@@ -284,13 +448,27 @@ impl SysMonitor {
         sys.refresh_all();
         let fijos = Fijos {
             host: System::host_name().unwrap_or_default(),
-            os: System::name().unwrap_or_default(),
+            // LA LARGA Y NO `name()`. `System::name()` devuelve «Windows» a
+            // secas — medido en esta máquina— y con eso la tarjeta de Sistema
+            // decía «Windows» debajo del nombre del equipo, que es una línea
+            // gastada en algo que ya se sabía al abrir el programa.
+            // `long_os_version()` devuelve «Windows 11 Pro», que sí distingue
+            // una estación de un servidor. Se cae a la corta si no la hay.
+            os: System::long_os_version()
+                .filter(|s| !s.trim().is_empty())
+                .or_else(System::name)
+                .unwrap_or_default(),
             kernel: System::kernel_version().unwrap_or_default(),
             cpu_brand: sys
                 .cpus()
                 .first()
-                .map(|c| c.brand().trim().to_string())
+                .map(|c| marca_corta(c.brand().trim()))
                 .unwrap_or_default(),
+            // FIJOS DE VERDAD: ni los núcleos físicos ni la frecuencia base
+            // cambian mientras el proceso vive, y `physical_core_count` consulta
+            // al sistema. Pedirlo en cada foto sería pagarlo cada segundo.
+            nucleos_fisicos: sys.physical_core_count().unwrap_or(0),
+            cpu_mhz: sys.cpus().first().map(|c| c.frequency()).unwrap_or(0),
         };
         Self {
             sys,
@@ -380,6 +558,16 @@ impl SysMonitor {
                 mount: d.mount_point().to_string_lossy().to_string(),
                 total: d.total_space(),
                 avail: d.available_space(),
+                // TRES CAMPOS QUE YA VENÍAN EN LA MISMA LECTURA y se tiraban al
+                // construir esto. No cuestan una consulta más: `Disks` ya los
+                // trae refrescados.
+                soporte: match d.kind() {
+                    sysinfo::DiskKind::SSD => Soporte::Ssd,
+                    sysinfo::DiskKind::HDD => Soporte::Hdd,
+                    _ => Soporte::Desconocido,
+                },
+                fs: d.file_system().to_string_lossy().to_string(),
+                extraible: d.is_removable(),
             })
             .collect();
         SysSnapshot {
@@ -395,6 +583,8 @@ impl SysMonitor {
             swap_total: self.sys.total_swap(),
             uptime_secs: System::uptime(),
             cores: self.sys.cpus().len(),
+            nucleos_fisicos: self.fijos.nucleos_fisicos,
+            cpu_mhz: self.fijos.cpu_mhz,
             disks,
         }
     }
@@ -554,3 +744,4 @@ mod hora {
         }
     }
 }
+
