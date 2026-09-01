@@ -1,0 +1,56 @@
+[package]
+name = "lucy-core"
+version = "0.1.0"
+edition = "2021"
+description = "El corazón sin-Tauri de Lucy: pool DB + lógica de dominio, compartido por la app Tauri y el shell nativo egui. Cero UI, cero WebView."
+
+[dependencies]
+rusqlite   = { version = "0.31", features = ["bundled"] }
+r2d2       = "0.8"
+r2d2_sqlite = "0.24"
+serde      = { version = "1", features = ["derive"] }
+serde_json = "1"
+once_cell  = "1"
+# Cliente HTTP bloqueante (ligero, sin tokio) para el chat con Ollama local.
+ureq       = "2"
+# El almacén de secretos del SO — las claves de API viven ahí, escritas por la
+# app real bajo el servicio "LucySysAdmin". Misma versión que `src-tauri`.
+keyring    = "2.3"
+# El banco de patrones del guardrail. Ya estaba en el árbol de forma
+# transitiva, así que como dependencia directa no compila nada nuevo. Escribir
+# esos patrones a mano en un componente de SEGURIDAD sería peor: un matcher
+# sutilmente mal es peor que ningún matcher, porque da confianza.
+regex      = "1"
+# El directorio de configuración del usuario, para instalar skills donde
+# sobrevivan a reinstalar la aplicación.
+dirs       = "5"
+# El extractor de PDF de los adjuntos. Misma versión que `src-tauri`: la 0.7
+# fija lopdf 0.34, que desborda la pila con PDF muy anidados —sin guardia de
+# recursión— y un solo fichero hostil tumbaba el proceso entero.
+pdf-extract = "0.12"
+# Métricas del sistema (CPU/RAM/discos/host) — misma versión que src-tauri.
+sysinfo    = "0.30"
+# Opcional: exportación del tipo a TypeScript. Solo la app Tauri la necesita —
+# es quien cruza los tipos por IPC. El shell nativo llama funciones Rust
+# directamente, así que no debe arrastrar ts-rs por el mero hecho de compartir
+# la struct.
+ts-rs      = { version = "10", features = ["chrono-impl", "serde-compat"], optional = true }
+
+# MultiByteToWideChar + CP_OEMCP: decodificar lo que escriben las herramientas
+# nativas de consola, que no respetan el UTF-8 que sí se le puede pedir a
+# PowerShell. Ver `shell.rs`.
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = [
+    "stringapiset", "winnls", "sysinfoapi", "minwinbase",
+    # BitBlt + GetDIBits: capturar la pantalla para que Lucy pueda verla.
+    "winuser", "wingdi", "windef", "minwindef", "winnt",
+] }
+# Codificación PNG de la captura. Sin características por defecto: el resto de
+# formatos que trae `image` son megabytes de decodificadores que aquí no se usan.
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[features]
+default = []
+# Activada por src-tauri. Añade `#[derive(ts_rs::TS)]` a los tipos que cruzan
+# el puente, para que sigan generándose los .ts de src/lib/types/.
+ts = ["dep:ts-rs"]

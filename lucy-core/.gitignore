@@ -1,0 +1,6 @@
+/target
+# TypeScript generado por ts-rs con la caracteristica `ts`. Es salida de build,
+# no fuente: se regenera con `cargo test --features ts`. Su version anterior
+# llego a versionarse dentro de `src/`, que es donde ts-rs la dejaba cuando la
+# ruta de exportacion todavia apuntaba al repositorio de la V1.
+/bindings
