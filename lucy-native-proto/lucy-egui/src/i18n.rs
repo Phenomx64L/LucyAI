@@ -2059,6 +2059,13 @@ pub const FRASES: &[Frase] = &[
         "Intelligence maximale",
         "Maximale Intelligenz",
     ),
+    f!(
+        "N/S {serie}",
+        "S/N {serie}",
+        "N/S {serie}",
+        "N/S {serie}",
+        "S/N {serie}",
+    ),
     f!("NVIDIA Flagship", "NVIDIA Flagship", "NVIDIA de Topo", "NVIDIA Flagship", "NVIDIA Flagship"),
     f!("NVIDIA Máximo", "NVIDIA Max", "NVIDIA Máximo", "NVIDIA Maximum", "NVIDIA Maximum"),
     f!(
@@ -3864,6 +3871,13 @@ pub const FRASES: &[Frase] = &[
         "{n} Fragmente sind wieder nach Bedeutung durchsuchbar.",
     ),
     f!("{n} volúmenes", "{n} volumes", "{n} volumes", "{n} volumes", "{n} Laufwerke"),
+    f!(
+        "{n} zócalos",
+        "{n} sockets",
+        "{n} soquetes",
+        "{n} sockets",
+        "{n} Sockel",
+    ),
     f!(
         "{paso} — sin migrar a este shell",
         "{paso} — not migrated to this shell",
