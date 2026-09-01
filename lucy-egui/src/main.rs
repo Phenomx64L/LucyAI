@@ -2055,7 +2055,83 @@ fn fila_red_h(filas: usize, hay_mas: bool, sin_caidos: bool) -> f32 {
 /// pantalla. Treinta y dos es lo normal hoy y ciento veintiocho no es raro en un
 /// servidor; con rejilla, ese equipo no cabría de ninguna manera.
 const TIRA_H: f32 = 34.0;
-const DISK_H: f32 = 78.0; // 18 + 8 + 5 + 8 + 16 + 24
+const DISK_H: f32 = 96.0; // 18 + 8 + 5 + 8 + 16 + 2 + 16 + 23
+                          // La línea de más es la de `de_que_esta_hecho`: el
+                          // soporte y el sistema de ficheros. La suma de arriba
+                          // es la que había con el renglón nuevo intercalado.
+
+/// Lo que va bajo el porcentaje de CPU: los hilos y los núcleos de verdad.
+///
+/// ── DECÍA «32 NÚCLEOS» Y ERAN HILOS ──────────────────────────────────────────
+///
+/// `cores` es `cpus().len()`, que en un equipo con SMT es el doble de los
+/// núcleos físicos: esta máquina tiene 32 hilos sobre 16 núcleos. Llamar
+/// «núcleos» a los hilos no es un matiz de nomenclatura — es el número con el
+/// que se dimensiona una carga, y con el equivocado se dimensiona al doble.
+///
+/// SOLO SE DICEN LOS DOS SI SON DISTINTOS. En una máquina sin SMT los dos
+/// números coinciden, y «16 hilos · 16 núcleos» es una línea que se lee dos
+/// veces para no aprender nada. Ahí vuelve a decir «16 núcleos», que entonces
+/// es exacto.
+fn linea_cpu(s: &lucy_core::system::SysSnapshot) -> String {
+    if s.nucleos_fisicos > 0 && s.nucleos_fisicos != s.cores {
+        return i18n::trf(
+            "{n} hilos · {f} núcleos",
+            &[("n", &s.cores.to_string()), ("f", &s.nucleos_fisicos.to_string())],
+        );
+    }
+    i18n::trf("{n} núcleos", &[("n", &s.cores.to_string())])
+}
+
+/// El rótulo de la tira de núcleos: cuántos son y de qué procesador.
+///
+/// LA MARCA SE RECOGÍA Y NO SE ENSEÑABA EN NINGUNA PARTE. `SysSnapshot.cpu_brand`
+/// llevaba ahí desde que se escribió el módulo, y un `grep` por todo el shell no
+/// devolvía ni un uso: medida en cada arranque, guardada, y nunca dibujada.
+///
+/// Es el sitio natural: la tira de abajo son las barras de ESE procesador, y
+/// hasta ahora no decían de cuál. En un equipo remoto —que es para lo que sirve
+/// el selector de arriba— es además la única forma de saber a qué máquina se
+/// está mirando.
+fn rotulo_nucleos(s: &lucy_core::system::SysSnapshot) -> String {
+    let marca = s.cpu_brand.trim();
+    if marca.is_empty() {
+        return s.cores.to_string();
+    }
+    format!("{} · {}", s.cores, marca)
+}
+
+/// De qué está hecho un volumen, en una línea. Vacío si no se sabe nada.
+///
+/// LO QUE NO SE SABE NO OCUPA. `sysinfo` devuelve el soporte como desconocido en
+/// discos por red y en algunas cabinas, y el sistema de ficheros puede venir
+/// vacío en un montaje raro. Escribir «desconocido · » sería gastar un renglón
+/// entero de la tarjeta en decir que no se sabe — y ese renglón, en una tarjeta
+/// de volumen, es la mitad de lo que se lee.
+///
+/// «Extraíble» va al final y solo cuando lo es: es lo que cambia la lectura de
+/// todo lo demás. Un aviso de «se llena en tres días» sobre un USB que se va a
+/// desenchufar dentro de un rato no es un aviso.
+fn de_que_esta_hecho(d: &lucy_core::system::DiskInfo) -> String {
+    let mut partes: Vec<&str> = Vec::new();
+    let soporte = d.soporte.etiqueta();
+    if !soporte.is_empty() {
+        partes.push(soporte);
+    }
+    let fs = d.fs.trim();
+    if !fs.is_empty() {
+        partes.push(fs);
+    }
+    let mut s = partes.join(" · ");
+    if d.extraible {
+        if !s.is_empty() {
+            s.push_str(" · ");
+        }
+        s.push_str(i18n::tr("extraíble").as_ref());
+    }
+    s
+}
+
 const PROC_ROW: f32 = 22.0;
 
 /// Muestras del historial de las líneas de tendencia — las mismas 44 de la V2.
@@ -3389,6 +3465,24 @@ fn disk_card(
             )
             .truncate(),
         );
+        // DE QUÉ ESTÁ HECHO. Los tres datos venían ya en la lectura de
+        // `sysinfo` y se tiraban al construir `DiskInfo`. En una herramienta de
+        // administración no son adorno: un volumen `exFAT` no tiene permisos ni
+        // instantáneas, un `HDD` explica una latencia que en un `SSD` sería una
+        // avería, y un extraíble cambia lo que significa que se esté llenando.
+        let hecho = de_que_esta_hecho(d);
+        if !hecho.is_empty() {
+            ui.add_space(2.0);
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(hecho)
+                        .size(theme::FS_CAPTION)
+                        .monospace()
+                        .color(theme::txt3()),
+                )
+                .truncate(),
+            );
+        }
     });
 }
 
@@ -16839,10 +16933,7 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                                 value: s.cpu_pct,
                                 unit: "%",
                                 spark: cpu_hist,
-                                sub: i18n::trf(
-                                    "{n} núcleos",
-                                    &[("n", &s.cores.to_string())],
-                                ),
+                                sub: linea_cpu(&s),
                                 ..Default::default()
                             },
                         );
@@ -17030,7 +17121,7 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                     let cores = &s.per_core;
                     let host_cpu = s.cpu_pct;
                     block(ui, ent[3], |ui| {
-                        section(ui, "Núcleos", Some(cores.len().to_string()));
+                        section(ui, "Núcleos", Some(rotulo_nucleos(&s)));
                         row(ui, TIRA_H, |ui| {
                             Self::nucleos_tira(ui, full, cores, host_cpu);
                         });
@@ -22955,6 +23046,14 @@ mod maquetado {
 }
 
 #[cfg(test)]
+// Igual que en `lucy_core::maintenance` y `lucy_core::suggest`: varias
+// aserciones de aquí comparan CONSTANTES entre sí. Clippy las ve evaluables en
+// compilación y avisa; no son aserciones muertas sino guardas de invariante.
+// Fijan una relación de diseño —la altura de la tarjeta de volumen tiene que
+// pagar el renglón que se le añadió, el tope de intentos tiene que llegar al
+// final de la cola— para que cambiar un número rompa el test en vez de cambiar
+// el comportamiento en silencio.
+#[allow(clippy::assertions_on_constants)]
 mod presupuesto {
     use super::*;
 
@@ -23067,6 +23166,106 @@ mod presupuesto {
             next_auto(true, false, 0, MAX_LOOPS_MIN, 0.0, 0.0, &plan),
             NextAuto::Run(..)
         ));
+    }
+
+    /// Una foto mínima para las funciones que solo leen tres campos.
+    fn foto(cores: usize, fisicos: usize, marca: &str) -> lucy_core::system::SysSnapshot {
+        lucy_core::system::SysSnapshot {
+            host: "EQUIPO".into(),
+            os: "Windows 11 Pro".into(),
+            kernel: "26200".into(),
+            cpu_brand: marca.into(),
+            cpu_pct: 3.0,
+            per_core: vec![0.0; cores],
+            mem_used: 1,
+            mem_total: 2,
+            swap_used: 0,
+            swap_total: 0,
+            uptime_secs: 0,
+            cores,
+            nucleos_fisicos: fisicos,
+            cpu_mhz: 2401,
+            disks: Vec::new(),
+        }
+    }
+
+    fn volumen(
+        soporte: lucy_core::system::Soporte,
+        fs: &str,
+        extraible: bool,
+    ) -> lucy_core::system::DiskInfo {
+        lucy_core::system::DiskInfo {
+            name: String::new(),
+            mount: "C:\\".into(),
+            total: 1_000,
+            avail: 500,
+            soporte,
+            fs: fs.into(),
+            extraible,
+        }
+    }
+
+    #[test]
+    fn con_smt_se_dicen_los_hilos_y_los_nucleos() {
+        // La tarjeta decía «32 núcleos» y eran HILOS. Esta máquina tiene 32
+        // hilos sobre 16 núcleos, y es el número con el que se dimensiona una
+        // carga: con el equivocado se dimensiona al doble.
+        let s = foto(32, 16, "AMD Ryzen 9 8940HX");
+        assert_eq!(linea_cpu(&s), "32 hilos · 16 núcleos");
+    }
+
+    #[test]
+    fn sin_smt_no_se_dice_dos_veces_el_mismo_numero() {
+        // «16 hilos · 16 núcleos» se lee dos veces para no aprender nada. Y con
+        // la plataforma callada —`nucleos_fisicos` a cero— tampoco se inventa.
+        assert_eq!(linea_cpu(&foto(16, 16, "x")), "16 núcleos");
+        assert_eq!(linea_cpu(&foto(8, 0, "x")), "8 núcleos");
+    }
+
+    #[test]
+    fn el_rotulo_de_nucleos_dice_de_que_procesador_son() {
+        // `cpu_brand` se medía en cada arranque, se guardaba, y no se dibujaba
+        // en ninguna parte del shell. La tira de barras es de ESE procesador y
+        // hasta ahora no decía de cuál — que en un equipo remoto es la única
+        // forma de saber a qué máquina se está mirando.
+        assert_eq!(rotulo_nucleos(&foto(32, 16, "AMD Ryzen 9 8940HX")), "32 · AMD Ryzen 9 8940HX");
+        // Sin marca no se deja un separador colgando.
+        assert_eq!(rotulo_nucleos(&foto(32, 16, "")), "32");
+        assert_eq!(rotulo_nucleos(&foto(32, 16, "   ")), "32");
+    }
+
+    #[test]
+    fn de_que_esta_hecho_un_volumen_no_dice_lo_que_no_sabe() {
+        use lucy_core::system::Soporte;
+        assert_eq!(de_que_esta_hecho(&volumen(Soporte::Ssd, "NTFS", false)), "SSD · NTFS");
+        assert_eq!(de_que_esta_hecho(&volumen(Soporte::Hdd, "ReFS", false)), "HDD · ReFS");
+        // Un «desconocido · » gastaría el renglón en decir que no se sabe, y ese
+        // renglón es la mitad de lo que se lee en una tarjeta de volumen.
+        assert_eq!(de_que_esta_hecho(&volumen(Soporte::Desconocido, "NTFS", false)), "NTFS");
+        assert_eq!(de_que_esta_hecho(&volumen(Soporte::Ssd, "", false)), "SSD");
+        assert_eq!(de_que_esta_hecho(&volumen(Soporte::Desconocido, "", false)), "");
+    }
+
+    #[test]
+    fn un_extraible_lo_dice_porque_cambia_todo_lo_demas() {
+        use lucy_core::system::Soporte;
+        // Un aviso de «se llena en tres días» sobre un USB que se va a
+        // desenchufar dentro de un rato no es un aviso.
+        assert_eq!(
+            de_que_esta_hecho(&volumen(Soporte::Ssd, "exFAT", true)),
+            "SSD · exFAT · extraíble"
+        );
+        // Y sin nada más que decir, sin separador delante.
+        assert_eq!(de_que_esta_hecho(&volumen(Soporte::Desconocido, "", true)), "extraíble");
+    }
+
+    #[test]
+    fn la_tarjeta_de_volumen_crecio_con_su_renglon() {
+        // La altura es una suma escrita a mano en un comentario, y la línea
+        // nueva hay que pagarla ahí. Si alguien quita el renglón sin bajar esto,
+        // la tarjeta queda con un hueco; si lo añade sin subirlo, el texto sale
+        // por debajo del borde.
+        assert!(DISK_H >= 96.0, "no cabe el renglón de soporte y sistema de ficheros");
     }
 
     #[test]

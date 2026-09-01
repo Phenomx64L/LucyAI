@@ -3364,6 +3364,13 @@ pub const FRASES: &[Frase] = &[
     f!("estable", "steady", "estável", "stable", "stabil"),
     f!("este equipo", "this machine", "esta máquina", "ce poste", "dieser Rechner"),
     f!(
+        "extraíble",
+        "removable",
+        "removível",
+        "amovible",
+        "Wechselmedium",
+    ),
+    f!(
         "falló: {e}",
         "failed: {e}",
         "falhou: {e}",
@@ -3801,6 +3808,13 @@ pub const FRASES: &[Frase] = &[
         "{n} Dateien in {dir} — die neueste zuerst",
     ),
     f!("{n} h", "{n} h", "{n} h", "{n} h", "{n} Std."),
+    f!(
+        "{n} hilos · {f} núcleos",
+        "{n} threads · {f} cores",
+        "{n} threads · {f} núcleos",
+        "{n} threads · {f} cœurs",
+        "{n} Threads · {f} Kerne",
+    ),
     f!(
         "{n} llamadas al modelo en 30 días · {ent} tokens de entrada, {sal} de salida",
         "{n} model calls in 30 days · {ent} input tokens, {sal} output",
