@@ -2184,6 +2184,49 @@ const FILA_ETIQUETA: f32 = 0.55;
 /// líneas sin perder nada; un botón encogido deja de poder pulsarse.
 const FILA_CONTROL_MIN: f32 = 220.0;
 
+/// Lo que se le reserva al botón de las filas de Mantenimiento.
+///
+/// Más estrecho que [`FILA_CONTROL_MIN`] porque ahí el control es un botón solo
+/// y no un campo con su valor al lado. 170 da para «Jetzt konsolidieren», que es
+/// la más larga de los cinco idiomas, sin tener que encogerla.
+///
+/// Y se acota con `min(total * 0.4)`: en una ventana muy estrecha, reservar 170
+/// fijos dejaría al texto en nada. Ahí el botón sí se encoge, que es lo menos
+/// malo cuando ya no cabe nadie.
+const BOTON_MANT_MIN: f32 = 170.0;
+
+/// Lo que se le da al bloque de texto en una fila de Mantenimiento.
+///
+/// DEVUELVE UNO Y NO DOS. El botón no recibe ancho: va por [`right`], que toma
+/// lo que quede. La reserva de [`BOTON_MANT_MIN`] solo sirve para decidir cuánto
+/// NO se le da al texto. Devolver también un «ancho de botón» sería devolver un
+/// número que nadie aplica, y a la primera que alguien lo usara para dibujar,
+/// dejaría de coincidir con lo que el botón mide de verdad.
+///
+/// APARTE Y PURA para poder fijarla en un test. El reparto que había aquí antes
+/// no se podía discutir sin abrir la ventana, y por eso llevaba roto desde que
+/// se escribió la pantalla.
+///
+/// ── EL SUELO DEL TEXTO SE QUITÓ, Y ESA ES LA PIEZA ───────────────────────────
+///
+/// La primera versión ponía `.max(80.0)` al texto para que no quedara en nada.
+/// Eso vuelve a desbordar, que es justo lo que se venía a arreglar:
+///
+/// ```text
+///   total 100 → botón 40, texto max(50, 80) = 80 → 80 + 40 + 10 = 130
+/// ```
+///
+/// Treinta píxeles fuera del panel por un suelo puesto para que se viera mejor.
+/// No hace falta: el tope del botón ya es proporcional, así que en una ventana
+/// estrecha encogen los dos y el reparto sigue siendo razonable.
+///
+/// La invariante que fija el test es la única que importa: LO QUE SE PIDE NUNCA
+/// PASA DE LO QUE HAY.
+fn ancho_texto_mant(total: f32) -> f32 {
+    let reserva_boton = BOTON_MANT_MIN.min(total * 0.4);
+    (total - reserva_boton - GAP).max(0.0)
+}
+
 /// Un panel: marco, cabecera con icono y rótulo, y lo que le metan dentro.
 ///
 /// `derecha` es lo que va al otro extremo de la cabecera —un botón, una
@@ -18937,10 +18980,10 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                             ui.add_space(4.0);
                             ui.colored_label(theme::amber(), format!("⚠ {e}"));
                             ui.label(
-                                egui::RichText::new(
+                                egui::RichText::new(i18n::tr(
                                     "La búsqueda semántica necesita Ollama con un modelo de \
                                      embeddings (ollama pull nomic-embed-text).",
-                                )
+                                ))
                                 .small()
                                 .color(theme::txt3()),
                             );
@@ -19225,10 +19268,10 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
             }
             Some(Ok(v)) if v.is_empty() => {
                 ui.label(
-                    egui::RichText::new(
+                    egui::RichText::new(i18n::tr(
                         "Todavía no hay ninguno. Salen solos: una conversación con al menos \
                          cuatro turnos y tres comandos o lecturas se destila al cerrar el turno.",
-                    )
+                    ))
                     .color(theme::txt3()),
                 );
             }
@@ -19366,10 +19409,10 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                 self.recarga_insights();
             }
             ui.label(
-                egui::RichText::new(
+                egui::RichText::new(i18n::tr(
                     "Un patrón es lo que se repite entre memorias que nadie escribió juntas. \
                      Reencontrarlo lo refuerza: la confianza sube con cada vez.",
-                )
+                ))
                 .size(theme::FS_CAPTION)
                 .color(theme::faint()),
             );
@@ -19413,11 +19456,11 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
             }
             Some(Ok(v)) if v.is_empty() => {
                 ui.label(
-                    egui::RichText::new(
+                    egui::RichText::new(i18n::tr(
                         "Todavía no hay ninguno. Hacen falta al menos cuatro memorias del mismo \
                          asunto con más de cinco días — la reflexión corre sola cada día, o \
                          desde Mantenimiento → Reflexionar ahora.",
-                    )
+                    ))
                     .color(theme::txt3()),
                 );
             }
@@ -19568,10 +19611,10 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                 self.docs_l = Some(lucy_core::docs::list());
             }
             ui.label(
-                egui::RichText::new(
+                egui::RichText::new(i18n::tr(
                     "Lo ingerido alimenta el recuerdo y a pdf_search. Los secretos se \
                      redactan al entrar.",
-                )
+                ))
                 .size(theme::FS_CAPTION)
                 .color(theme::faint()),
             );
@@ -19594,10 +19637,10 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
             }
             Some(Ok(v)) if v.is_empty() => {
                 ui.label(
-                    egui::RichText::new(
+                    egui::RichText::new(i18n::tr(
                         "Ningún documento todavía. Un manual ingerido contesta preguntas sin \
                          que nadie lo mencione — es la fuente principal de la memoria.",
-                    )
+                    ))
                     .color(theme::txt3()),
                 );
             }
@@ -19766,11 +19809,11 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
 
     fn mem_tab_principios(&mut self, ui: &mut egui::Ui) {
         ui.label(
-            egui::RichText::new(
+            egui::RichText::new(i18n::tr(
                 "Un principio entra en TODOS los turnos, venga o no al caso — su valor está \
                  justo en los turnos donde a nadie se le habría ocurrido recordarlo. Por eso \
                  son pocos.",
-            )
+            ))
             .size(theme::FS_CAPTION)
             .color(theme::faint()),
         );
@@ -19828,196 +19871,262 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                     );
                 }
                 egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                    for (n, p) in v.iter().enumerate() {
-                        egui::Frame::group(ui.style()).show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                let mut activo = p.activo;
-                                if ui.checkbox(&mut activo, "").changed() {
-                                    cambiar = Some((p.id, activo));
-                                }
-                                ui.label(
-                                    egui::RichText::new(format!("[P{}]", n + 1))
-                                        .small()
-                                        .color(theme::blue()),
-                                );
-                                let texto = egui::RichText::new(&p.regla);
-                                ui.label(if p.activo {
-                                    texto.color(theme::txt2())
-                                } else {
-                                    texto.weak().strikethrough()
-                                });
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        let armado =
-                                            confirmado == Some((MemTab::Principios, p.id));
-                                        let b = if armado {
-                                            egui::Button::new(
-                                                egui::RichText::new(i18n::tr("¿borrar?"))
-                                                    .color(theme::red())
-                                                    .small(),
-                                            )
-                                        } else {
-                                            egui::Button::new(egui::RichText::new("🗑").small())
-                                        };
-                                        if ui.add(b).clicked() {
-                                            if armado {
-                                                borrar = Some(p.id);
+                        for (n, p) in v.iter().enumerate() {
+                            egui::Frame::group(ui.style()).show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    let mut activo = p.activo;
+                                    if ui.checkbox(&mut activo, "").changed() {
+                                        cambiar = Some((p.id, activo));
+                                    }
+                                    ui.label(
+                                        egui::RichText::new(format!("[P{}]", n + 1))
+                                            .small()
+                                            .color(theme::blue()),
+                                    );
+                                    let texto = egui::RichText::new(&p.regla);
+                                    ui.label(if p.activo {
+                                        texto.color(theme::txt2())
+                                    } else {
+                                        texto.weak().strikethrough()
+                                    });
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            let armado =
+                                                confirmado == Some((MemTab::Principios, p.id));
+                                            let b = if armado {
+                                                egui::Button::new(
+                                                    egui::RichText::new(i18n::tr("¿borrar?"))
+                                                        .color(theme::red())
+                                                        .small(),
+                                                )
                                             } else {
-                                                armar = Some(p.id);
+                                                egui::Button::new(egui::RichText::new("🗑").small())
+                                            };
+                                            if ui.add(b).clicked() {
+                                                if armado {
+                                                    borrar = Some(p.id);
+                                                } else {
+                                                    armar = Some(p.id);
+                                                }
                                             }
-                                        }
+                                        },
+                                    );
+                                });
+                            });
+                        }
+                    });
+                }
+            }
+            if let Some((id, activo)) = cambiar {
+                let _ = lucy_core::principles::set_enabled(id, activo);
+                self.principios_l = Some(lucy_core::principles::list());
+            }
+            if let Some(id) = armar {
+                self.mem_confirm = Some((MemTab::Principios, id));
+            }
+            if let Some(id) = borrar {
+                self.mem_confirm = None;
+                match lucy_core::principles::delete(id) {
+                    Ok(()) => self.principios_l = Some(lucy_core::principles::list()),
+                    Err(e) => self.principios_l = Some(Err(e)),
+                }
+            }
+        }
+
+        fn mem_tab_mantenimiento(&mut self, ui: &mut egui::Ui) {
+            ui.label(
+                // Traducida a los cinco idiomas desde que se escribió la pantalla, y
+                // sin usar: faltaba el `tr`.
+                egui::RichText::new(i18n::tr(
+                    "Los dos trabajos corren solos por vencimiento — también si el programa \
+                     estuvo cerrado cuando tocaba. Esto es para no esperar al plazo.",
+                ))
+                .size(theme::FS_CAPTION)
+                .color(theme::faint()),
+            );
+            ui.add_space(6.0);
+            let corriendo = self.mant_rx.is_some();
+            let mut forzar: Option<&'static str> = None;
+            // CON SCROLL, COMO LAS OTRAS CINCO. Ésta era la única de las seis
+            // pestañas de Memoria sin él, y no se notaba porque en español, con la
+            // ventana ancha y las dos pasadas saliendo bien, cabe justo.
+            //
+            // Deja de caber en cuanto pasa cualquiera de estas: una nota de
+            // `Cifras::Fallo`, que guarda el mensaje de error ENTERO y envuelve a
+            // varias líneas; una nota vieja por `Cifras::Prosa`, que es texto libre;
+            // el aviso de racha en blanco en los dos trabajos; o el alemán, que
+            // alarga cada línea. Sin scroll, lo que se sale del panel no está
+            // recortado: está fuera del alcance, y no hay forma de llegar a ello.
+            //
+            // `auto_shrink` a falso en los dos ejes, igual que las hermanas: sin eso
+            // el área encoge al contenido y el ancho que calcula la fila de arriba
+            // baila entre pintadas.
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            if let Some(info) = &self.mant_info {
+                for (job, ultima, racha) in info {
+                    let (titulo, cada, boton, explica) = match *job {
+                        lucy_core::maintenance::CONSOLIDAR => (
+                            "Consolidación",
+                            lucy_core::maintenance::CADA_CONSOLIDAR,
+                            "Consolidar ahora",
+                            "funde memorias que dicen lo mismo; nada se borra",
+                        ),
+                        _ => (
+                            "Reflexión",
+                            lucy_core::maintenance::CADA_INSIGHTS,
+                            "Reflexionar ahora",
+                            "busca patrones entre memorias con más de cinco días",
+                        ),
+                    };
+                    egui::Frame::group(ui.style()).show(ui, |ui| {
+                        // ── LOS DOS ANCHOS, ANTES DE DIBUJAR NADA ───────────────
+                        //
+                        // Esto era un `ui.horizontal` con las dos etiquetas y luego
+                        // el botón por `right_to_left`, que es EXACTAMENTE el reparto
+                        // que `fila` documenta como roto: un `Label` dentro de un
+                        // `horizontal` hereda «no envolver», así que se extiende por
+                        // encima del ancho disponible y el botón se queda sin sitio.
+                        // Allí se midió: la fila empezaba setenta y seis píxeles
+                        // fuera del panel y las etiquetas salían cortadas por delante.
+                        //
+                        // Aquí no se había arreglado porque `fila` no pasa por esta
+                        // pantalla — tiene su propio marco y su propia altura.
+                        //
+                        // Y AGUANTA LOS CINCO IDIOMAS. «funde memorias que dicen lo
+                        // mismo; nada se borra» son 46 caracteres en español y 68 en
+                        // alemán; «Consolidar ahora» pasa a «Jetzt konsolidieren».
+                        // Con el reparto de antes, el idioma decidía si el botón
+                        // cabía.
+                        //
+                        // Quien cede es el texto, que envuelve sin perder nada. Un
+                        // botón encogido deja de poder pulsarse.
+                        let total = ui.available_width();
+                        let w_texto = ancho_texto_mant(total);
+                        let alto = theme::H_MD;
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(total, alto),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                ui.set_min_height(alto);
+                                ui.spacing_mut().item_spacing.x = 0.0;
+                                ui.allocate_ui_with_layout(
+                                    egui::vec2(w_texto, alto),
+                                    egui::Layout::top_down(egui::Align::LEFT),
+                                    |ui| {
+                                        ui.set_max_width(w_texto);
+                                        ui.spacing_mut().item_spacing.y = 1.0;
+                                        ui.label(
+                                            egui::RichText::new(i18n::tr(titulo)).strong(),
+                                        );
+                                        ui.label(
+                                            egui::RichText::new(i18n::tr(explica))
+                                                .size(theme::FS_CAPTION)
+                                                .color(theme::faint()),
+                                        );
                                     },
                                 );
-                            });
-                        });
-                    }
-                });
-            }
-        }
-        if let Some((id, activo)) = cambiar {
-            let _ = lucy_core::principles::set_enabled(id, activo);
-            self.principios_l = Some(lucy_core::principles::list());
-        }
-        if let Some(id) = armar {
-            self.mem_confirm = Some((MemTab::Principios, id));
-        }
-        if let Some(id) = borrar {
-            self.mem_confirm = None;
-            match lucy_core::principles::delete(id) {
-                Ok(()) => self.principios_l = Some(lucy_core::principles::list()),
-                Err(e) => self.principios_l = Some(Err(e)),
-            }
-        }
-    }
-
-    fn mem_tab_mantenimiento(&mut self, ui: &mut egui::Ui) {
-        ui.label(
-            // Traducida a los cinco idiomas desde que se escribió la pantalla, y
-            // sin usar: faltaba el `tr`.
-            egui::RichText::new(i18n::tr(
-                "Los dos trabajos corren solos por vencimiento — también si el programa \
-                 estuvo cerrado cuando tocaba. Esto es para no esperar al plazo.",
-            ))
-            .size(theme::FS_CAPTION)
-            .color(theme::faint()),
-        );
-        ui.add_space(6.0);
-        let corriendo = self.mant_rx.is_some();
-        let mut forzar: Option<&'static str> = None;
-        if let Some(info) = &self.mant_info {
-            for (job, ultima, racha) in info {
-                let (titulo, cada, boton, explica) = match *job {
-                    lucy_core::maintenance::CONSOLIDAR => (
-                        "Consolidación",
-                        lucy_core::maintenance::CADA_CONSOLIDAR,
-                        "Consolidar ahora",
-                        "funde memorias que dicen lo mismo; nada se borra",
-                    ),
-                    _ => (
-                        "Reflexión",
-                        lucy_core::maintenance::CADA_INSIGHTS,
-                        "Reflexionar ahora",
-                        "busca patrones entre memorias con más de cinco días",
-                    ),
-                };
-                egui::Frame::group(ui.style()).show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new(i18n::tr(titulo)).strong());
-                        ui.label(
-                            egui::RichText::new(i18n::tr(explica))
-                                .size(theme::FS_CAPTION)
-                                .color(theme::faint()),
-                        );
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui
-                                .add_enabled(
-                                    !corriendo,
-                                    egui::Button::new(i18n::tr(if corriendo { "Corriendo…" } else { boton })),
-                                )
-                                .clicked()
-                            {
-                                forzar = Some(job);
-                            }
-                        });
-                    });
-                    match ultima {
-                        None => {
-                            ui.label(
-                                egui::RichText::new(
-                                    "Nunca ha corrido en esta base — correrá en la próxima \
-                                     comprobación.",
-                                )
-                                .small()
-                                .color(theme::amber()),
-                            );
-                        }
-                        Some((cuando, nota)) => {
-                            let faltan = (cuando + cada) - ahora_epoch();
-                            ui.label(
-                                egui::RichText::new(i18n::trf(
-                                    "Última vez {cuando} · {plazo}",
-                                    &[
-                                        ("cuando", &rel_time(*cuando)),
-                                        (
-                                            "plazo",
-                                            &if faltan <= 0 {
-                                                i18n::tr(
-                                                    "vencido: correrá en la próxima comprobación",
-                                                )
-                                                .to_string()
+                                ui.add_space(GAP);
+                                // POR `right`, no por un reparto propio: la nota de
+                                // `fila` dice que un `set_max_width` dentro del
+                                // reparto de derecha a izquierda mueve el borde desde
+                                // el que ese reparto cuenta, y los controles dejan de
+                                // llegar a su lado.
+                                right(ui, alto, |ui| {
+                                    if ui
+                                        .add_enabled(
+                                            !corriendo,
+                                            egui::Button::new(i18n::tr(if corriendo {
+                                                "Corriendo…"
                                             } else {
-                                                i18n::trf(
-                                                    "próxima en {plazo}",
-                                                    &[("plazo", &dentro_de(faltan))],
-                                                )
-                                            },
-                                        ),
-                                    ],
-                                ))
-                                .small()
-                                .weak(),
-                            );
-                            if !nota.is_empty() {
+                                                boton
+                                            })),
+                                        )
+                                        .clicked()
+                                    {
+                                        forzar = Some(job);
+                                    }
+                                });
+                            },
+                        );
+                        match ultima {
+                            None => {
                                 ui.label(
-                                    egui::RichText::new(nota_en_palabras(nota))
-                                        .small()
-                                        .color(theme::txt3()),
+                                    egui::RichText::new(i18n::tr(
+                                        "Nunca ha corrido en esta base — correrá en la próxima \
+                                         comprobación.",
+                                    ))
+                                    .small()
+                                    .color(theme::amber()),
                                 );
                             }
+                            Some((cuando, nota)) => {
+                                let faltan = (cuando + cada) - ahora_epoch();
+                                ui.label(
+                                    egui::RichText::new(i18n::trf(
+                                        "Última vez {cuando} · {plazo}",
+                                        &[
+                                            ("cuando", &rel_time(*cuando)),
+                                            (
+                                                "plazo",
+                                                &if faltan <= 0 {
+                                                    i18n::tr(
+                                                        "vencido: correrá en la próxima comprobación",
+                                                    )
+                                                    .to_string()
+                                                } else {
+                                                    i18n::trf(
+                                                        "próxima en {plazo}",
+                                                        &[("plazo", &dentro_de(faltan))],
+                                                    )
+                                                },
+                                            ),
+                                        ],
+                                    ))
+                                    .small()
+                                    .weak(),
+                                );
+                                if !nota.is_empty() {
+                                    ui.label(
+                                        egui::RichText::new(nota_en_palabras(nota))
+                                            .small()
+                                            .color(theme::txt3()),
+                                    );
+                                }
+                            }
                         }
-                    }
-                    // LA SERIE, QUE ES LO QUE LA NOTA SUELTA NO PUEDE DECIR.
-                    // «0 elegibles · corpus demasiado pequeño» se lee igual si
-                    // pasó ayer que si lleva pasando un mes, y son dos
-                    // diagnósticos opuestos: el primero no es nada, el segundo
-                    // dice que los umbrales del agrupado están mal calibrados
-                    // para este corpus y que la reflexión lleva semanas
-                    // gastando llamadas a Ollama para no producir nada.
-                    //
-                    // Desde TRES: una o dos pasadas en blanco son ruido normal
-                    // —hay días sin memorias nuevas— y avisar de eso enseñaría a
-                    // ignorar el aviso.
-                    let (veces, desde) = *racha;
-                    if veces >= 3 {
-                        ui.label(
-                            egui::RichText::new(i18n::trf(
-                                "Lleva {n} pasadas sin sacar nada, desde {cuando}",
-                                &[("n", &veces.to_string()), ("cuando", &rel_time(desde))],
-                            ))
-                            .small()
-                            .color(theme::amber()),
-                        )
-                        .on_hover_text(i18n::tr(
-                            "Una pasada en blanco no dice nada; muchas seguidas sí. Suele \
-                             significar que el corpus no da para agrupar todavía, o que los \
-                             umbrales de parecido están puestos para otro tamaño de corpus.",
-                        ));
-                    }
-                });
-                ui.add_space(4.0);
+                        // LA SERIE, QUE ES LO QUE LA NOTA SUELTA NO PUEDE DECIR.
+                        // «0 elegibles · corpus demasiado pequeño» se lee igual si
+                        // pasó ayer que si lleva pasando un mes, y son dos
+                        // diagnósticos opuestos: el primero no es nada, el segundo
+                        // dice que los umbrales del agrupado están mal calibrados
+                        // para este corpus y que la reflexión lleva semanas
+                        // gastando llamadas a Ollama para no producir nada.
+                        //
+                        // Desde TRES: una o dos pasadas en blanco son ruido normal
+                        // —hay días sin memorias nuevas— y avisar de eso enseñaría a
+                        // ignorar el aviso.
+                        let (veces, desde) = *racha;
+                        if veces >= 3 {
+                            ui.label(
+                                egui::RichText::new(i18n::trf(
+                                    "Lleva {n} pasadas sin sacar nada, desde {cuando}",
+                                    &[("n", &veces.to_string()), ("cuando", &rel_time(desde))],
+                                ))
+                                .small()
+                                .color(theme::amber()),
+                            )
+                            .on_hover_text(i18n::tr(
+                                "Una pasada en blanco no dice nada; muchas seguidas sí. Suele \
+                                 significar que el corpus no da para agrupar todavía, o que los \
+                                 umbrales de parecido están puestos para otro tamaño de corpus.",
+                            ));
+                        }
+                    });
+                    ui.add_space(4.0);
+                }
             }
-        }
+        });
         if let Some(job) = forzar {
             let stop = self.mant_stop.clone();
             let (tx, rx) = std::sync::mpsc::channel();
@@ -22958,5 +23067,65 @@ mod presupuesto {
             next_auto(true, false, 0, MAX_LOOPS_MIN, 0.0, 0.0, &plan),
             NextAuto::Run(..)
         ));
+    }
+
+    #[test]
+    fn la_fila_de_mantenimiento_nunca_pide_mas_de_lo_que_hay() {
+        // LA INVARIANTE, Y ES LA ÚNICA QUE IMPORTA. Lo que había antes era un
+        // `ui.horizontal` con dos etiquetas que se extienden —un `Label` dentro
+        // de un `horizontal` hereda «no envolver»— y el botón detrás por
+        // `right_to_left`. Ese reparto no suma: cada parte pide lo suyo y la
+        // última se queda fuera del panel. `fila` ya lo midió en Configuración,
+        // setenta y seis píxeles por la izquierda.
+        //
+        // EL SUELO DE LA PRUEBA ES 100 Y NO CERO, y tiene razón de ser: la
+        // ventana declara un mínimo de `VENTANA_MIN` (900×560) que winit hace
+        // cumplir, así que ni arrastrando el borde se llega a un panel de nueve
+        // píxeles. Probar por debajo de lo que el gestor de ventanas permite es
+        // pedirle a la fórmula que resuelva un caso que no existe — y mi primera
+        // versión de este test lo hacía, y me llevó a retorcer la fórmula por un
+        // ancho de 9 px.
+        for total in [1600.0_f32, 1000.0, 760.0, 620.0, 480.0, 300.0, 200.0, 100.0] {
+            let texto = ancho_texto_mant(total);
+            assert!(texto >= 0.0, "ancho negativo con {total}");
+            // Lo que de verdad se dibuja: el bloque de texto, el hueco, y el
+            // botón con lo que sobre. Si esto pasara del total, `right` recibiría
+            // un ancho negativo y el botón saldría fuera del panel.
+            assert!(
+                texto + GAP <= total + 0.01,
+                "con {total} de ancho el texto y el hueco ya piden {}",
+                texto + GAP
+            );
+        }
+    }
+
+    #[test]
+    fn el_boton_de_mantenimiento_cabe_entero_en_una_ventana_normal() {
+        // 170 es lo que mide «Jetzt konsolidieren», la más larga de los cinco
+        // idiomas. Si el tope proporcional se la comiera en un ancho corriente,
+        // el alemán saldría con el botón partido y nadie lo vería probando en
+        // español.
+        let total = 900.0;
+        let texto = ancho_texto_mant(total);
+        let boton = total - texto - GAP;
+        assert!(
+            (boton - BOTON_MANT_MIN).abs() < 0.01,
+            "el botón no cabe entero a 900 px: {boton}"
+        );
+        assert!(texto > 700.0, "y al texto le queda de sobra: {texto}");
+    }
+
+    #[test]
+    fn en_una_ventana_estrecha_encogen_los_dos() {
+        // Quien no puede encogerse del todo es el botón: uno de veinte píxeles
+        // deja de poder pulsarse. Por eso el tope es proporcional y no fijo —
+        // reservar 170 sobre 300 dejaría el texto en 120 y las dos líneas de
+        // explicación en una columna ilegible.
+        let total = 300.0;
+        let texto = ancho_texto_mant(total);
+        let boton = total - texto - GAP;
+        assert!(boton < BOTON_MANT_MIN, "el botón no cedió: {boton}");
+        assert!(boton > 100.0, "cedió demasiado y ya no se puede pulsar: {boton}");
+        assert!(texto > boton, "el texto tiene que llevarse la mayor parte: {texto}");
     }
 }
