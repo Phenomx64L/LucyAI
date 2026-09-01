@@ -1,0 +1,9 @@
+/target
+# Lo que sale de empaquetar: instaladores y los intermedios de WiX. Se
+# reconstruyen con `packaging\build-msi.ps1` y con makensis, así que meterlos en
+# el repositorio serían treinta megas por versión de algo que ya es reproducible.
+/dist
+/packaging/obj
+# La licencia en RTF la genera el guion desde el LICENSE de verdad. Guardarla
+# sería tener dos copias y que una se quedara vieja.
+/packaging/license.rtf

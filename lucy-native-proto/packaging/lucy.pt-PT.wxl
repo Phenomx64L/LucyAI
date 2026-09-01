@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WixLocalization Culture="pt-PT" Codepage="1252"
+                 xmlns="http://schemas.microsoft.com/wix/2006/localization">
+  <String Id="NombreProducto">Lucy</String>
+  <String Id="DescripcionPaquete">Lucy — assistente de administração de sistemas Windows</String>
+  <String Id="YaHayVersionNueva">Já está instalada uma versão mais recente da Lucy.</String>
+</WixLocalization>

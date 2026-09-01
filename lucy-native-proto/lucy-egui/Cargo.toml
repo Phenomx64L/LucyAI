@@ -1,0 +1,77 @@
+[package]
+name = "lucy-egui"
+version = "2.1.0"
+edition = "2021"
+description = "Lucy — asistente de administración de sistemas Windows"
+authors = ["Iván Eduardo Luna"]
+
+# El icono y los datos de versión DEL FICHERO, que son un recurso Win32 y no
+# tienen nada que ver con el icono de la ventana. Ver `build.rs`.
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
+
+# ── Fase 1 · shell nativo egui de Lucy ────────────────────────────────────────
+# Slice `lucy-core`: el shell depende del CORAZÓN SIN-TAURI (`lucy-core`), NO del
+# backend Tauri completo. Resultado: este binario NO enlaza tauri/wry/webview2 —
+# es el objetivo real de la migración (binario nativo sin motor de navegador).
+[dependencies]
+# `persistence` NO viene en las características por defecto de eframe, y sin ella
+# `CreationContext::storage` es siempre `None`: `save()` no se llama nunca y todo
+# `get_string` devuelve nada. Es decir, el modelo elegido, el tema, el nombre del
+# operador, el ancho del carril, el tope de pasos y las conversaciones abiertas
+# se escribían al vacío y se leían del vacío — sin error, sin aviso, y con los
+# tests en verde porque prueban la serialización, no el almacén.
+eframe = { version = "0.29", features = ["persistence"] }
+egui = "0.29"
+# Para alcanzar el HWND y pedirle a Windows las esquinas redondeadas y la sombra.
+#
+# NO AÑADE NADA AL ÁRBOL: ya estaba dentro, en la misma versión, porque la usan
+# eframe y winit. Declararla aquí solo la hace NOMBRABLE — eframe no la
+# reexporta, así que sin esta línea el trait `HasWindowHandle` que
+# `CreationContext` implementa no se puede ni mencionar.
+#
+# Y no hace falta el crate `windows`: son dos llamadas a `dwmapi.dll`, y ese
+# crate son cientos de megas de metadatos compilados para declarar una función.
+# Se declaran a mano, como ya se hace con `reg.exe` para leer el tema del
+# sistema en vez de arrastrar `winreg` por una consulta.
+raw-window-handle = "0.6"
+egui_commonmark = "0.18"
+proto-core = { path = "../proto-core" }
+dirs = "5"
+# Emulador VT real: interpreta los escapes del PTY en una pantalla de terminal
+# (limpia el "garbage" □[?25l □[2J □[93m que salía como texto crudo).
+vt100 = "0.15"
+# El corazón compartido sin-Tauri (mismo crate que adoptará la app Tauri).
+# EN SU PROPIO REPOSITORIO desde la 2.1.0. Estaba en `../../lucy-svelte/lucy-core`
+# —dentro del repositorio de la V1— y eso ataba el shell nativo al proyecto del
+# que se está separando: borrar la V1 dejaba a este binario sin compilar.
+lucy-core = { path = "../../lucy-core" }
+# El índice de equipos vive en el Credential Manager de Windows, escrito por la
+# app real bajo el servicio "LucySysAdmin". Se lee con el MISMO crate y la misma
+# versión que usa `src-tauri`, para que no haya dos formatos de entrada.
+keyring = "2.3"
+# Diálogo de ficheros NATIVO del sistema. El arrastre lo entrega eframe por su
+# cuenta; para el botón hace falta el diálogo del SO, y no hay uno en egui.
+rfd = "0.15"
+# Solo PNG: es el único formato que hay que descodificar (el retrato de Lucy), y
+# las características por defecto de `image` arrastran una docena de
+# descodificadores que nadie va a usar.
+image = { version = "0.25", default-features = false, features = ["png"] }
+# Captura de micrófono. Es la mitad del dictado que NO depende del motor: da
+# igual que transcriba Whisper local, Windows o un servicio de nube.
+cpal = "0.15"
+# Whisper en RUST PURO. Sin cmake, sin clang, sin C++: la razón de elegir esto
+# sobre whisper.cpp es que compila en cualquier máquina con rustc y ya van tres
+# tropiezos de entorno en este proyecto.
+candle-core = "0.8"
+candle-nn = "0.8"
+candle-transformers = "0.8"
+tokenizers = { version = "0.20", default-features = false, features = ["onig"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Solo para la HORA LOCAL. `std` no la da —`SystemTime` es UTC y no hay forma
+# portable de sacar el desfase— y enseñarle UTC a un administrador que está
+# comparando con el reloj de su barra de tareas es media hora de confusión por
+# una etiqueta. `local-offset` es la única característica que se enciende; el
+# crate ya estaba en el árbol como dependencia transitiva.
+time = { version = "0.3", features = ["local-offset"] }
