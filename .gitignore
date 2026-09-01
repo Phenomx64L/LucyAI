@@ -1,56 +1,47 @@
-# Dependencies
-node_modules
-
-# Build outputs
-/build
-/.svelte-kit
-/package
-src-tauri/target
-# v1.8 — CUALQUIER crate, no solo src-tauri. Al añadir `lucy-core` como segundo
-# crate, su `target/` no estaba cubierto por ninguna regla: un `git add
-# lucy-core/` metió 1507 ficheros de artefactos en el índice y el remoto rechazó
-# el push. Las reglas por ruta envejecen mal en cuanto el repo deja de tener un
-# solo crate; ésta cubre los que vengan.
+# ── Artefactos de compilación ────────────────────────────────────────────────
+#
+# CUALQUIER crate, no solo uno. Esta regla viene de la V1 y se queda tal cual:
+# cuando se añadió `lucy-core` como segundo crate, su `target/` no estaba
+# cubierto por ninguna regla, un `git add lucy-core/` metió 1507 ficheros de
+# artefactos en el índice y el remoto rechazó el push. Las reglas por ruta
+# envejecen mal en cuanto el repositorio deja de tener un solo crate; ésta cubre
+# los que vengan — y ahora vienen dos.
 **/target/
-# Repo-root target/ — PGO profile data + logs written by scripts/build-pgo.ps1
-# (its default -ProfilesDir is .\target\pgo-profiles). Build artifacts only.
 /target
 
-# Environment variables
+# Los dos proyectos traen además su propio `.gitignore` con lo que solo les
+# incumbe a ellos (los `bindings` de ts-rs en el núcleo, los instaladores y los
+# intermedios de WiX en el nativo). Un `.gitignore` anidado aplica sus reglas
+# desde su propio directorio, así que aquí no hay que repetirlas.
+
+# ── Secretos ─────────────────────────────────────────────────────────────────
 .env
 .env.*
 !.env.example
 
-# OS files
+# ── Sistema y editores ───────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
-
-# IDE
 .idea
+.vscode
 *.swp
 *.swo
 .claude
 
-# Vite
-vite.config.js.timestamp-*
-vite.config.ts.timestamp-*
-
-# Logs & debug
+# ── Registros y bultos locales ───────────────────────────────────────────────
 *.log
-svelte_errors.txt
-
-# Archives / local bundles
 *.rar
 *.7z
 *.zip
 
-# Local one-off patch / apply scripts (kept out of the tree)
-patch_*.cjs
-patch_*.mjs
-apply*.mjs
-apply_orchestrator*.js
-sync_lucy.cjs
-
-# Local test artifacts (system health HTML reports)
-src-tauri/Reporte_Sistema.html
-src-tauri/Reporte_Sistema_*.html
+# ── Restos de la V1 ──────────────────────────────────────────────────────────
+#
+# El código de SvelteKit y Tauri ya no está en el árbol, pero sus directorios de
+# compilación siguen en el disco de quien tenía el repositorio clonado desde
+# antes. Se ignoran para que no salgan como sin seguimiento en cada `git status`
+# hasta que alguien los borre a mano. Se pueden quitar de aquí cuando ya no
+# queden clones viejos.
+node_modules
+/build
+/.svelte-kit
+/package

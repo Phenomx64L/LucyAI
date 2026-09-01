@@ -2,590 +2,136 @@
   <img src="icon.png" alt="Lucy" width="120" />
 </p>
 
-<h1 align="center">Lucy Assistant</h1>
+<h1 align="center">Lucy</h1>
 
 <p align="center">
-  <strong>Autonomous SysAdmin AI Assistant</strong><br>
-  Desktop application for infrastructure management, compliance auditing, and remote administration — powered by LLM intelligence.
+  <strong>Asistente de SysAdmin para Windows</strong><br>
+  Interfaz nativa. Sin navegador embebido.
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.4.4-7dd3fc" alt="v1.4.4" />
-  <img src="https://img.shields.io/badge/Tauri-2.0-blue?logo=tauri" alt="Tauri 2.0" />
-  <img src="https://img.shields.io/badge/Svelte-5-orange?logo=svelte" alt="Svelte 5" />
+  <img src="https://img.shields.io/badge/versión-2.1.0-7dd3fc" alt="v2.1.0" />
+  <img src="https://img.shields.io/badge/egui-0.29-blue" alt="egui 0.29" />
   <img src="https://img.shields.io/badge/Rust-2021-brown?logo=rust" alt="Rust 2021" />
-  <img src="https://img.shields.io/badge/license-GPLv3-green" alt="GPLv3 License" />
+  <img src="https://img.shields.io/badge/licencia-GPLv3-green" alt="GPLv3" />
 </p>
 
 ---
 
-## 👤 Author & Maintainer
+## Qué es
 
-**Iván Eduardo Luna** (@Phenomx64L)
-- 🔗 [LinkedIn](https://linkedin.com/in/phenomx64l)
-- 🐙 [GitHub](https://github.com/Phenomx64L)
-- 💼 SysAdmin + Full-Stack Developer
+Lucy administra equipos Windows: mira cómo están, ejecuta lo que le pidas en
+español, audita el cumplimiento CIS, lee registros de eventos, hace inventario y
+recuerda lo que ha ido aprendiendo de cada máquina. Habla con modelos locales
+(Ollama) o de nube, y en modo privado no sale nada del equipo.
 
-*Lucy was conceived and built as a response to real-world infrastructure administration challenges. Every architectural decision reflects 10+ years of SysAdmin experience.*
+## Por qué esta versión existe
 
----
+**19,6 MB contra 213 MB.** Ésa es toda la migración en una línea.
 
-## Overview
+La V1 era Tauri 2 + SvelteKit sobre WebView2. Funcionaba, y arrastraba un motor
+de navegador entero para pintar una rejilla de tarjetas y una tabla de procesos.
+Esta versión pinta lo mismo con [`egui`](https://github.com/emilk/egui) en un
+único ejecutable que no enlaza ningún navegador.
 
-Lucy is a desktop AI assistant designed for system administrators. It combines a conversational LLM interface with real infrastructure tooling — remote shell execution, log analysis, CIS compliance scanning, and credential management — all from a single, secure desktop app.
+El instalador anterior pesaba 213 MB. Éste pesa 19,6 MB, y la diferencia es
+exactamente el motor que ya no está.
 
-Built with **Tauri 2** (Rust backend) and **SvelteKit 5** (frontend), Lucy runs natively on Windows with minimal resource overhead.
+## Cómo está repartido
 
----
-
-## 🔌 MCP (Model Context Protocol) — first-class integration
-
-Lucy is a full **MCP host** with feature parity to Claude Desktop / Cursor / Cline. Register a server once and Lucy invokes it by name with the cached tool catalog embedded in the system prompt.
-
-### Quick start (filesystem MCP, no API keys needed)
-
-1. **Settings (⚙) → MCP tab → Administrar Servidores MCP → + Añadir servidor**
-2. Click the **`filesystem`** preset. It auto-fills:
-   ```
-   Comando: npx -y @modelcontextprotocol/server-filesystem C:/Users/you/Desktop
-   ```
-3. Edit the path to a sandbox folder you control, then **Guardar**.
-4. **Test** verifies spawn + JSON-RPC handshake (~5-30 s first time — `npx` is downloading the package).
-5. **Discover tools** caches the catalog (filesystem ships 11 tools: `read_file`, `write_file`, `list_directory`, `search_files`, …).
-6. In the chat, ask Lucy *"List the files in my sandbox and read hello.txt using the filesystem MCP"*.
-
-Lucy emits internally:
 ```
-<TOOL>mcp_query:filesystem|||list_directory|||{"path":"C:/Users/you/Desktop"}</TOOL>
+lucy-core/            El corazón compartido. Sin interfaz y sin Tauri: memoria,
+                      consolidación, patrones, cumplimiento, inventario,
+                      vigilancia, notificaciones, gasto de tokens.
+
+lucy-native-proto/    La cara nativa.
+  lucy-egui/            El shell de egui: los ocho módulos y la tabla de idiomas.
+  packaging/            El instalador NSIS y el MSI.
+
+docs/security-skills/ Catálogo de skills de seguridad y forense, con su propia
+                      licencia y atribución. Lucy los lee de la carpeta de
+                      usuario, no de aquí — esto es de dónde copiarlos.
+
+docs/research/        Las notas de diseño de la memoria y el grafo.
 ```
-The backend resolves the registered command, filters env vars to the keys the server declared it needs, and routes the call through a **connection pool** (subprocess stays alive 60 s between calls — 50× faster than spawn-per-call).
 
-### Servers with API keys (GitHub example)
+Los dos proyectos entraron por `git subtree`, así que su historia completa está
+en el registro: `git log -- lucy-core` cuenta cómo se llegó a cada pieza.
 
-1. Generate a Personal Access Token at https://github.com/settings/tokens (scope: `repo`).
-2. **Settings → MCP tab → "Variables / API Keys para MCP"** → add `GITHUB_PERSONAL_ACCESS_TOKEN = ghp_xxx…`. Stored in **Windows Credential Manager**, never in localStorage.
-3. **Add server** → preset `github` → check `GITHUB_PERSONAL_ACCESS_TOKEN` in the env-keys list → Save.
-4. Ask Lucy *"Search my repos for the auth module using the github MCP"*.
+Cada uno sigue teniendo su repositorio de trabajo, y su rama aquí:
 
-### Curated presets
+| directorio          | rama     |
+| ------------------- | -------- |
+| `lucy-core`         | `nucleo` |
+| `lucy-native-proto` | `egui`   |
 
-| Preset | What it does |
-|---|---|
-| `filesystem` | Read/write under a sandboxed root (no key needed) |
-| `github` | Issues, PRs, code search (`GITHUB_PERSONAL_ACCESS_TOKEN`) |
-| `brave-search` | Web search via Brave API (`BRAVE_API_KEY`) |
-| `postgres` | Read-only SQL (URL in command) |
-| `puppeteer` | Headless browser scraping |
-| `slack` | Channel post/read (`SLACK_BOT_TOKEN`, `SLACK_TEAM_ID`) |
-
-Any npm `@modelcontextprotocol/server-*` package works — paste the command verbatim.
-
-### Architecture highlights
-
-- **`mcp_servers` SQLite table** persists `(name, command, env_keys, tools_cache, status, last_latency_ms)` — survives restarts.
-- **Connection pool** (`pooled_call`) keys sessions by `(name, command, env_hash)` with a 60 s idle TTL and a background reaper.
-- **`McpRegistrySection`** in the system prompt injects each registered server with its tool catalog AND **`inputSchema` signatures**:
-  ```
-  github:
-    search_repositories(query*: string, sort?: "stars"|"forks"|"updated", perPage?: number)
-    list_commits(owner*: string, repo*: string, sha?: string, perPage?: number)
-  ```
-  Eliminates the class of "Validation Failed" errors caused by the LLM guessing argument shapes.
-- **Dual-resolution**: if `mcp_query:<arg>` matches a registered name, the registry path runs; otherwise the legacy raw-command path handles ad-hoc invocations.
-- **Per-tool invoke panel** in the modal lets you run any cached tool with a JSON args editor — useful for verifying schemas without going through Lucy.
-- **Permission Rules** apply to every `mcp_query` call exactly as they do for native tools.
-
-### Diagnostic commands
-
-- `/chip-stats` — predictive-chip engagement summary (7-day rolled-up)
-- `/frontier-stats` — Frontier feature usage telemetry
-- `/notebook` — export current tab as `.ipynb`
-- `/revert <path>` — restore the pre-write content of a file Lucy modified
-- Settings → Self-Diagnostics → MCP pool — see live session count + latencies
-
----
-
-## What's New in v1.7 — Operations Console Era
-
-A **15-version arc** (v1.6.0 → v1.7.66) that transformed Lucy from an AI
-chat assistant with sysadmin tools into a full operations console with
-its own visual identity. The headline shifts are listed below; the full
-turn-by-turn detail lives in [CHANGELOG.md](./CHANGELOG.md).
-
-### 🛰 Operations Console UI (v1.7.58 → v1.7.66)
-
-The "Mission Control overhaul" — every chrome surface above and below
-the chat thread now signals "this is an operator's console", not a
-generic copilot:
-
-- **Mission Strip** (v1.7.58) — always-on status band between the title
-  bar and tab strip:
-  `● PRECISION-X · ⚯ 2/3 hosts · ⚠ 0 alerts · ⊕ guard · HH:MM ●●●○○`.
-  Local-host heartbeat dot, remote-host reachability, active incidents,
-  security skill state, local clock, and a 5-dot posture indicator
-  (calm → vigilant → suspicious → alarmed → panic). Click any chip to
-  drill into the matching view.
-- **Per-tab purpose tint** (v1.7.59) — tab strip becomes a session map.
-  Each tab tints its top-border by purpose (incident red, executing
-  violet, investigation amber, reference blue, conversational green).
-  The tint is auto-detected from the tab's content via keyword regex
-  + runtime flags.
-- **Terminal-recording warp-blocks** (v1.7.60) — Lucy's command-output
-  blocks now read as asciinema-style forensic recordings. Header
-  carries traffic-light dots, hostname chip, engine glyph
-  (⚡PS · ▶cmd · $bash · ◇wmic · ⌬netsh · ☐reg · ※cscript · ⇄remote),
-  absolute timestamp, elapsed ms, and an `exit 0`/`exit ≠0` badge.
-- **Sidebar category rails** (v1.7.63) — Sistema/Runbooks/Acciones/
-  Registros each carry their own colour (green/amber/violet/blue) as
-  a 2-px left rail and a dot in the header. Hovering intensifies the
-  rail as a "you-are-here" affordance.
-- **Cite evidence pills** (v1.7.63) — inline citations from Lucy
-  (`<CITE src="…" kind="memory|file|url|tool">`) now render as
-  colour-coded forensic badges — cyan for memory, green for file,
-  blue for URL, amber for tool. Hover lifts the chip with a kind-
-  coloured glow.
-- **Composer ops aesthetic** (v1.7.63) — the input field carries a
-  lambda glyph (`λ`) as the prompt, a soft dot-grid background on
-  focus, and a block-shaped caret. When you start with `/` the prompt
-  turns amber to signal slash-command mode.
-- **Self-diagnostics with one-click repairs** (v1.7.64 → v1.7.66) —
-  the Auto-Diagnóstico panel surfaces real issues (DB integrity,
-  log file, credential store, guardrails, memory pipeline) AND
-  ships repair buttons that fix the common ones without leaving the
-  UI. Includes a four-phase DB repair (force-rewrite + REINDEX +
-  verification) that handles even stale FTS5 shadow-table artefacts.
-
-### 🤖 Intelligence (v1.6.0 → v1.7.50)
-
-- **Grounding** (v1.6.0) — every memory carries a confidence score
-  (0..1) driven by evidence accumulation. Memories with contradictory
-  evidence get downgraded; reinforced ones rise. Backed by a Rust
-  module (`grounding.rs`) and a `memory_evidence` table.
-- **Curated skill preset library** (v1.6.1) — 18+ ready-to-use ECC
-  presets (`cost-aware`, `security-review`, `hypothesis-driven-debug`,
-  …) plus an auto-loader for `docs/security-skills/<name>/SKILL.md`.
-- **Polarity-driven smart chip classification** (v1.6.5 → v1.6.7) —
-  Lucy's auto-suggested follow-up chips are scored by a polarity
-  signal (positive intent vs. negative intent) so destructive
-  suggestions stop sneaking onto the chip strip.
-- **Annealing ontology scoring** (v1.6.6 → v1.6.8) — when Lucy is
-  asked to consolidate memories, she scores candidate ontologies by
-  simulated annealing so the final picks are stable across runs.
-- **Centralised model catalog + tier health** (v1.7.0 → v1.7.5) —
-  one source of truth for every supported model (`gemini-*`,
-  `claude-*`, `gpt-*`, local Ollama), plus a boot-time tier health
-  check that grays out endpoints whose API key is missing or whose
-  remote returns 5xx.
-- **RULE 0b + report-generation skill** (v1.7.50) — a first-class
-  Report Generation intent class with a five-step contract
-  (`<THOUGHT>` plan → multi-tool gather → synthesis → writefile →
-  brief chat narrative). Closes the loop with the JS-side
-  multi-intent detector added in v1.7.49 so prompts like *"genera un
-  reporte detallado del estado de mi maquina, depositalo en mi
-  escritorio"* always escape the sysinfo short-circuit.
-
-### ⚡ Streaming overhaul (v1.7.42 → v1.7.57)
-
-A 15-commit sprint that took Lucy's response rendering from
-"functional but flickery" to indistinguishable from ChatGPT or Claude.ai:
-
-- **morphdom DOM diffing** (v1.7.56) — `<div use:morphHtml>` replaces
-  Svelte's `{@html msg.html}`. Updates mutate only the trailing few
-  characters of the latest text node; the rest of the bubble stays
-  physically untouched. Eliminates the residual streaming shimmer.
-- **rAF throttle + CSS-owned cursor** (v1.7.45) — `renderRevealed`
-  coalesces multiple drain ticks into one paint cycle; the blinking
-  cursor moves from a `<span>` into a `::after` pseudo so it can't
-  be destroyed and recreated on every chunk.
-- **Open-tag placeholder + role-gated `fin()`** (v1.7.46 → v1.7.54)
-  — when Lucy emits `<THOUGHT>` before any prose, the UI shows
-  *"◌ Lucy está razonando…"* until the close tag arrives, instead
-  of going blank. After the stream completes, `fin()` no longer
-  deletes the promoted bubble (the bug that v1.7.45-53 chased
-  through the wrong layer).
-- **Gemini-style aura + token fade-in** (v1.7.57) — streaming
-  bubbles glow with a soft accent-coloured text-shadow, and each
-  newly-added element fades in over 280ms with a slight blur lift.
-  Disappears cleanly on settle.
-
-### 🔧 Performance (v1.7.42 → v1.7.44)
-
-- **GPU vendor hints** for hybrid laptops — `NvOptimusEnablement = 1`
-  and `AmdPowerXpressRequestHighPerformance = 1` exported as Windows-
-  only release-only `#[used] #[no_mangle]` statics so NVIDIA Optimus
-  / AMD PowerXpress bind Lucy to the discrete GPU.
-- **WebView2 GPU flags** — `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`
-  set to `--enable-gpu-rasterization --enable-zero-copy
-  --ignore-gpu-blocklist`.
-- **Single window effect** — `mica` only, no acrylic, so DWM stops
-  running two blur passes per frame on the same surface.
-- **Idle saver class** (v1.7.44) — `html.lucy-quiescent` after 8 s
-  of no input pauses every infinite CSS animation app-wide via a
-  single `animation-play-state: paused` rule. Idle GPU drops to
-  ~1-3 %.
-
-### 💾 Reliability (v1.7.42 → v1.7.65)
-
-- **Persistence on structural changes** (v1.7.51) — `persistirNow()`
-  bypasses the 500 ms debounce for crearTab / closeTab / rename /
-  clear so closing Lucy immediately after a tab edit never loses
-  the edit.
-- **Self-diagnostic data repair** (v1.7.64 → v1.7.65) — one-click
-  command that backfills NULL confidence values across three tables,
-  force-rewrites every row to clear stale storage state, REINDEXes,
-  and verifies with a fresh `PRAGMA quick_check`.
-
-### 🛡 Hardening
-
-- **`<EXECUTE_REMOTE>` regex preservation** (v1.7.52) — an external
-  patch attempt had stripped attribute support from the cleanup
-  regex; v1.7.52 audits and reverts it with a verbose comment so
-  future "typo fixers" don't repeat the mistake.
-
----
-
-## What's New in v1.2.1
-
-A focused **stability + observability + visual refinement** release. No breaking changes — every existing flow keeps working, just feels sharper.
-
-### 🛡️ Reliability
-- **Multi-step prompt fix** — Lucy used to stop mid-task when given prompts like *"check my specs **and** search the web for tweaks"*. A premature short-circuit in the response parser killed the agent loop after the first tool. Now Lucy detects multi-intent prompts (sequencing connectors, ≥2 imperative verbs, web+system pairing) and stays in the agent loop until the full task is done.
-- **NexShell host cards no longer vanish** — connecting to multiple hosts could leave the *Configured Hosts* panel empty while the counter still said `3`. Caused by a CSS animation race (`opacity:0` + delayed entrance + frequent reactive churn). Migrated to a Svelte `in:` transition that runs only on mount.
-- **"Thinking…" timer ticks again** — the reasoning bubble showed `0.0s` frozen when the model emitted only tool tags. Added an independent 250ms ticker, hoisted to a runAI-scoped ref so cancellations / errors clean it up too.
-- **Skeleton zombie purge** — empty `streaming` placeholder bubbles no longer linger after the agent loop ends.
-
-### 🔍 Observability
-- **Statistical anomaly detection** on Dashboard CPU / RAM cards — a discrete `σ` badge surfaces when a value deviates ≥3σ from the host's recent rolling window. Pure stats, no ML, opt-out via `prefers-reduced-motion`.
-- **Live cost predictor** in the input bar — estimates tokens & USD before you press Enter, with confidence levels (low/med/high) based on historical samples per model.
-- **Notebook export** — turn any chat tab into a portable `.lucynote` (JSON envelope) or `.md` runbook via the Command Palette. Cells preserve `user / lucy / thought / command / tool` semantics for replay.
-- **Fuzzy search in Permission Rules** — diacritics-insensitive substring + action filter (allow/block/ask) over patterns and descriptions.
-
-### 🎨 Visual identity (Tier 1: Cursor-aesthetic foundation)
-- **Unified motion tokens** — replaced 250+ ad-hoc timings with `--motion-instant/fast/base/slow/deliberate` + `--ease-out / --ease-spring / --ease-back`. Single tactile identity across every transition.
-- **Ambient state indicator** in the footer — a 12px orb that breathes with Lucy's state (idle = soft green pulse, thinking = fast cyan, executing = amber sweep, error = red flash). Inspired by Cursor + Linear status dots.
-- **State-aware input border** — the input glow + ring color follow Lucy's current state, so the user always knows whether they're waiting or free to type.
-- **Mesh gradient ambient** — three subtle radial gradients drift at 30s cycle behind the UI; picks up the state color so the whole window tints with Lucy's mood (clamped to 0.85 opacity, 0.4 on light themes).
-- **Stagger reveal** on Audit Trail / Multi-host modal / ForksMonitor lists.
-- **Hover lift + glow** on Dashboard cards.
-- **Variable fonts** — Inter Variable + JetBrains Mono Variable explicitly declared.
-- **Versioned tutorial** — onboarding tour re-opens automatically when the build version changes, with new spotlights for the v1.2.1 features.
-
-### 🔒 Hardening (free anti-tampering layers)
-- **Release profile**: `lto="fat"`, `opt-level="z"`, `codegen-units=1`, `strip=true`, `panic="abort"`. Smaller, denser binary; no symbol trail for Ghidra/IDA.
-- **String obfuscation** (`obfstr`) on the PowerShell blocklist — `strings lucy.exe | grep` no longer reveals the list of dangerous patterns Lucy refuses to run.
-- **Boot-time integrity check** (TOFU) — SHA-256 of the running `.exe` compared against `%APPDATA%\Lucy\.integrity`. Logged-only by design (a fresh release legitimately mismatches the anchor).
-- **Win32 `IsDebuggerPresent`** check at boot.
-- **Vite production hardening** — sourcemaps off, console.log/debug/trace stripped, banner comments removed.
-
-### ♿ Accessibility & quality
-- **0 warnings** across `svelte-check` + `cargo check` (down from 28 + 15).
-- **0 unhandled `localStorage` calls** across the codebase (all migrated to `safe-ls` wrappers that never throw on quota / corruption).
-- `focusTrap` action now auto-applies `tabindex="-1"` + `aria-modal="true"` to every dialog using it — fixed ~10 dialog warnings without touching call sites.
-- Form labels in `PermissionRulesModal`, `SkillsManagerModal`, and the new-action modal now have proper `for/id` associations.
-
-### 🐛 Security audit
-- **XSS fix** in code-block rendering: `langLabel` (AI-controlled markdown lang string) is now `textContent`-rendered, not `innerHTML`.
-- 6× `unwrap()` → `map_err` in MCP serialization (no more panic on edge-case JSON).
-- `npm audit` from 5 vulns (2 high) → 3 low (transitive `cookie` only — not exploitable in a Tauri webview).
-- `RESET_APP` only clears Lucy-prefixed `localStorage` keys instead of `localStorage.clear()`.
-
-### 📚 New library modules
-| Module | Purpose |
-|--------|---------|
-| `$lib/anomaly.ts` | z-score statistical anomaly detection |
-| `$lib/cost-predictor.ts` | pre-flight token + USD estimation |
-| `$lib/notebook.ts` | export/import chat sessions as `.lucynote` |
-| `$lib/safe-ls.ts` | localStorage wrappers that never throw |
-| `$lib/security.ts` | destructive command pattern detection |
-| `$lib/text-utils.ts` | escape/format/normalize helpers |
-| `$lib/md-render.ts` | sanitized markdown rendering with LRU cache |
-| `$lib/constants.ts` | LANGS, BACKUP_KEYS, ICON_MAP, COST_PER_1K |
-| `$lib/debug.ts` | DEV-gated logger with ring buffer |
-| `$lib/stagger.ts` | Svelte stagger transitions for list reveals |
-
----
-
-## What's New in v1.2.0
-
-Three sprints of work landed in this release — Lucy is now more **self-correcting**, **retrieval-aware**, and **memory-persistent** than ever.
-
-### Sprint 1 — ReAct Self-Correction
-Lucy now parses the exit code of every command she runs. When a tool fails (`FullyQualifiedErrorId`, `ParserError`, non-zero stderr…), she **must** emit a `<THOUGHT>` block stating (a) the probable cause and (b) a *different* next action — never blindly retrying the same broken command. After two identical failures she stops and asks you for guidance instead of burning tokens in a loop.
-
-### Sprint 2 — Semantic Search over Skills & Memory (Ollama-powered)
-A new vector index backs every saved skill and persistent memory. Lucy calls `<TOOL>semantic:natural language query</TOOL>` and gets back cosine-ranked hits even when the user's phrasing doesn't match the exact trigger words.
-
-- **Local embeddings** via Ollama (`nomic-embed-text` by default) — zero cloud dependency, zero API cost.
-- **Auto-indexing**: every skill you save and every memory Lucy writes is embedded in the background (fire-and-forget; Ollama downtime never blocks a save).
-- **Backfill command** for existing data: `invoke('backfill_embeddings')`.
-- **Graceful fallback**: if Ollama is offline, Lucy falls back to `search_runbooks` (TF-IDF) or `search_web`.
-
-### Sprint 3 — Tiered Memory (MemGPT-style)
-Lucy's memory is now split into three explicit tiers, each with the right cost/recall trade-off:
-
-| Tier          | Storage                  | Scope                | How Lucy writes it                                   |
-| ------------- | ------------------------ | -------------------- | ---------------------------------------------------- |
-| **CORE**      | `memory_core` (always injected into system prompt, <2 KB) | Cross-session, always-on | `<TOOL>memory_core_set:section\|\|\|key\|\|\|value</TOOL>` |
-| **WORKING**   | `memory_working` (per-session summaries) | Current session          | Auto-compression of long agent loops                  |
-| **EPISODIC**  | `agent_memories` + FTS + embeddings | Cross-session, searchable | `<TOOL>memoria_guardar:title\|\|\|content\|\|\|tags</TOOL>` |
-
-Valid CORE sections: `user_facts`, `preferences`, `rules`, `environment`. Only truly always-relevant facts should be promoted to CORE — everyday discoveries belong in episodic memory.
-
-### UX polish
-- Removed the experimental Live Trace floating panel (kept the internal ReAct trace helpers that power self-correction).
-- Repository cleanup: removed ~15 stale patch/apply/orchestrator scripts and local archives.
-
-## Demo Video
-
-[![Lucy AI Demo](https://img.youtube.com/vi/Moo_gfYI5h8/maxresdefault.jpg)](https://www.youtube.com/watch?v=Moo_gfYI5h8)
-
-**[Watch Full Demo on YouTube](https://www.youtube.com/watch?v=Moo_gfYI5h8)** — See Lucy in action: self-correcting agent loops, local semantic search, tiered memory, compliance checks, and full SysAdmin automation.
-
-## Core Features: The Agentic OS
-
-Lucy has evolved from a conversational tool into a fully **Autonomous Agentic OS**:
-
-- **Sub-Agents & Parallel Orchestration** — Fork tasks natively to independent background agents using Ollama (Local) or Cloud models, allowing simultaneous multi-threaded execution.
-- **Self-Healing Execution Loop** — If Lucy encounters an error running a command (e.g., PowerShell access denied), she intercepts the terminal output on the fly, auto-corrects her approach, and retries until success without user intervention.
-- **OpenClaw TCP Gateway** — Integrated native webhook listener on port `31337`. External systems can trigger Lucy instantly, automatically spawning dedicated Agent Tabs to process the events.
-- **Claude Mem (Anti-Amnesia)** — Lucy securely saves architectural memory seamlessly into `workspace_memory.md`, retaining context across sessions and preserving knowledge permanently.
-- **Graphify AST Integration** — Advanced codebase parsing hooks allowing Lucy to query Abstract Syntax Trees to map logic accurately.
-- **Local LLM Emancipation** — Auto-parsers convert markdown into native OS commands instantly. Restricted local models (like `llama3`, `qwen`) can operate as unrestricted SysAdmin executors, massively reducing token latency with dynamic environment injection.
-
-### Standard SyAdmin Features
-
-- **Remote Shell (NexShell)** — Execute commands on remote Windows and Linux hosts via SSH/WinRM
-- **Log Viewer & Infrastructure Inventory** — Monitor event logs, auto-discover services, and track installed software
-- **CIS Compliance** — Run strict CIS benchmark checks against Windows and Linux baselines
-- **Audit Trail & Reports** — Export PDF reports and log every administrative action securely
-- **Credential Vault** — Secure API key and host credential storage via OS keyring
-
-## Screenshots
-
-### Main Interface & Dashboard
-![Setup & Dashboard](docs/screenshots/Screenshot_1_v2.png)
-![Main Interface](docs/screenshots/Screenshot_2_v2.png)
-
-### AI Chat & Features
-![Chat Interface](docs/screenshots/Screenshot_3_v2.png)
-![Chat Interaction](docs/screenshots/Screenshot_4_v2.png)
-![Feature Settings](docs/screenshots/Screenshot_5_v2.png)
-
-### Infrastructure & Compliance
-![Inventory View](docs/screenshots/Screenshot_6_v2.png)
-![Compliance Scanning](docs/screenshots/Screenshot_7_v2.png)
-![Log Analysis](docs/screenshots/Screenshot_8_v2.png)
-
-### Advanced Features
-![Audit Trail](docs/screenshots/Screenshot_9_v2.png)
-![Remote Shell (NexShell)](docs/screenshots/Screenshot_10_v2.png)
-![Skills & Automation](docs/screenshots/Screenshot_11_v2.png)
-
-### v1.2.0 — ReAct, Semantic Search & Tiered Memory
-![ReAct Self-Correction Loop](docs/screenshots/Screenshot_12.png)
-![Semantic Search with Ollama](docs/screenshots/Screenshot_13.png)
-![Tiered Memory — CORE injection](docs/screenshots/Screenshot_14.png)
-![Working Memory & Session Summaries](docs/screenshots/Screenshot_15.png)
-![Episodic Memory with FTS + Vectors](docs/screenshots/Screenshot_16.png)
-![Incident Response Mode](docs/screenshots/Screenshot_17.png)
-![Cost Dashboard & Token Tracking](docs/screenshots/Screenshot_18.png)
-![Permission Rules Engine](docs/screenshots/Screenshot_19.png)
-![Skills Manager with Parameters](docs/screenshots/Screenshot_20.png)
-![Multi-Provider LLM Config](docs/screenshots/Screenshot_21.png)
-![Live Agent Execution](docs/screenshots/Screenshot_22.png)
-
-## Prerequisites
-
-- [Node.js](https://nodejs.org/) >= 18
-- [Rust](https://rustup.rs/) >= 1.70
-- [Tauri CLI](https://tauri.app/start/prerequisites/) prerequisites (WebView2 on Windows)
-
-## Getting Started
+Para traer a `main` lo que se haya empujado a una de ellas:
 
 ```bash
-# Clone the repository
-git clone https://github.com/Phenomx64L/LucyAI.git
-cd LucyAI
-
-# Install frontend dependencies
-npm install
-
-# Run in development mode
-npm run tauri dev
-
-# Build for production
-npm run tauri build
+git subtree pull --prefix=lucy-core origin nucleo
 ```
 
-The production build generates Windows installers (NSIS + MSI) in `src-tauri/target/release/bundle/`.
+## Los ocho módulos
 
-## How to Use Lucy
+| Módulo            | Qué hace                                                        |
+| ----------------- | --------------------------------------------------------------- |
+| **Dashboard**     | CPU, RAM, discos, red, servicios caídos y tendencia del historial |
+| **Terminal IA**   | Le pides las cosas en español; propone el comando y lo ejecuta si lo apruebas |
+| **NexShell**      | Una PowerShell de verdad, local o remota por WinRM                |
+| **Log Viewer**    | Qué se ha ejecutado, con qué resultado y cuánto tardó             |
+| **Inventario**    | Puertos, servicios, software instalado, certificados              |
+| **Compliance**    | Controles CIS, con la evidencia de cada veredicto                 |
+| **Memoria**       | Hechos, sesiones destiladas, manuales ingeridos y principios      |
+| **Configuración** | Claves, modelos, umbrales, idioma y aspecto                       |
 
-### First-run setup
-1. Launch Lucy → the setup overlay appears.
-2. Paste an LLM API key (Gemini / OpenAI / Anthropic / local Ollama). Stored in the OS keyring — never on disk.
-3. *(Optional)* Add remote hosts (Windows over WinRM, Linux over SSH). Credentials also go in the keyring.
-4. Pick your language (EN / ES). You're ready.
+## Idiomas
 
-### Talking to Lucy
-Lucy is **autonomous** — you describe an intent, she picks the right tool:
+Español, inglés, portugués, francés y alemán. El texto en español **es la
+clave** de la tabla de traducción, que se busca por búsqueda binaria — hay un
+test que impide que la tabla se desordene, porque una tabla desordenada no
+falla: simplemente deja de encontrar la mitad de las frases.
 
-- **Local actions** (file, registry, processes, network): just ask. She writes PowerShell / WMIC / netsh / reg / cscript blocks and runs them.
-- **Remote hosts**: mention the host name. She emits `<EXECUTE_REMOTE target="hostId">...</EXECUTE_REMOTE>` and the UI runs it over your configured WinRM / SSH tunnel.
-- **Destructive commands** (`Stop-Service`, `Restart-Computer`, `Remove-*`, `reg delete`…): Lucy emits a `<PLAN>` card with **Execute / Dry-Run / Edit / Cancel** buttons instead of running blindly.
-- **Code tasks** (read, analyze, edit files): uses native Rust tools (`readfile`, `editfile`, `analyze_code` via Tree-Sitter) — no PowerShell file I/O.
+## Compilar
 
-### Enabling semantic search (Sprint 2)
-Lucy uses **Ollama** locally for embeddings — no cloud cost.
+Hace falta Rust estable. Windows 10/11.
 
 ```bash
-# One-time install (see https://ollama.com)
-ollama pull nomic-embed-text
-ollama serve   # usually runs as a service automatically on Windows
+cargo run --release --manifest-path lucy-native-proto/lucy-egui/Cargo.toml
 ```
 
-After that every skill you save and every memory Lucy writes is indexed automatically. To retro-index existing rows:
+Las pruebas de cada mitad:
 
-```js
-await invoke('backfill_embeddings');   // from the browser console / a dev skill
+```bash
+cargo test --manifest-path lucy-core/Cargo.toml
 ```
 
-If Ollama is offline, semantic tools silently fall back to TF-IDF / web search — nothing breaks.
+574 aserciones en el núcleo y 201 en el shell, todas verdes.
 
-### Teaching Lucy to remember (Sprint 3)
-Three ways to persist knowledge, ordered from cheapest to most detailed:
+## Dónde está la V1
 
-1. **CORE memory** — Always-on facts injected into every system prompt. Keep it tight (<2 KB total). Lucy writes this herself when you state a stable preference (e.g. "always use PowerShell 7, never cmd").
-2. **`<REMEMBER>` tags** — Personal profile facts (name, role, org, main projects). Persisted across sessions.
-3. **`memoria_guardar`** — Episodic knowledge: discoveries, fixes, runbook steps. FTS + vector-searchable later via `memoria_buscar` or `semantic:` tools.
+Entera, en este mismo repositorio. No se ha borrado nada de la historia:
 
-You can review and edit everything Lucy has remembered from the **Settings → Memory** panel.
+- La etiqueta **`v1-svelte-final`** apunta a su último árbol completo.
+- Las 48 etiquetas `v1.x` marcan cada versión publicada.
+- `git show v1-svelte-final:src-tauri/src/main.rs` sigue funcionando.
 
-### Skills & Runbooks
-- Teach Lucy a reusable action with `<LEARN>trigger words|powershell command|confirmation message</LEARN>` — she'll auto-save it as a Skill.
-- Parameterize with `{{var_name}}` in the command; Lucy will prompt you when needed.
-- Manage / test / export everything from the **Skills** tab in the sidebar.
-
-### Compliance, Inventory & Audit
-- **Compliance** → run CIS baselines against local or remote Windows / Linux hosts, export PDF reports.
-- **Inventory** → auto-discover services, installed software, hardware, NICs.
-- **Audit Trail** → every command, plan execution, and memory write is logged to SQLite with a signed timestamp.
-
-### Keyboard shortcuts
-| Shortcut              | Action                        |
-| --------------------- | ----------------------------- |
-| `Ctrl+T`              | New agent tab                 |
-| `Ctrl+W`              | Close current tab             |
-| `Ctrl+K`              | Command palette               |
-| `Ctrl+,`              | Settings                      |
-| `Esc`                 | Stop running agent loop       |
-
-## Project Structure
-
-```
-lucy-svelte/
-├── src/                      # Frontend (SvelteKit)
-│   ├── routes/
-│   │   └── +page.svelte      # Main application view
-│   └── lib/
-│       ├── *View.svelte       # Feature views (Dashboard, NexShell, Logs, etc.)
-│       ├── *Modal.svelte      # Modal dialogs (Host, Keyring, Profile, etc.)
-│       ├── lucy-api.ts        # Tauri command bridge
-│       ├── stores.ts          # Svelte reactive stores
-│       ├── skill-engine.ts    # Skill execution engine
-│       └── hooks/             # Command guard & turn loop
-├── src-tauri/                 # Backend (Rust + Tauri)
-│   ├── src/
-│   │   ├── lib.rs             # Tauri command registration
-│   │   ├── state.rs           # Application state
-│   │   ├── commands/          # Command modules
-│   │   │   ├── ai.rs          # LLM integration
-│   │   │   ├── hosts.rs       # Remote host execution
-│   │   │   ├── shell.rs       # Interactive shell
-│   │   │   ├── compliance.rs  # CIS benchmark checks
-│   │   │   ├── inventory.rs   # Infrastructure discovery
-│   │   │   ├── logs.rs        # Log reading
-│   │   │   └── ...
-│   │   └── utils/             # Shell & logging utilities
-│   └── tauri.conf.json        # Tauri configuration
-├── static/                    # Static assets
-└── package.json
-```
-
-## Tech Stack
-
-| Layer    | Technology                         |
-| -------- | ---------------------------------- |
-| Frontend | SvelteKit 5, Vite 6, TypeScript    |
-| Backend  | Rust 2021, Tauri 2.0, Tokio        |
-| AI       | LLM via API (configurable)         |
-| Security | OS Keyring, CSP headers, DOMPurify |
-| UI       | Lucide icons, Highlight.js, Marked |
-| Database | SQLite (tauri-plugin-sql)           |
-| Reports  | jsPDF + AutoTable                  |
-
-## Configuration
-
-Lucy stores credentials securely in the OS keyring. On first launch, the setup overlay will guide you through:
-
-1. Setting your LLM API key
-2. Configuring your first host profile
-3. Selecting your preferred language (EN/ES)
-
-## Available Scripts
-
-| Command                  | Description                        |
-| ------------------------ | ---------------------------------- |
-| `npm run dev`            | Start Vite dev server              |
-| `npm run build`          | Build frontend for production      |
-| `npm run preview`        | Preview production build           |
-| `npm run check`          | Run svelte-check type validation   |
-| `npm run tauri dev`      | Launch full app in dev mode        |
-| `npm run tauri build`    | Build native desktop installer     |
-
-## Security Considerations
-
-- API keys are stored in the OS keyring, never in plaintext files
-- All HTML rendering is sanitized with DOMPurify
-- CSP headers restrict external connections to configured API endpoints
-- Remote command execution requires explicit host configuration and credentials
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/my-feature`)
-3. Commit your changes (`git commit -m 'Add my feature'`)
-4. Push to the branch (`git push origin feature/my-feature`)
-5. Open a Pull Request
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
-
-## Support Lucy AI
-
-Love Lucy? Consider supporting development! Your contribution helps improve the project and keeps it free and open source.
-
-### 💝 Sponsor Options
-
-- **[GitHub Sponsors](https://github.com/sponsors/Phenomx64L)** — Direct sponsorship
-- **[Buy Me a Coffee](https://www.buymeacoffee.com/phenomx64l)** — One-time or recurring
-- **[Patreon](https://patreon.com/lucy-ai)** — Monthly support
-- **[PayPal](https://paypal.me/phenomx64l)** — Donation
-
-### 🙏 Other Ways to Help
-
-- ⭐ **Star the repository** — Helps visibility
-- 🐛 **Report bugs** — Create detailed issues
-- 💡 **Suggest features** — Share your ideas
-- 🔧 **Contribute code** — Submit PRs
-- 📢 **Share Lucy** — Tell others about it
-
-## License
-
-This project is licensed under the GNU General Public License v3.0 (GPLv3). See [LICENSE](LICENSE) for details.
-This ensures that any modifications or derivatives of Lucy remain Open Source and credit the original author.
+Lo que se retiró de `main` fue el código y su andamiaje de compilación — no su
+registro.
 
 ---
 
-<p align="center">
-  Built with Tauri + SvelteKit + Rust
-</p>
+## Autor
+
+**Iván Eduardo Luna** ([@Phenomx64L](https://github.com/Phenomx64L))
+· [LinkedIn](https://linkedin.com/in/phenomx64l)
+· SysAdmin y desarrollador
+
+Lucy nació de problemas reales de administración de infraestructura. Cada
+decisión de arquitectura viene de haberlos tenido delante.
+
+## Licencia
+
+GPLv3. Ver [LICENSE](LICENSE).
+
+El catálogo de `docs/security-skills/` tiene su propia licencia y atribución;
+ver [`docs/security-skills/ATTRIBUTION.md`](docs/security-skills/ATTRIBUTION.md).
