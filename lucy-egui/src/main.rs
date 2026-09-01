@@ -2060,6 +2060,25 @@ const DISK_H: f32 = 96.0; // 18 + 8 + 5 + 8 + 16 + 2 + 16 + 23
                           // soporte y el sistema de ficheros. La suma de arriba
                           // es la que había con el renglón nuevo intercalado.
 
+/// El rótulo de la sección de equipo: fabricante, modelo y zócalos si hay más
+/// de uno.
+///
+/// LOS ZÓCALOS SOLO EN PLURAL. En una estación son uno siempre, y «1 zócalo» es
+/// una palabra gastada en decir lo que ya se suponía. En un servidor de dos
+/// paquetes deja de suponerse — y ahí es donde el número explica por qué la tira
+/// de núcleos tiene doscientas cuarenta barras.
+fn rotulo_equipo(h: &lucy_core::hardware::Hardware) -> String {
+    let equipo = h.equipo();
+    if h.sockets > 1 {
+        let z = i18n::trf("{n} zócalos", &[("n", &h.sockets.to_string())]);
+        if equipo.is_empty() {
+            return z;
+        }
+        return format!("{equipo} · {z}");
+    }
+    equipo
+}
+
 /// Lo que va bajo el porcentaje de CPU: los hilos y los núcleos de verdad.
 ///
 /// ── DECÍA «32 NÚCLEOS» Y ERAN HILOS ──────────────────────────────────────────
@@ -2131,6 +2150,15 @@ fn de_que_esta_hecho(d: &lucy_core::system::DiskInfo) -> String {
     }
     s
 }
+
+/// Alto de la fila de texto de la sección de Equipo. Una línea, recortada.
+const EQUIPO_FILA_H: f32 = 18.0;
+/// Y el alto de la sección entera: el rótulo, la fila y el hueco de abajo.
+///
+/// SE TOPA CONTRA LO QUE HAYA. La sección se cuela entre los núcleos y los
+/// discos, y si pidiera su alto entero en una ventana baja se lo quitaría a los
+/// discos, que llevan el dato que se mira más. Por eso va con un `min`.
+const EQUIPO_H: f32 = 22.0 + EQUIPO_FILA_H + GAP;
 
 const PROC_ROW: f32 = 22.0;
 
@@ -4871,6 +4899,18 @@ struct App {
     dedup_rx: Option<std::sync::mpsc::Receiver<Result<lucy_core::consolidate::Report, String>>>,
     /// La tanda de mantenimiento en vuelo, si hay una.
     mant_rx: Option<std::sync::mpsc::Receiver<lucy_core::maintenance::Tanda>>,
+    /// Lo que el equipo ES. Llega tarde y una sola vez.
+    ///
+    /// EN UN HILO Y NO EN EL ARRANQUE, porque la sonda es una llamada a
+    /// PowerShell: arrancarlo cuesta del orden de doscientos milisegundos y un
+    /// frame son 16,7. Pedirla desde el hilo que pinta congelaría la ventana
+    /// justo al abrirse, que es el peor momento posible para hacerlo.
+    ///
+    /// `None` en los dos lados significa cosas distintas: `hw_rx` a `None` es
+    /// «ya no hay nada en vuelo», y `hw` a `None` es «todavía no ha llegado, o
+    /// no llegó nunca». La sección no se pinta hasta que hay algo que decir.
+    hw: Option<lucy_core::hardware::Hardware>,
+    hw_rx: Option<std::sync::mpsc::Receiver<Result<lucy_core::hardware::Hardware, String>>>,
     /// Cuánto se extiende Lucy al contestar.
     tono: lucy_core::prompt::Tono,
     /// Resultado de probar cada clave: proveedor -> qué dijo.
@@ -5574,6 +5614,18 @@ impl App {
             dedup_rx: None,
             cris_hechas: std::collections::HashSet::new(),
             mant_rx: None,
+            hw: None,
+            // SE LANZA AQUI Y NO EN EL PRIMER FOTOGRAMA. Es una sola vez en toda
+            // la vida del proceso; ponerlo en el bucle obligaria a llevar un
+            // «ya se pidio» que es exactamente el estado que sobra cuando la
+            // respuesta ya es ese estado.
+            hw_rx: {
+                let (tx, rx) = std::sync::mpsc::channel();
+                std::thread::spawn(move || {
+                    let _ = tx.send(lucy_core::hardware::sonda());
+                });
+                Some(rx)
+            },
             tono: storage
                 .and_then(|s| s.get_string(K_TONO))
                 .map(|v| lucy_core::prompt::Tono::from_key(&v))
@@ -5991,6 +6043,29 @@ impl App {
         self.cris_rx.push((uid, rx));
     }
 
+    /// Recoge lo que WMI dijo del equipo. Una vez y ya.
+    ///
+    /// UN FALLO SE TRAGA. WMI no contesta en todas las máquinas —está apagado en
+    /// algunas imágenes endurecidas— y no poder decir el modelo del portátil no
+    /// es algo de lo que haya que avisar a nadie: la sección no sale y el resto
+    /// del dashboard funciona igual. Lo que no puede pasar es que la aplicación
+    /// se quede preguntando: al recibir, `hw_rx` se cierra pase lo que pase.
+    fn pump_hardware(&mut self) {
+        let Some(rx) = &self.hw_rx else { return };
+        match rx.try_recv() {
+            Ok(r) => {
+                self.hw_rx = None;
+                match r {
+                    Ok(h) if h.hay_algo() => self.hw = Some(h),
+                    Ok(_) => {}
+                    Err(e) => eprintln!("[lucy] sin datos del equipo: {e}"),
+                }
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => self.hw_rx = None,
+        }
+    }
+
     /// Mira si toca mantenimiento y, si toca, lo lanza. Recoge lo anterior.
     ///
     /// LA COMPROBACIÓN ES DE MEMORIA Y LA DECISIÓN ES DE DISCO, y esa separación
@@ -6401,6 +6476,7 @@ impl eframe::App for App {
             self.pide_chips();
         }
         self.pump_mantenimiento();
+        self.pump_hardware();
         if let Some(m) = self.tema_pendiente.take() {
             theme::switch(ctx, m);
         }
@@ -17129,6 +17205,49 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                     });
                 }
 
+                // ── equipo ───────────────────────────────────────────────────
+                //
+                // DEBAJO DE LOS NÚCLEOS Y NO EN LA TARJETA DE SISTEMA, porque es
+                // la continuación de lo mismo: arriba se dice qué procesador
+                // pinta esas barras, y aquí de qué máquina es ese procesador.
+                // La tarjeta de Sistema tiene tres líneas —nombre, SO, tiempo
+                // encendido— y meterle una cuarta la descuadraría respecto a las
+                // otras tres de su fila.
+                //
+                // Y NO SALE HASTA QUE HAY ALGO. Llega tarde a propósito, en un
+                // hilo; una sección vacía que aparece dos segundos después de
+                // abrir empuja lo de abajo y da la sensación de que la ventana
+                // se ha movido sola.
+                if let Some(hw) = self.hw.clone().filter(|h| h.hay_algo()) {
+                    block(ui, ent[4].min(EQUIPO_H), |ui| {
+                        section(ui, "Equipo", Some(rotulo_equipo(&hw)));
+                        row(ui, EQUIPO_FILA_H, |ui| {
+                            let mut trozos: Vec<String> = hw.gpus.clone();
+                            if !hw.serie.is_empty() {
+                                trozos.push(i18n::trf(
+                                    "N/S {serie}",
+                                    &[("serie", &lucy_core::hardware::enmascara(&hw.serie))],
+                                ));
+                            }
+                            // RECORTADA A SU CAJA. Dos gráficas con nombre largo
+                            // más el número de serie pasan de los mil píxeles, y
+                            // sin el recorte el texto se sale del panel al
+                            // estrechar la ventana — que es la familia de fallos
+                            // que este dashboard lleva arreglada en trece sitios.
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(trozos.join("  ·  "))
+                                        .size(theme::FS_CAPTION)
+                                        .monospace()
+                                        .color(theme::txt3()),
+                                )
+                                .truncate(),
+                            );
+                        });
+                        ui.add_space(GAP);
+                    });
+                }
+
                 // ── discos ───────────────────────────────────────────────────
                 if !s.disks.is_empty() {
                     let disks = &s.disks;
@@ -23203,6 +23322,46 @@ mod presupuesto {
             fs: fs.into(),
             extraible,
         }
+    }
+
+    fn equipo(fab: &str, modelo: &str, sockets: usize) -> lucy_core::hardware::Hardware {
+        lucy_core::hardware::Hardware {
+            fabricante: fab.into(),
+            modelo: modelo.into(),
+            serie: "9S715PL21071ZS8000058".into(),
+            gpus: vec!["NVIDIA GeForce RTX 5070 Laptop GPU".into()],
+            sockets,
+        }
+    }
+
+    #[test]
+    fn un_solo_zocalo_no_se_menciona() {
+        // En una estación son uno siempre, y «1 zócalo» es una palabra gastada
+        // en decir lo que ya se suponía.
+        assert_eq!(
+            rotulo_equipo(&equipo("MSI", "Crosshair A16 HX D8WGKG", 1)),
+            "MSI Crosshair A16 HX D8WGKG"
+        );
+        assert_eq!(rotulo_equipo(&equipo("MSI", "X", 0)), "MSI X");
+    }
+
+    #[test]
+    fn dos_zocalos_si_porque_explican_la_tira_de_nucleos() {
+        // Es el caso del servidor: doscientas cuarenta barras en la tira de
+        // arriba dejan de ser un misterio en cuanto se lee que hay dos paquetes.
+        assert_eq!(
+            rotulo_equipo(&equipo("Supermicro", "SYS-241H", 2)),
+            "Supermicro SYS-241H · 2 zócalos"
+        );
+    }
+
+    #[test]
+    fn sin_nombre_de_equipo_el_rotulo_no_empieza_por_un_separador() {
+        // Una máquina virtual devuelve el fabricante y el modelo vacíos pero sí
+        // los zócalos. Sin este caso, el rótulo saldría como « · 4 zócalos».
+        let h = lucy_core::hardware::Hardware { sockets: 4, ..Default::default() };
+        assert_eq!(rotulo_equipo(&h), "4 zócalos");
+        assert_eq!(rotulo_equipo(&lucy_core::hardware::Hardware::default()), "");
     }
 
     #[test]
