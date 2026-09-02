@@ -2060,6 +2060,60 @@ const DISK_H: f32 = 96.0; // 18 + 8 + 5 + 8 + 16 + 2 + 16 + 23
                           // soporte y el sistema de ficheros. La suma de arriba
                           // es la que había con el renglón nuevo intercalado.
 
+/// ¿Se ha pedido pegar algo que NO es texto?
+///
+/// ── POR QUÉ NO SE PUEDE MIRAR LA PULSACIÓN ───────────────────────────────────
+///
+/// Porque no existe. Esto es `egui-winit` 0.29.1, `src/lib.rs:758`:
+///
+/// ```text
+///   if let Some(active_key) = logical_key.or(physical_key) {
+///       if pressed {
+///           if is_cut_command(…)   { … return; }
+///           if is_copy_command(…)  { … return; }
+///           if is_paste_command(…) {
+///               if let Some(t) = self.clipboard.get() { … push(Paste(t)) … }
+///               return;                       // ← SALE HAYA TEXTO O NO
+///           }
+///       }
+///       events.push(Event::Key { key, pressed, … });   // ← nunca se llega
+///   }
+/// ```
+///
+/// Con una imagen en el portapapeles, `clipboard.get()` no devuelve texto: no se
+/// emite `Paste` **y el `return` se salta también la tecla**. Un `Ctrl+V` con una
+/// captura dentro no deja NINGÚN evento. Mi primera versión de esto buscaba la
+/// pulsación y por eso no se disparaba nunca.
+///
+/// ── LA RENDIJA: SOLTAR LA TECLA ──────────────────────────────────────────────
+///
+/// Los tres `return` están dentro de `if pressed`. Al SOLTAR, `pressed` es falso,
+/// no se entra en ninguna rama, y el evento de tecla sí se emite. Se detecta ahí:
+/// llega un instante más tarde y no se nota.
+///
+/// SI HUBO TEXTO, NO. Un `Ctrl+V` sobre texto tiene que seguir siendo
+/// instantáneo, y lanzar PowerShell para descubrir que era texto sería pagar
+/// medio segundo en el caso normal.
+fn se_pidio_pegar(eventos: &[egui::Event]) -> bool {
+    let hubo_texto = eventos
+        .iter()
+        .any(|e| matches!(e, egui::Event::Paste(t) if !t.trim().is_empty()));
+    if hubo_texto {
+        return false;
+    }
+    eventos.iter().any(|e| {
+        matches!(
+            e,
+            egui::Event::Key {
+                key: egui::Key::V,
+                pressed: false,
+                modifiers,
+                ..
+            } if modifiers.command
+        )
+    })
+}
+
 /// El rótulo de la sección de equipo: fabricante, modelo y zócalos si hay más
 /// de uno.
 ///
@@ -4899,6 +4953,20 @@ struct App {
     dedup_rx: Option<std::sync::mpsc::Receiver<Result<lucy_core::consolidate::Report, String>>>,
     /// La tanda de mantenimiento en vuelo, si hay una.
     mant_rx: Option<std::sync::mpsc::Receiver<lucy_core::maintenance::Tanda>>,
+    /// El diagnostico de un comando fallido, en vuelo, con el carril al que va.
+    ///
+    /// CANAL PROPIO Y NO EL DE LA TRADUCCION: lo que vuelve por `nx_rx` SE
+    /// EJECUTA. Ver `nx_diagnostica`.
+    #[allow(clippy::type_complexity)]
+    nx_diag_rx: Option<(
+        String,
+        std::sync::mpsc::Receiver<Option<lucy_core::nexshell::Diagnostico>>,
+    )>,
+    /// El comando que Lucy propone tras un fallo, con el carril al que pertenece.
+    ///
+    /// NO SE EJECUTA SOLO. Es un boton; pulsarlo pasa por la misma puerta que si
+    /// lo hubiera escrito el operador.
+    nx_sugerido: Option<(String, String)>,
     /// Lo que trae el portapapeles cuando NO es texto, en vuelo.
     ///
     /// EN UN HILO, como todo lo que llama a PowerShell: leer el portapapeles son
@@ -5621,6 +5689,8 @@ impl App {
             dedup_rx: None,
             cris_hechas: std::collections::HashSet::new(),
             mant_rx: None,
+            nx_diag_rx: None,
+            nx_sugerido: None,
             pegar_rx: None,
             hw: None,
             // SE LANZA AQUI Y NO EN EL PRIMER FOTOGRAMA. Es una sola vez en toda
@@ -6491,6 +6561,7 @@ impl eframe::App for App {
         // salida se acumulaba en el canal y el indicador seguía girando sobre un
         // hilo que había acabado.
         self.pump_nx_remote();
+        self.pump_nx_diag();
         // Y LA TRADUCCIÓN, AQUÍ TAMBIÉN. Vivía al final de la vista de la
         // máquina local: mirando un equipo remoto no se ejecutaba, y una frase
         // en lenguaje natural dejaba la sesión colgada hasta reiniciar.
@@ -6945,28 +7016,15 @@ impl eframe::App for App {
             // lectura en hilo, troceado de PDF y chips. Faltaba la forma de
             // entrar que más se usa.
             //
-            // SI HAY TEXTO, NO SE MIRA NADA MÁS. Un `Ctrl+V` sobre texto tiene
-            // que seguir siendo instantáneo; lanzar PowerShell para descubrir
-            // que era texto sería pagar medio segundo en el caso normal.
-            let (hay_texto, hay_ctrl_v) = ctx.input(|i| {
-                (
-                    i.events
-                        .iter()
-                        .any(|e| matches!(e, egui::Event::Paste(t) if !t.trim().is_empty())),
-                    i.events.iter().any(|e| {
-                        matches!(
-                            e,
-                            egui::Event::Key {
-                                key: egui::Key::V,
-                                pressed: true,
-                                modifiers,
-                                ..
-                            } if modifiers.command
-                        )
-                    }),
-                )
-            });
-            if hay_ctrl_v && !hay_texto && self.pegar_rx.is_none() {
+            // La condición entera vive en `se_pidio_pegar`, que explica por qué
+            // se mira el SOLTAR de la tecla y no el pulsarla — resumen: con una
+            // imagen dentro, `egui-winit` no emite ningún evento al pulsar.
+            //
+            // POR `raw.events` Y NO POR `events`, igual que los ficheros
+            // soltados de aquí arriba: `raw` es lo que llegó, sin que ningún
+            // widget haya tenido ocasión de tocarlo.
+            let pedido = ctx.input(|i| se_pidio_pegar(&i.raw.events));
+            if pedido && self.pegar_rx.is_none() {
                 let (tx, rx) = std::sync::mpsc::channel();
                 std::thread::spawn(move || {
                     let _ = tx.send(lucy_core::clipboard::del_portapapeles());
@@ -17956,6 +18014,46 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                 }
                 ui.ctx().request_repaint();
             }
+            // ── LA VÍA QUE PROPONE LUCY TRAS UN FALLO ────────────────────────
+            //
+            // UN BOTÓN Y NO UNA EJECUCIÓN. La V1 a veces lo lanzaba sola; aquí
+            // no. Al otro lado hay un servidor y una credencial guardada, y el
+            // comando que propone un modelo sobre un error que acaba de leer no
+            // tiene por qué ser inocuo. Pulsarlo pasa por `nx_gate_remote`, con
+            // su guardrail y su confirmación de lo destructivo — la misma puerta
+            // que si lo hubiera escrito el operador.
+            //
+            // Solo mientras no haya nada corriendo: ofrecer «probar esto» con un
+            // comando en vuelo invita a lanzar dos cosas a la vez.
+            let sugerido = self
+                .nx_sugerido
+                .as_ref()
+                .filter(|(hid, _)| *hid == h.id && !self.nx_busy)
+                .map(|(_, c)| c.clone());
+            if let Some(cmd) = sugerido {
+                ui.add_space(8.0);
+                // El comando ENTERO en el globo, y recortado en el botón: la
+                // decisión de lanzarlo se toma leyéndolo, no adivinándolo.
+                if ui
+                    .add(egui::Button::new(i18n::trf(
+                        "▷ Probar: {cmd}",
+                        &[("cmd", &recorta_visual(&cmd, 34))],
+                    )))
+                    .on_hover_text(&cmd)
+                    .clicked()
+                {
+                    self.nx_sugerido = None;
+                    let host = h.clone();
+                    self.nx_gate_remote(&host, cmd);
+                }
+                if ui
+                    .add(egui::Button::new("✕").small())
+                    .on_hover_text(i18n::tr("Descartar la sugerencia"))
+                    .clicked()
+                {
+                    self.nx_sugerido = None;
+                }
+            }
             right(ui, 24.0, |ui| {
                 if ui.add(egui::Button::new("⌫").small()).on_hover_text(i18n::tr("Limpiar")).clicked() {
                     self.nx_lines.remove(&h.id);
@@ -18221,9 +18319,14 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
         let Some(s) = self.nx_stdin.as_mut() else {
             self.nx_lines_mut(id).push((
                 'e',
-                "Este comando no admite respuestas: WinRM no deja escribirle una vez \
-                 lanzado. Detenlo y vuelve a lanzarlo sin la parte interactiva."
-                    .into(),
+                // POR LA TABLA. Salía en español con la interfaz en inglés, y es
+                // de los que más se ven: cualquier frase escrita con un comando
+                // en vuelo cae aquí.
+                i18n::tr(
+                    "Este comando no admite respuestas: WinRM no deja escribirle una vez \
+                     lanzado. Detenlo y vuelve a lanzarlo sin la parte interactiva.",
+                )
+                .to_string(),
             ));
             return;
         };
@@ -18373,7 +18476,105 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                     })
                     .to_string(),
                 ));
+                // ── Y SE PREGUNTA POR QUÉ ────────────────────────────────────
+                //
+                // «El comando terminó con error» es el final de la
+                // conversación, y no debería serlo: el operador tiene delante
+                // un servidor, un error de PowerShell y ninguna pista. Es lo que
+                // la V1 hacía y aquí se había quedado fuera — reportado tal cual:
+                // «tenía la capacidad de responderme si un comando fallaba y me
+                // recomendaba intentarlo de otra manera».
+                //
+                // NO SI LO PARÓ EL OPERADOR. Un comando detenido a mano no ha
+                // fallado: se ha cancelado, y explicar por qué «falló» algo que
+                // uno mismo acaba de cortar es ruido.
+                //
+                // NI SI NO HAY NADA QUE EXPLICAR. Sin comando o sin salida no
+                // hay diagnóstico posible, y una llamada al modelo para que
+                // adivine cuesta dinero y devuelve invención.
+                if !parado && !cmd.is_empty() && !salida.trim().is_empty() {
+                    self.nx_diagnostica(&id, &cmd, &salida);
+                }
             }
+        }
+    }
+
+    /// Pregunta por qué falló un comando y qué probar en su lugar.
+    ///
+    /// ── POR SU PROPIO CANAL Y NO POR EL DE LA TRADUCCIÓN ─────────────────────
+    ///
+    /// `nx_rx` está para la traducción, y lo que vuelve por ahí SE EJECUTA: mira
+    /// `pump_nx`, que manda el comando a `nx_gate_remote` en cuanto llega. Un
+    /// diagnóstico que volviera por ese canal se ejecutaría solo, en un servidor
+    /// remoto, sin que nadie lo haya leído. Eso es exactamente lo que no puede
+    /// pasar aquí — así que canal aparte, y lo que llega SE ENSEÑA.
+    ///
+    /// El comando propuesto queda en `nx_sugerido`: un botón. Pulsarlo pasa por
+    /// `nx_gate_remote`, con su guardrail y su confirmación de lo destructivo,
+    /// igual que si lo hubiera escrito el operador. La V1 a veces lo lanzaba
+    /// sola; aquí no, y la diferencia importa porque al otro lado hay un
+    /// servidor con una credencial guardada.
+    ///
+    /// NO SE ENCADENA. Un solo intento por fallo: si el comando propuesto falla
+    /// a su vez, se explica ese fallo pero no se pide otro sobre el anterior. Un
+    /// bucle de diagnósticos que se diagnostican entre sí gasta dinero y no
+    /// converge.
+    fn nx_diagnostica(&mut self, id: &str, cmd: &str, salida: &str) {
+        if self.nx_diag_rx.is_some() {
+            return;
+        }
+        let (shell, so) = match self.nx_estado.get(id) {
+            Some(Conexion::Ok { os, .. }) if !os.is_empty() => {
+                (if os.contains("Windows") { "PowerShell" } else { "bash" }, os.clone())
+            }
+            _ => ("PowerShell", "Windows".to_string()),
+        };
+        let prompt = lucy_core::nexshell::diagnose_prompt(cmd, salida, shell, &so);
+        let modelo = self.chat_model.clone();
+        let privado = self.privacy;
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.nx_diag_rx = Some((id.to_string(), rx));
+        std::thread::spawn(move || {
+            let r = match lucy_core::cloud::allowed(&modelo, privado) {
+                Ok(()) => {
+                    let mut out = String::new();
+                    for ev in lucy_core::cloud::start(
+                        modelo,
+                        vec![lucy_core::turns::Turn::user(prompt)],
+                    ) {
+                        if let lucy_core::chat::ChatEvent::Token(t) = ev {
+                            out.push_str(&t);
+                        }
+                    }
+                    lucy_core::nexshell::parse_diagnostico(&out)
+                }
+                // UN FALLO SE TRAGA. Esto es una ayuda sobre un error que el
+                // operador ya está viendo; que además no se pueda explicar no
+                // merece una segunda línea roja debajo de la primera.
+                Err(_) => None,
+            };
+            let _ = tx.send(r);
+        });
+    }
+
+    /// Recoge el diagnóstico y lo enseña. No ejecuta nada.
+    fn pump_nx_diag(&mut self) {
+        let Some((id, rx)) = &self.nx_diag_rx else { return };
+        match rx.try_recv() {
+            Ok(r) => {
+                let id = id.clone();
+                self.nx_diag_rx = None;
+                let Some(d) = r else { return };
+                self.nx_lines_mut(&id).push((
+                    'i',
+                    i18n::trf("↳ {causa}", &[("causa", &d.causa)]),
+                ));
+                if !d.prueba.is_empty() {
+                    self.nx_sugerido = Some((id, d.prueba));
+                }
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => self.nx_diag_rx = None,
         }
     }
 
@@ -23511,6 +23712,56 @@ mod presupuesto {
             gpus: vec!["NVIDIA GeForce RTX 5070 Laptop GPU".into()],
             sockets,
         }
+    }
+
+    fn tecla_v(pressed: bool, command: bool) -> egui::Event {
+        egui::Event::Key {
+            key: egui::Key::V,
+            physical_key: None,
+            pressed,
+            repeat: false,
+            modifiers: egui::Modifiers { command, ..Default::default() },
+        }
+    }
+
+    #[test]
+    fn el_ctrl_v_se_ve_al_soltar_porque_al_pulsar_no_existe() {
+        // ESTE TEST FIJA UN DETALLE DE `egui-winit` DEL QUE DEPENDE LA FUNCION.
+        // Con una imagen en el portapapeles, `is_paste_command` sale por un
+        // `return` que se salta tambien el evento de tecla: al PULSAR no llega
+        // nada. Los tres `return` estan dentro de `if pressed`, asi que al
+        // SOLTAR el evento si se emite. Mi primera version miraba la pulsacion y
+        // por eso no se disparaba nunca.
+        assert!(se_pidio_pegar(&[tecla_v(false, true)]), "no vio el soltar");
+        assert!(
+            !se_pidio_pegar(&[tecla_v(true, true)]),
+            "la pulsacion no llega nunca con una imagen dentro: verla seria \
+             estar mirando otra cosa"
+        );
+    }
+
+    #[test]
+    fn una_v_sin_control_no_es_pegar() {
+        // Escribir una uve en el compositor.
+        assert!(!se_pidio_pegar(&[tecla_v(false, false)]));
+        assert!(!se_pidio_pegar(&[]));
+    }
+
+    #[test]
+    fn si_habia_texto_no_se_toca_el_portapapeles() {
+        // Un `Ctrl+V` sobre texto tiene que seguir siendo instantaneo. Lanzar
+        // PowerShell para descubrir que era texto seria pagar medio segundo en
+        // el caso normal — y ademas adjuntaria un fichero cuando lo que se
+        // queria era escribir.
+        let con_texto = [
+            egui::Event::Paste("Get-Service".into()),
+            tecla_v(false, true),
+        ];
+        assert!(!se_pidio_pegar(&con_texto));
+        // Un pegado VACIO no cuenta como texto: es lo que deja `clipboard.get()`
+        // cuando no habia nada que leer.
+        let vacio = [egui::Event::Paste("   ".into()), tecla_v(false, true)];
+        assert!(se_pidio_pegar(&vacio), "un pegado en blanco tapo la imagen");
     }
 
     #[test]
