@@ -6686,6 +6686,7 @@ impl eframe::App for App {
         // hilo que había acabado.
         self.pump_nx_remote();
         self.pump_nx_diag();
+        self.pump_nx_plazo();
         // Y LA TRADUCCIÓN, AQUÍ TAMBIÉN. Vivía al final de la vista de la
         // máquina local: mirando un equipo remoto no se ejecutaba, y una frase
         // en lenguaje natural dejaba la sesión colgada hasta reiniciar.
@@ -18182,13 +18183,16 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                     // quitar la entrada devolvia el equipo a «no se nada de el»
                     // y la vista lo reconectaba sola al fotograma siguiente.
                     self.nx_estado.insert(h.id.clone(), Conexion::Desconectado);
-                    self.nx_lines_mut(&h.id).push((
-                        'i',
-                        i18n::tr(
-                            "Desconectado, y no se vuelve a conectar solo. Lo de arriba se queda.",
-                        )
-                        .to_string(),
-                    ));
+                    // Y SE CORTA LO QUE HUBIERA EN VUELO. Desconectar de una
+                    // maquina tiene que parar lo que corre contra ella: es lo
+                    // que significa. Sin esto, la cabecera decia «desconectado»
+                    // y «traduciendo… 64s» a la vez.
+                    let motivo = i18n::tr(
+                        "Desconectado, y no se vuelve a conectar solo. Lo de arriba se queda.",
+                    )
+                    .to_string();
+                    let hid = h.id.clone();
+                    self.nx_suelta(&hid, &motivo);
                 } else {
                     self.nx_conectar(&h);
                 }
@@ -18237,12 +18241,14 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                     //
                     // Soltar el receptor descarta la respuesta si llega tarde,
                     // que es lo correcto: el operador ya dijo que no la quería.
-                    if self.nx_rx.take().is_some() {
-                        self.nx_busy = false;
-                        self.nx_started = None;
-                        self.nx_fase = None;
-                        let destino = self.nx_destino.take();
-                        self.nx_aviso(destino.as_ref(), i18n::tr("(detenido)").as_ref());
+                    // POR `nx_suelta`, EL MISMO SITIO QUE DESCONECTAR. Aquí
+                    // había una lista propia de campos a limpiar y allí no
+                    // había ninguna: dos listas son dos sitios donde olvidar
+                    // uno, y el que se olvidó fue el de desconectar entero.
+                    if self.nx_rx.is_some() || self.nx_diag_rx.is_some() {
+                        let hid = h.id.clone();
+                        let motivo = i18n::tr("(detenido)").to_string();
+                        self.nx_suelta(&hid, &motivo);
                     }
                 }
                 ui.ctx().request_repaint();
@@ -19006,6 +19012,93 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
             };
             let _ = tx.send(r);
         });
+    }
+
+    /// Cuánto se espera a un modelo antes de darlo por perdido.
+    ///
+    /// Noventa segundos. Traducir una frase o leer un error son una llamada de
+    /// unos pocos segundos con cualquier modelo razonable; noventa deja sitio a
+    /// un proveedor lento o a un Ollama en CPU sin dejar la pantalla colgada.
+    ///
+    /// NO SE APLICA A LOS COMANDOS. Un `Install-WindowsUpdate` tarda lo que
+    /// tarda, y `nx_run_remote` lo dice por escrito: «sin plazo, es una terminal
+    /// interactiva y un comando legítimo puede tardar lo que quiera con el
+    /// operador delante». Aquí el plazo es para lo que espera a un MODELO, que
+    /// es otra cosa.
+    const PLAZO_MODELO_SECS: u64 = 90;
+
+    /// Suelta la pantalla y corta lo que hubiera en vuelo contra este equipo.
+    ///
+    /// ── UNO SOLO, PORQUE ANTES HABÍA MEDIO ───────────────────────────────────
+    ///
+    /// El botón de detener soltaba la traducción. Desconectar no soltaba nada:
+    /// se anotaba el estado y el hilo que estaba hablando con el modelo seguía,
+    /// con la cabecera diciendo «desconectado» y «traduciendo… 64s» a la vez.
+    /// Reportado tal cual: «si lo desconecto intencionalmente se queda trabajando
+    /// algo en segundo plano».
+    ///
+    /// Desconectar de una máquina TIENE que parar lo que corre contra ella: es
+    /// lo que significa. Y como son las mismas cinco cosas que suelta el botón
+    /// de detener, se hacen en un solo sitio — dos listas de campos a limpiar
+    /// son dos sitios donde olvidar uno.
+    ///
+    /// SOLTAR EL RECEPTOR DESCARTA LA RESPUESTA si llega tarde, que es lo
+    /// correcto: quien desconecta ya dijo que no la quería.
+    fn nx_suelta(&mut self, id: &str, motivo: &str) {
+        self.nx_stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        self.nx_rx = None;
+        self.nx_diag_rx = None;
+        self.nx_exec_rx = None;
+        self.nx_stdin = None;
+        self.nx_stdin_rx = None;
+        self.nx_busy = false;
+        self.nx_started = None;
+        self.nx_fase = None;
+        self.nx_destino = None;
+        self.nx_sugerido = None;
+        if !motivo.is_empty() {
+            self.nx_lines_mut(id).push(('i', motivo.to_string()));
+        }
+    }
+
+    /// Da por perdida una espera a un modelo que no vuelve.
+    ///
+    /// EL HILO NO SE MATA, SE DEJA DE ESPERAR. No hay forma de cortar una
+    /// petición HTTP ya lanzada desde fuera del cliente; lo que sí se puede es
+    /// no tener la pantalla secuestrada por ella. Cuando el hilo termine, su
+    /// respuesta se encuentra el canal cerrado y se descarta.
+    fn pump_nx_plazo(&mut self) {
+        // SOLO LAS ESPERAS A UN MODELO. Ver `PLAZO_MODELO_SECS`: un comando
+        // remoto puede tardar media hora legítimamente.
+        let esperando_modelo = self.nx_rx.is_some() || self.nx_diag_rx.is_some();
+        if !esperando_modelo {
+            return;
+        }
+        let Some((_, desde)) = self.nx_fase else { return };
+        if desde.elapsed().as_secs() < Self::PLAZO_MODELO_SECS {
+            return;
+        }
+        let id = self
+            .nx_destino
+            .as_ref()
+            .map(|h| h.id.clone())
+            .or_else(|| self.nx_diag_rx.as_ref().map(|(i, _)| i.clone()))
+            .unwrap_or_default();
+        let aviso = i18n::trf(
+            "El modelo no contestó en {s}s. Se deja de esperar; vuelve a intentarlo.",
+            &[("s", &Self::PLAZO_MODELO_SECS.to_string())],
+        );
+        if id.is_empty() {
+            self.nx_say(&aviso);
+            self.nx_rx = None;
+            self.nx_diag_rx = None;
+            self.nx_busy = false;
+            self.nx_started = None;
+            self.nx_fase = None;
+            self.nx_destino = None;
+        } else {
+            self.nx_suelta(&id, &aviso);
+        }
     }
 
     /// Lee lo que devolvió un comando y dice qué hay dentro.
@@ -24226,6 +24319,35 @@ mod presupuesto {
 
     fn lineas(marcas: &str) -> Vec<(char, String)> {
         marcas.chars().map(|c| (c, c.to_string())).collect()
+    }
+
+    #[test]
+    fn el_plazo_es_para_el_modelo_y_no_para_los_comandos() {
+        // EL MATIZ QUE COSTO PENSARLO. Una espera a un modelo que no vuelve deja
+        // la pantalla secuestrada y hay que cortarla; un comando remoto puede
+        // tardar media hora legitimamente —un `Install-WindowsUpdate` lo hace— y
+        // cortarlo por plazo seria matar trabajo de verdad. `nx_run_remote` lo
+        // lleva escrito: «sin plazo, es una terminal interactiva».
+        //
+        // Se comprueba SOBRE EL FUENTE porque lo que hay que fijar es a que
+        // canales mira la guarda, y eso no se observa ejecutando.
+        let fuente = include_str!("main.rs");
+        let cuerpo = fuente
+            .split("fn pump_nx_plazo")
+            .nth(1)
+            .expect("desaparecio la guarda del plazo");
+        let cuerpo = &cuerpo[..cuerpo.len().min(1_400)];
+        assert!(cuerpo.contains("nx_rx"), "no mira la traduccion");
+        assert!(cuerpo.contains("nx_diag_rx"), "no mira el diagnostico");
+        assert!(
+            !cuerpo.contains("nx_exec_rx.is_some()"),
+            "el plazo alcanza a la ejecucion de comandos: mataria un Install-WindowsUpdate"
+        );
+        assert!(
+            (60..=180).contains(&App::PLAZO_MODELO_SECS),
+            "un plazo fuera de ese rango o corta modelos lentos o no rescata nada: {}",
+            App::PLAZO_MODELO_SECS
+        );
     }
 
     #[test]
