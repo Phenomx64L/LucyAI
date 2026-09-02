@@ -164,6 +164,92 @@ pub const NO_COMMAND: &str = "SIN_COMANDO";
 /// cabia en tres renglones.
 pub const MAX_SALIDA_DIAG: usize = 1_200;
 
+/// A partir de cuanta salida vale la pena resumir.
+///
+/// ── POR QUE UN UMBRAL Y NO SIEMPRE ───────────────────────────────────────────
+///
+/// `Get-Service Spooler` devuelve tres lineas que se leen de un vistazo. Pedirle
+/// a un modelo que las resuma cuesta dinero, tarda, y devuelve una frase mas
+/// larga que la salida — el operador acaba leyendo dos veces lo mismo.
+///
+/// Ochocientos caracteres es donde una salida deja de leerse de una pasada. Por
+/// debajo, la salida ES el resumen.
+pub const MIN_SALIDA_RESUMEN: usize = 800;
+
+/// Cuanta salida se le manda al modelo para resumir.
+///
+/// Mas que para diagnosticar —seis mil frente a mil doscientos— porque aqui el
+/// trabajo es distinto: un fallo se explica con las primeras lineas del error,
+/// pero un resumen de «que actualizaciones hay» necesita ver TODAS las entradas
+/// o se deja la mitad fuera y miente por omision, que es peor que no resumir.
+///
+/// El tope existe igual: un `Get-EventLog` de dos mil sucesos son cientos de
+/// miles de caracteres, y a partir de cierto punto lo que hace falta no es un
+/// resumen sino otro comando mas estrecho.
+pub const MAX_SALIDA_RESUMEN: usize = 6_000;
+
+/// Lo que se le pide al modelo para resumir lo que devolvio un comando.
+///
+/// ── EL PROBLEMA QUE RESUELVE ─────────────────────────────────────────────────
+///
+/// `Get-WindowsUpdate` sobre PowerShell devuelve el volcado de un objeto COM:
+/// cuarenta propiedades por actualizacion, con `System.__ComObject` en la mitad
+/// de ellas. Lo que el operador pregunto fue «¿hay actualizaciones?» y lo que
+/// recibe son doscientas lineas donde la respuesta —cuantas, cuales, si piden
+/// reinicio, cuanto pesan— esta enterrada.
+///
+/// SE PIDE LO CONCRETO Y SE PROHIBE REPETIR. Un modelo servicial, ante un
+/// volcado, tiende a reformatearlo entero. Lo que hace falta es lo contrario:
+/// las cifras, lo que hay que decidir, y nada mas.
+///
+/// Y SE PROHIBE INVENTAR EXPLICITAMENTE. Un resumen que añade un dato que no
+/// estaba en la salida es peor que no resumir: el operador no tiene forma de
+/// distinguirlo, y va a actuar sobre el.
+pub fn summarize_prompt(cmd: &str, salida: &str, so: &str) -> String {
+    let corta: String = salida.chars().take(MAX_SALIDA_RESUMEN).collect();
+    format!(
+        "Eres el ayudante de un administrador de sistemas. En un equipo con {so} se          ejecuto este comando y devolvio esta salida.
+
+         Comando: {cmd}
+         Salida:
+{corta}
+
+         Escribe un resumen de DOS A CUATRO lineas, en el mismo idioma que la peticion          original si lo reconoces y si no en español. Reglas:
+         - Da las CIFRAS concretas: cuantos elementos, cuales importan, que hay que decidir.
+         - Menciona lo que exija una accion (reinicios, fallos, cosas caducadas).
+         - NO repitas la salida ni la reformatees. NO uses markdown ni listas con guiones.
+         - NO inventes nada que no este en la salida.
+         Si la salida no dice nada util, responde exactamente: SIN_RESUMEN"
+    )
+}
+
+/// Lo que el modelo contesta cuando no hay nada que resumir.
+pub const NO_SUMMARY: &str = "SIN_RESUMEN";
+
+/// Limpia el resumen. `None` = no habia nada que decir.
+///
+/// SE QUITA EL BLOQUE DE PENSAMIENTO y el markdown que se cuela pese a
+/// prohibirlo, por lo mismo que en `clean_command`: un modelo servicial adorna.
+/// Y se corta por longitud: esto va a una linea de la transcripcion, no a un
+/// informe.
+pub fn parse_resumen(salida: &str) -> Option<String> {
+    let limpio = match salida.rfind("</think>") {
+        Some(i) => &salida[i + "</think>".len()..],
+        None => salida,
+    };
+    let t: String = limpio
+        .lines()
+        .map(|l| l.trim().trim_start_matches(['-', '*', '·', '•', '#', ' ']))
+        .filter(|l| !l.is_empty() && !l.starts_with("```"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let t = t.replace("**", "").trim().to_string();
+    if t.is_empty() || t.contains(NO_SUMMARY) {
+        return None;
+    }
+    Some(t.chars().take(600).collect())
+}
+
 /// Lo que se le pide al modelo cuando un comando ha fallado.
 ///
 /// ── POR QUE ESTO NO ES OTRA TRADUCCION ───────────────────────────────────────
@@ -258,6 +344,12 @@ pub fn parse_diagnostico(salida: &str) -> Option<Diagnostico> {
 }
 
 #[cfg(test)]
+// Igual que en `maintenance`, `suggest` y `clipboard`: las aserciones de los
+// umbrales comparan CONSTANTES entre si. Clippy las ve evaluables en compilacion
+// y avisa; son guardas de invariante, no aserciones muertas — fijan que no se
+// resuma lo que ya se lee de un vistazo, y que para resumir se vea mas que para
+// diagnosticar.
+#[allow(clippy::assertions_on_constants)]
 mod tests {
     use super::*;
 
@@ -417,5 +509,77 @@ PRUEBA: SIN_COMANDO",
         assert!(p.contains("Get-EventLog"), "perdio el comando que fallo");
         assert!(p.contains("Windows Server 2022"), "perdio el sistema del equipo");
         assert!(p.contains(NO_COMMAND), "no le da salida para lo que no se arregla");
+    }
+
+    #[test]
+    fn el_resumen_se_limpia_del_adorno_que_se_le_prohibio() {
+        // Se le dice que nada de markdown y lo pone igual. Es el mismo modelo
+        // servicial que mete el comando en un bloque de codigo pese a la misma
+        // prohibicion — ver `clean_command`.
+        let r = parse_resumen(
+            "**Resumen:**
+- Hay 3 actualizaciones pendientes.
+- Una pide reinicio.
+",
+        )
+        .expect("no leyo el resumen");
+        assert!(!r.contains('*'), "quedo markdown: {r}");
+        assert!(!r.contains("
+- "), "quedo una lista: {r}");
+        assert!(r.contains("3 actualizaciones"), "perdio la cifra: {r}");
+        assert!(r.contains("reinicio"), "perdio lo que exige accion: {r}");
+    }
+
+    #[test]
+    fn sin_nada_que_decir_no_se_escribe_una_linea() {
+        // Una linea que dice «no hay nada que resumir» es una linea de ruido
+        // debajo de la salida que el operador ya esta leyendo.
+        assert!(parse_resumen("SIN_RESUMEN").is_none());
+        assert!(parse_resumen("   
+
+  ").is_none());
+        assert!(parse_resumen("").is_none());
+    }
+
+    #[test]
+    fn el_bloque_de_pensamiento_no_acaba_en_el_resumen() {
+        let r = parse_resumen(
+            "<think>a ver, cuento las entradas…</think>
+Hay 2 actualizaciones criticas.",
+        )
+        .expect("no leyo");
+        assert_eq!(r, "Hay 2 actualizaciones criticas.");
+    }
+
+    #[test]
+    fn el_resumen_cabe_en_una_linea_de_la_transcripcion() {
+        // Esto va a un renglon del carril, no a un informe. Un modelo que se
+        // extiende no puede empujar la salida fuera de la pantalla.
+        let largo = "frase. ".repeat(400);
+        let r = parse_resumen(&largo).expect("no leyo");
+        assert!(r.chars().count() <= 600, "no se acoto: {}", r.chars().count());
+    }
+
+    #[test]
+    fn no_se_resume_lo_que_ya_se_lee_de_un_vistazo() {
+        // `Get-Service Spooler` son tres lineas. Resumirlas costaria dinero para
+        // devolver una frase mas larga que la salida.
+        assert!(MIN_SALIDA_RESUMEN >= 400, "resumiria hasta un `whoami`");
+        // Y para resumir hace falta ver MAS que para diagnosticar: un fallo se
+        // explica con las primeras lineas del error, pero un resumen que se deja
+        // la mitad de las entradas fuera miente por omision.
+        assert!(MAX_SALIDA_RESUMEN > MAX_SALIDA_DIAG * 2);
+    }
+
+    #[test]
+    fn al_resumir_se_le_dice_que_no_invente() {
+        // Un resumen que añade un dato que no estaba en la salida es peor que no
+        // resumir: el operador no tiene forma de distinguirlo y va a actuar
+        // sobre el.
+        let p = summarize_prompt("Get-WindowsUpdate", "…", "Windows Server 2022");
+        assert!(p.to_lowercase().contains("no inventes"), "no se lo prohibe");
+        assert!(p.contains("CIFRAS"), "no le pide los numeros");
+        assert!(p.contains(NO_SUMMARY), "no le da salida para lo que no dice nada");
+        assert!(p.contains("Windows Server 2022"), "perdio el sistema del equipo");
     }
 }
