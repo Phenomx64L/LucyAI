@@ -1154,6 +1154,13 @@ pub const FRASES: &[Frase] = &[
     ),
     f!("Ejecución", "Execution", "Execução", "Exécution", "Ausführung"),
     f!(
+        "Ejecutando en el equipo",
+        "Running on the machine",
+        "Executando na máquina",
+        "Exécution sur la machine",
+        "Läuft auf dem Gerät",
+    ),
+    f!(
         "Ejecutando {n} controles CIS en {equipo}…",
         "Running {n} CIS controls on {equipo}…",
         "A executar {n} controlos CIS em {equipo}…",
@@ -1819,6 +1826,20 @@ pub const FRASES: &[Frase] = &[
         "Das Ende der Datei lesen",
     ),
     f!("Legado", "Legacy", "Legado", "Hérité", "Legacy"),
+    f!(
+        "Leyendo el error",
+        "Reading the error",
+        "Lendo o erro",
+        "Lecture de l'erreur",
+        "Lese den Fehler",
+    ),
+    f!(
+        "Leyendo la salida",
+        "Reading the output",
+        "Lendo a saída",
+        "Lecture de la sortie",
+        "Lese die Ausgabe",
+    ),
     f!("Limpiar", "Clear", "Limpar", "Effacer", "Leeren"),
     f!(
         "Limpiar el chat actual",
@@ -3006,6 +3027,13 @@ pub const FRASES: &[Frase] = &[
         "Limit für Tool-Runden",
     ),
     f!("Trace vacío", "Empty trace", "Trace vazio", "Trace vide", "Trace leer"),
+    f!(
+        "Traduciendo a un comando",
+        "Translating to a command",
+        "Traduzindo para um comando",
+        "Traduction en commande",
+        "Übersetze in einen Befehl",
+    ),
     f!("Transcribiendo…", "Transcribing…", "A transcrever…", "Transcription…", "Transkribiere…"),
     f!(
         "Troceando: {n} trozos",
@@ -3926,6 +3954,13 @@ pub const FRASES: &[Frase] = &[
         "{n} soquetes",
         "{n} sockets",
         "{n} Sockel",
+    ),
+    f!(
+        "{palo} {fase}… {s}s",
+        "{palo} {fase}… {s}s",
+        "{palo} {fase}… {s}s",
+        "{palo} {fase}… {s}s",
+        "{palo} {fase}… {s}s",
     ),
     f!(
         "{paso} — sin migrar a este shell",

@@ -2060,6 +2060,74 @@ const DISK_H: f32 = 96.0; // 18 + 8 + 5 + 8 + 16 + 2 + 16 + 23
                           // soporte y el sistema de ficheros. La suma de arriba
                           // es la que había con el renglón nuevo intercalado.
 
+/// Un bloque de la transcripción: una cosa que se pidió y todo lo que produjo.
+///
+/// ── POR QUÉ BLOQUES Y NO UNA LISTA DE LÍNEAS ─────────────────────────────────
+///
+/// Reportado: «la interacción con servidores se siente muy plana, no da esa
+/// sensación de estar en una shell futurista». Y la causa no es la falta de
+/// brillo: es que TODO PESA LO MISMO. La frase que escribió el operador, el
+/// comando que Lucy tradujo, doscientas líneas de volcado de un objeto COM y la
+/// conclusión de Lucy salen como renglones consecutivos del mismo tamaño. Para
+/// encontrar dónde empezó una cosa hay que leerlo todo.
+///
+/// Agrupado, cada petición es una unidad con su borde, su franja de estado y su
+/// duración. Es lo que hace Warp, y funciona porque el ojo salta de bloque en
+/// bloque en vez de recorrer líneas.
+///
+/// SE CALCULA AL PINTAR y no se guarda. Las líneas siguen siendo la lista plana
+/// de siempre —`(marca, texto)`— así que esto no cambia el modelo de datos, no
+/// migra nada y se puede quitar sin tocar la lógica. El riesgo de una vista es
+/// que se rompa la vista.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Bloque {
+    /// Índice de la primera línea del bloque, dentro de la lista del carril.
+    desde: usize,
+    /// Una más allá de la última.
+    hasta: usize,
+}
+
+impl Bloque {
+    fn largo(&self) -> usize {
+        self.hasta - self.desde
+    }
+}
+
+/// Parte la lista de líneas en bloques.
+///
+/// LA REGLA, Y EL CASO QUE LA COMPLICA: un bloque empieza en lo que el operador
+/// pidió. Eso es una marca `p` —una frase en lenguaje natural— o una `c` —un
+/// comando escrito a mano—. Pero cuando Lucy traduce, salen LAS DOS SEGUIDAS:
+/// primero la frase y luego el comando en que se convirtió. Ésas van juntas, no
+/// en dos bloques: son la misma petición contada dos veces.
+///
+/// Lo de antes de la primera petición —«conectando», «conectado en 868 ms»— es
+/// el preámbulo, y forma su propio bloque. Sin eso se perdería o se pegaría al
+/// primer comando como si fuera su salida.
+fn bloques(lineas: &[(char, String)]) -> Vec<Bloque> {
+    let mut out: Vec<Bloque> = Vec::new();
+    for (i, (marca, _)) in lineas.iter().enumerate() {
+        let abre = match marca {
+            'p' => true,
+            // Una `c` justo detrás de una `p` es la traducción de esa `p`: se
+            // queda en su bloque.
+            'c' => !matches!(lineas.get(i.wrapping_sub(1)), Some(('p', _))) || i == 0,
+            _ => false,
+        };
+        if abre || out.is_empty() {
+            if let Some(ultimo) = out.last_mut() {
+                ultimo.hasta = i;
+            }
+            out.push(Bloque { desde: i, hasta: lineas.len() });
+        }
+    }
+    if let Some(ultimo) = out.last_mut() {
+        ultimo.hasta = lineas.len();
+    }
+    out.retain(|b| b.largo() > 0);
+    out
+}
+
 /// ¿Se ha pedido pegar algo que NO es texto?
 ///
 /// ── POR QUÉ NO SE PUEDE MIRAR LA PULSACIÓN ───────────────────────────────────
@@ -4953,6 +5021,18 @@ struct App {
     dedup_rx: Option<std::sync::mpsc::Receiver<Result<lucy_core::consolidate::Report, String>>>,
     /// La tanda de mantenimiento en vuelo, si hay una.
     mant_rx: Option<std::sync::mpsc::Receiver<lucy_core::maintenance::Tanda>>,
+    /// QUE esta haciendo Lucy ahora mismo en NexShell, y desde cuando.
+    ///
+    /// LA CABECERA DECIA «ejecutando…» PARA CUATRO COSAS DISTINTAS —traducir una
+    /// frase, ejecutar el comando, leer un error, leer una salida larga— y las
+    /// dos ultimas no las enseñaba en absoluto: ocurrian en un hilo y el
+    /// operador veia la ventana quieta. Reportado: «tampoco esta esa interaccion
+    /// o el progreso en tiempo real sobre las acciones que lucy hace».
+    ///
+    /// La etiqueta es una CLAVE de la tabla, no el texto ya traducido: se guarda
+    /// aqui y se traduce al pintar, para que cambiar de idioma con algo en vuelo
+    /// no deje la fase en el idioma anterior.
+    nx_fase: Option<(&'static str, Instant)>,
     /// El diagnostico de un comando fallido, en vuelo, con el carril al que va.
     ///
     /// CANAL PROPIO Y NO EL DE LA TRADUCCION: lo que vuelve por `nx_rx` SE
@@ -5689,6 +5769,7 @@ impl App {
             dedup_rx: None,
             cris_hechas: std::collections::HashSet::new(),
             mant_rx: None,
+            nx_fase: None,
             nx_diag_rx: None,
             nx_sugerido: None,
             pegar_rx: None,
@@ -17741,14 +17822,27 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                     .color(theme::txt()),
             );
             ui.label(theme::instrument_label("PowerShell", theme::faint()));
-            if self.nx_busy {
+            // LA MISMA FASE QUE EN EL REMOTO. Aqui ponia «traduciendo…» fijo,
+            // que era cierto solo mientras traducia: durante la ejecucion en el
+            // PTY seguia diciendo lo mismo. Una etiqueta que miente cuando el
+            // trabajo cambia es peor que ninguna.
+            if let Some((fase, desde)) = self.nx_fase {
                 ui.add_space(8.0);
+                const PALOS: [&str; 4] = ["|", "/", "—", "\\"];
+                let paso = (desde.elapsed().as_millis() / 250) as usize % PALOS.len();
                 ui.label(
-                    egui::RichText::new(i18n::tr("traduciendo…"))
-                        .size(theme::FS_CAPTION)
-                        .color(theme::acc()),
+                    egui::RichText::new(i18n::trf(
+                        "{palo} {fase}… {s}s",
+                        &[
+                            ("palo", PALOS[paso]),
+                            ("fase", i18n::tr(fase)),
+                            ("s", &desde.elapsed().as_secs().to_string()),
+                        ],
+                    ))
+                    .size(theme::FS_CAPTION)
+                    .color(theme::acc()),
                 );
-                ui.ctx().request_repaint();
+                ui.ctx().request_repaint_after(std::time::Duration::from_millis(120));
             }
             right(ui, 24.0, |ui| {
                 if ui
@@ -18018,20 +18112,37 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                     self.nx_conectar(&h);
                 }
             }
-            if self.nx_busy {
+            // ── QUÉ ESTÁ HACIENDO, Y NO SOLO QUE ESTÁ OCUPADA ────────────────
+            //
+            // Decía «ejecutando…» para cuatro cosas distintas —traducir una
+            // frase, ejecutar el comando, leer un error, leer una salida larga—
+            // y las dos últimas ni siquiera encendían el indicador: ocurrían en
+            // un hilo y la ventana se quedaba quieta.
+            //
+            // La condición es `nx_fase` y ya no `nx_busy`, porque `nx_busy` solo
+            // cubre las dos primeras. Es lo que hace visibles las otras dos.
+            if let Some((fase, desde)) = self.nx_fase {
                 ui.add_space(8.0);
-                // Los SEGUNDOS, no un «ejecutando…» fijo. En un remoto lo que
-                // hay que saber es si avanza o se colgó, y un texto que no
-                // cambia no distingue lo uno de lo otro.
-                let s = self.nx_started.map_or(0, |t| t.elapsed().as_secs());
+                // El girador: cuatro palos que dan la vuelta cada segundo. Es lo
+                // único de la cabecera que se mueve, y por eso es lo que
+                // distingue «está pensando» de «se colgó» sin leer nada.
+                const PALOS: [&str; 4] = ["|", "/", "—", "\\"];
+                let paso = (desde.elapsed().as_millis() / 250) as usize % PALOS.len();
+                let s = desde.elapsed().as_secs();
                 ui.label(
                     egui::RichText::new(i18n::trf(
-                        "ejecutando… {s}s",
-                        &[("s", &s.to_string())],
+                        "{palo} {fase}… {s}s",
+                        &[("palo", PALOS[paso]), ("fase", i18n::tr(fase)), ("s", &s.to_string())],
                     ))
                     .size(theme::FS_CAPTION)
                     .color(theme::acc()),
                 );
+                // Sin esto el girador solo gira cuando algo más pide repintado, y
+                // un indicador de actividad que se congela dice lo contrario de
+                // lo que viene a decir.
+                ui.ctx().request_repaint_after(std::time::Duration::from_millis(120));
+            }
+            if self.nx_busy {
                 if ui.add(egui::Button::new(i18n::tr("■ Detener")).small()).clicked() {
                     // Mata el proceso, no solo deja de mirarlo: al otro lado hay
                     // un comando corriendo en una máquina de verdad, y dejar de
@@ -18048,6 +18159,7 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                     if self.nx_rx.take().is_some() {
                         self.nx_busy = false;
                         self.nx_started = None;
+                        self.nx_fase = None;
                         let destino = self.nx_destino.take();
                         self.nx_aviso(destino.as_ref(), i18n::tr("(detenido)").as_ref());
                     }
@@ -18212,7 +18324,39 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                                 );
                             });
                         }
-                        for (clase, texto) in lineas {
+                        // ── EN BLOQUES, NO EN UN CHORRO DE RENGLONES ────────
+                        //
+                        // Cada petición con su salida dentro de un marco, con una
+                        // franja a la izquierda que dice cómo acabó. Ver
+                        // `bloques`: lo que se arregla es que todo pesara lo
+                        // mismo — la frase, el comando, doscientas líneas de
+                        // volcado y la conclusión de Lucy salían como renglones
+                        // iguales, y encontrar dónde empezaba una cosa obligaba a
+                        // leerlo todo.
+                        let grupos = bloques(lineas);
+                        let ultimo = grupos.len().saturating_sub(1);
+                        for (n, b) in grupos.iter().enumerate() {
+                            let trozo = &lineas[b.desde..b.hasta];
+                            // El estado, que es lo que colorea la franja:
+                            //   rojo   si hay alguna línea de error dentro
+                            //   acento si es el bloque de abajo y algo corre
+                            //   apagado en lo demás
+                            let hay_error = trozo.iter().any(|(m, _)| *m == 'e');
+                            let corriendo = n == ultimo && self.nx_fase.is_some();
+                            // El preámbulo —conectar, conectado— no es una
+                            // petición y no lleva marco: enmarcarlo le daría el
+                            // mismo peso que a un comando.
+                            let es_peticion = matches!(trozo.first(), Some(('p', _)) | Some(('c', _)));
+                            let franja = if corriendo {
+                                theme::acc()
+                            } else if hay_error {
+                                theme::red()
+                            } else {
+                                theme::bdr()
+                            };
+                            ui.add_space(if es_peticion { 8.0 } else { 2.0 });
+                            let dibuja = |ui: &mut egui::Ui| {
+                        for (clase, texto) in trozo {
                             let (prefijo, color) = match *clase {
                                 'c' => ("❯ ", theme::acc()),
                                 // LO QUE PIDIO EL OPERADOR, en su propia marca.
@@ -18244,6 +18388,44 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                                 )
                                 .wrap(),
                             );
+                        }
+                            };
+                            if es_peticion {
+                                // LA FRANJA SE PINTA A MANO Y NO CON UN BORDE
+                                // ENTERO. Un marco de cuatro lados sobre cada
+                                // bloque llena la pantalla de cajas y compite con
+                                // el del propio panel; una barra en el canto
+                                // izquierdo dice dónde empieza cada cosa sin
+                                // añadir ni una línea horizontal.
+                                let r = egui::Frame::none()
+                                    .inner_margin(egui::Margin {
+                                        left: 10.0,
+                                        right: 0.0,
+                                        top: 4.0,
+                                        bottom: 6.0,
+                                    })
+                                    .show(ui, dibuja)
+                                    .response
+                                    .rect;
+                                ui.painter().rect_filled(
+                                    egui::Rect::from_min_max(
+                                        egui::pos2(r.left(), r.top()),
+                                        egui::pos2(r.left() + 2.0, r.bottom()),
+                                    ),
+                                    theme::capsule(2.0),
+                                    franja,
+                                );
+                                // Mientras corre, la franja va en acento. Es el
+                                // único sitio del carril donde se ve que algo
+                                // sigue vivo sin subir a mirar la cabecera.
+                                if corriendo {
+                                    ui.ctx().request_repaint_after(
+                                        std::time::Duration::from_millis(120),
+                                    );
+                                }
+                            } else {
+                                dibuja(ui);
+                            }
                         }
                     });
             });
@@ -18445,6 +18627,7 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
         self.nx_exec_id = id;
         self.nx_exec_rx = Some(rx);
         self.nx_started = Some(Instant::now());
+        self.nx_fase = Some(("Ejecutando en el equipo", Instant::now()));
         let (in_tx, in_rx) = std::sync::mpsc::channel();
         self.nx_stdin = None;
         self.nx_stdin_rx = Some(in_rx);
@@ -18497,6 +18680,7 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
         if let Some(ok) = fin {
             self.nx_exec_rx = None;
             self.nx_busy = false;
+            self.nx_fase = None;
             // `manual`: este lo escribió el operador a mano en la terminal, y esa
             // distinción con los de Lucy es lo que hace útil la columna.
             let ms = self.nx_started.map_or(0, |t| t.elapsed().as_millis() as u64);
@@ -18588,6 +18772,7 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
             }
             _ => ("PowerShell", "Windows".to_string()),
         };
+        self.nx_fase = Some(("Leyendo el error", Instant::now()));
         let prompt = lucy_core::nexshell::diagnose_prompt(cmd, salida, shell, &so);
         let modelo = self.chat_model.clone();
         let privado = self.privacy;
@@ -18633,6 +18818,7 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
             Some(Conexion::Ok { os, .. }) if !os.is_empty() => os.clone(),
             _ => "Windows".to_string(),
         };
+        self.nx_fase = Some(("Leyendo la salida", Instant::now()));
         let prompt = lucy_core::nexshell::summarize_prompt(cmd, salida, &so);
         let modelo = self.chat_model.clone();
         let privado = self.privacy;
@@ -18669,6 +18855,7 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
             Ok(r) => {
                 let id = id.clone();
                 self.nx_diag_rx = None;
+                self.nx_fase = None;
                 let Some(d) = r else { return };
                 self.nx_lines_mut(&id).push((
                     'i',
@@ -19259,6 +19446,7 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
         // texto fijo que el comentario de la cabecera dice que se quiso evitar,
         // porque no distingue «avanza» de «se colgó».
         self.nx_started = Some(Instant::now());
+        self.nx_fase = Some(("Traduciendo a un comando", Instant::now()));
         // Y UNA BANDERA NUEVA PARA ESTA TRADUCCIÓN. `nx_stop` es el mismo campo
         // que usa la ejecución remota; reutilizar el de la vez anterior —que
         // puede estar ya en alto— haría que la traducción se cortara sola nada
@@ -23826,6 +24014,63 @@ mod presupuesto {
             pressed,
             repeat: false,
             modifiers: egui::Modifiers { command, ..Default::default() },
+        }
+    }
+
+    fn lineas(marcas: &str) -> Vec<(char, String)> {
+        marcas.chars().map(|c| (c, c.to_string())).collect()
+    }
+
+    #[test]
+    fn una_peticion_y_su_salida_son_un_solo_bloque() {
+        // `c` comando, `o` salida, `e` error. Lo de arriba —`i`, las lineas de
+        // conexion— es el preambulo y va aparte.
+        let v = bloques(&lineas("iicooeci"));
+        assert_eq!(v.len(), 3, "{v:?}");
+        assert_eq!((v[0].desde, v[0].hasta), (0, 2), "el preambulo va solo");
+        assert_eq!((v[1].desde, v[1].hasta), (2, 6), "el comando con su salida");
+        assert_eq!((v[2].desde, v[2].hasta), (6, 8), "el segundo comando");
+    }
+
+    #[test]
+    fn la_frase_y_el_comando_traducido_no_se_separan() {
+        // ES EL CASO QUE COMPLICA LA REGLA. Cuando Lucy traduce salen las dos
+        // seguidas: primero lo que se pidio (`p`) y luego el comando en que se
+        // convirtio (`c`). Son la misma peticion contada dos veces, no dos.
+        let v = bloques(&lineas("pcoo"));
+        assert_eq!(v.len(), 1, "partio la frase de su comando: {v:?}");
+        assert_eq!((v[0].desde, v[0].hasta), (0, 4));
+    }
+
+    #[test]
+    fn dos_comandos_escritos_a_mano_si_son_dos_bloques() {
+        // Sin `p` delante, cada `c` es una peticion distinta.
+        let v = bloques(&lineas("cocо".replace('о', "o").as_str()));
+        assert_eq!(v.len(), 2, "{v:?}");
+    }
+
+    #[test]
+    fn una_transcripcion_vacia_no_da_bloques() {
+        assert!(bloques(&[]).is_empty());
+        // Y una que solo tiene preambulo da uno, no cero: esas lineas existen y
+        // hay que pintarlas.
+        assert_eq!(bloques(&lineas("iii")).len(), 1);
+    }
+
+    #[test]
+    fn los_bloques_cubren_todas_las_lineas_sin_solaparse() {
+        // LA INVARIANTE QUE IMPORTA: si un bloque se dejara una linea fuera, esa
+        // linea no se pintaria — y una salida que desaparece es peor que una mal
+        // agrupada. Se prueba contra varias formas, incluidas las raras.
+        for forma in ["", "i", "c", "p", "pc", "iicooeci", "ppcc", "coicpoe", "eee"] {
+            let ls = lineas(forma);
+            let v = bloques(&ls);
+            let mut cursor = 0;
+            for b in &v {
+                assert_eq!(b.desde, cursor, "hueco o solape en {forma:?}: {v:?}");
+                cursor = b.hasta;
+            }
+            assert_eq!(cursor, ls.len(), "se quedaron lineas fuera en {forma:?}");
         }
     }
 
