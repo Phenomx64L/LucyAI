@@ -1244,6 +1244,13 @@ pub const FRASES: &[Frase] = &[
         "Das Sprachmodell ist unvollständig in {dir}: {falta} fehlt. Meist eine abgebrochene Kopie — lösch es und leg es neu ab.",
     ),
     f!(
+        "El modelo no contestó en {s}s. Se deja de esperar; vuelve a intentarlo.",
+        "The model did not answer in {s}s. Giving up the wait; try again.",
+        "O modelo não respondeu em {s}s. Deixa-se de esperar; tente de novo.",
+        "Le modèle n'a pas répondu en {s}s. On cesse d'attendre ; réessayez.",
+        "Das Modell hat in {s}s nicht geantwortet. Warten beendet; versuche es erneut.",
+    ),
+    f!(
         "El modelo se queda corto",
         "The model isn't up to it",
         "O modelo fica aquém",
