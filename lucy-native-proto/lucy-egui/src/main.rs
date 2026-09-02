@@ -666,6 +666,27 @@ enum Conexion {
     Probando,
     Ok { os: String, ms: u64 },
     Fallo(String),
+    /// El operador dijo que no. Se queda ANOTADO y no se borra el estado.
+    ///
+    /// ── POR QUE UNA VARIANTE Y NO QUITAR LA ENTRADA ──────────────────────────
+    ///
+    /// La vista llama a la puerta sola cuando no sabe nada del equipo:
+    ///
+    /// ```text
+    ///   if h.protocol.can_shell() && !self.nx_estado.contains_key(&h.id) {
+    ///       self.nx_conectar(&h);
+    ///   }
+    /// ```
+    ///
+    /// Y esta bien: abrir un equipo por primera vez tiene que comprobar que
+    /// responde sin que nadie pulse nada. Pero «desconectar» borrando la entrada
+    /// deja al equipo otra vez en «no se nada de el», asi que al fotograma
+    /// siguiente se vuelve a conectar. Reportado, y visible en la transcripcion:
+    /// desconectado / conectando / conectado / desconectado / conectando…
+    ///
+    /// Anotarlo distingue las dos cosas que `None` confundia: «todavia no he
+    /// preguntado» y «me dijeron que no preguntara».
+    Desconectado,
 }
 
 impl Conexion {
@@ -675,6 +696,11 @@ impl Conexion {
             Self::Probando => theme::amber(),
             Self::Ok { .. } => theme::acc(),
             Self::Fallo(_) => theme::red(),
+            // APAGADO, y por eso no es `None`: un equipo del que no se sabe
+            // nada tampoco pinta punto. La diferencia se ve en el boton, que
+            // dice «Conectar» en los dos casos porque en los dos hay que
+            // llamar — lo que cambia es que aqui NO se llama solo.
+            Self::Desconectado => theme::bdr(),
         }
     }
 }
@@ -5021,6 +5047,22 @@ struct App {
     dedup_rx: Option<std::sync::mpsc::Receiver<Result<lucy_core::consolidate::Report, String>>>,
     /// La tanda de mantenimiento en vuelo, si hay una.
     mant_rx: Option<std::sync::mpsc::Receiver<lucy_core::maintenance::Tanda>>,
+    /// Por que el automatico no ha tomado el paso siguiente.
+    ///
+    /// ── EL MOTIVO ESTABA, Y CAIA DONDE NADIE MIRA ────────────────────────────
+    ///
+    /// `next_auto` devuelve `Pause(motivo)` con la razon escrita —«este paso
+    /// corre en WIN-AD, no en este equipo»— y se anotaba SOLO en el carril de
+    /// Trace. Mientras tanto, en la conversacion salia «1 comando propuesto —
+    /// apruebalo en el panel de Plan», que no dice nada de por que el automatico
+    /// lo dejo pasar.
+    ///
+    /// Reportado como un fallo del automatico: «me sale la opcion de enviar
+    /// comando aun cuando esta configurada en automatico». No lo era —la puerta
+    /// es deliberada, ver `next_auto`— pero una negativa de seguridad que no
+    /// dice por que, donde el operador esta mirando, SE LEE como un fallo. Y
+    /// entonces el ajuste parece roto y se busca la averia donde no esta.
+    auto_pausa: Option<String>,
     /// QUE esta haciendo Lucy ahora mismo en NexShell, y desde cuando.
     ///
     /// LA CABECERA DECIA «ejecutando…» PARA CUATRO COSAS DISTINTAS —traducir una
@@ -5769,6 +5811,7 @@ impl App {
             dedup_rx: None,
             cris_hechas: std::collections::HashSet::new(),
             mant_rx: None,
+            auto_pausa: None,
             nx_fase: None,
             nx_diag_rx: None,
             nx_sugerido: None,
@@ -8079,18 +8122,31 @@ impl App {
                                     ui.spacing_mut().item_spacing.x = 7.0;
                                     icons::show(ui, icons::Icon::Terminal, 13.0, theme::acc());
                                     ui.label(
-                                        egui::RichText::new(if shown.commands == 1 {
-                                            i18n::tr("1 comando propuesto — apruébalo en el panel de Plan")
-                                                .to_string()
-                                        } else {
-                                            format!(
-                                                "{} comandos propuestos — apruébalos en el panel \
-                                                 de Plan",
-                                                shown.commands
+                                        egui::RichText::new(match (&self.auto_pausa, shown.commands) {
+                                            // EL MOTIVO MANDA SOBRE EL TEXTO
+                                            // GENÉRICO. «Apruébalo en el panel»
+                                            // es cierto y no explica nada; con el
+                                            // automático encendido, lo que hace
+                                            // falta saber es POR QUÉ no lo tomó.
+                                            (Some(m), _) => m.clone(),
+                                            (None, 1) => i18n::tr(
+                                                "1 comando propuesto — apruébalo en el panel de Plan",
                                             )
+                                            .to_string(),
+                                            (None, n) => i18n::trf(
+                                                "{n} comandos propuestos — apruébalos en el panel de Plan",
+                                                &[("n", &n.to_string())],
+                                            ),
                                         })
                                         .size(theme::FS_CAPTION)
-                                        .color(theme::acc()),
+                                        // En ámbar cuando es una negativa: el
+                                        // acento dice «esto está bien», y una
+                                        // puerta que se cierra no lo está.
+                                        .color(if self.auto_pausa.is_some() {
+                                            theme::amber()
+                                        } else {
+                                            theme::acc()
+                                        }),
                                     );
                                 });
                         }
@@ -10995,12 +11051,20 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                 self.run_step(ti, id, cmd, false, "auto");
             }
             NextAuto::Pause(motivo) => {
-                self.tabs[ti].ws.trace_push(lucy_core::agent::TraceEntry {
-                    phase: "info".into(),
-                    label: i18n::tr("Automático en pausa").into(),
-                    detail: motivo,
-                    ..Default::default()
-                });
+                // UNA VEZ POR MOTIVO, no una por vuelta. Esto se evalua en cada
+                // comprobacion del bucle, y con un paso remoto pendiente el
+                // carril se llenaba de la misma linea repetida — que ademas
+                // entierra las que si son nuevas.
+                if self.auto_pausa.as_deref() != Some(motivo.as_str()) {
+                    self.tabs[ti].ws.trace_push(lucy_core::agent::TraceEntry {
+                        phase: "info".into(),
+                        label: i18n::tr("Automático en pausa").into(),
+                        detail: motivo.clone(),
+                        ..Default::default()
+                    });
+                }
+                // Y AL SITIO DONDE SE ESTA MIRANDO. Ver `auto_pausa`.
+                self.auto_pausa = Some(motivo);
             }
             // El tope APAGA el modo, no solo salta esta vuelta. Dejarlo
             // encendido haría que la siguiente orden arrancara sola otra vez
@@ -18035,6 +18099,13 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                             .color(theme::faint()),
                     );
                 }
+                Some(Conexion::Desconectado) => {
+                    ui.label(
+                        egui::RichText::new(i18n::tr("desconectado"))
+                            .size(theme::FS_MICRO)
+                            .color(theme::faint()),
+                    );
+                }
                 Some(Conexion::Fallo(e)) => {
                     // En la barra, corto; entero al pasar el ratón y entero en
                     // la sesión. Un mensaje de WinRM son varias líneas y aquí
@@ -18088,6 +18159,11 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                      sesión abierta, así que no hay nada que cerrar al otro lado.",
                     true,
                 ),
+                Some(Conexion::Desconectado) => (
+                    "Conectar",
+                    "Comprobar que responde y con qué sistema",
+                    false,
+                ),
                 Some(Conexion::Fallo(_)) => (
                     "Reintentar",
                     "Volver a llamar a la puerta",
@@ -18102,11 +18178,16 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                 .clicked();
             if pulsado {
                 if conectado {
-                    self.nx_estado.remove(&h.id);
+                    // SE ANOTA, NO SE BORRA. Ver `Conexion::Desconectado`:
+                    // quitar la entrada devolvia el equipo a «no se nada de el»
+                    // y la vista lo reconectaba sola al fotograma siguiente.
+                    self.nx_estado.insert(h.id.clone(), Conexion::Desconectado);
                     self.nx_lines_mut(&h.id).push((
                         'i',
-                        i18n::tr("Desconectado. Lo que hay arriba se queda para leerlo.")
-                            .to_string(),
+                        i18n::tr(
+                            "Desconectado, y no se vuelve a conectar solo. Lo de arriba se queda.",
+                        )
+                        .to_string(),
                     ));
                 } else {
                     self.nx_conectar(&h);
@@ -18297,6 +18378,10 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                     });
             });
 
+        // FUERA DEL PINTADO, porque dentro se esta leyendo `nx_lines` prestado y
+        // relanzar escribe en el. Se anota que hay que hacer y se hace despues,
+        // que es el mismo patron que usa `forzar` en la vista de Mantenimiento.
+        let mut repetir: Option<String> = None;
         egui::Frame::none()
             .fill(theme::bg())
             .stroke(egui::Stroke::new(1.0_f32, theme::bdr()))
@@ -18355,7 +18440,40 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                                 theme::bdr()
                             };
                             ui.add_space(if es_peticion { 8.0 } else { 2.0 });
+                            // ── LA ENTRADA DEL BLOQUE ───────────────────────
+                            //
+                            // Aparece subiendo y aclarándose. Es la única
+                            // animación de esta pantalla y va donde de verdad
+                            // dice algo: que ha llegado ALGO NUEVO. Con la
+                            // transcripción pegada abajo, un bloque que aparece
+                            // de golpe es indistinguible de un salto del scroll.
+                            //
+                            // POR LA PUERTA DE LA CASA. `motion()` es el ajuste
+                            // de Configuración y `LUCY_NO_MOTION=1`; una
+                            // animación que no se puede apagar es una animación
+                            // que alguien va a tener que soportar.
+                            //
+                            // La identidad lleva el equipo Y el índice: sin el
+                            // equipo, cambiar de máquina reutilizaría la
+                            // animación del bloque que ocupaba ese sitio y los
+                            // de la nueva entrarían ya hechos.
+                            let id_bloque = ui.id().with((&h.id, b.desde));
+                            let entrada = if motion() && es_peticion {
+                                ease_out(ui.ctx().animate_bool_with_time(
+                                    id_bloque,
+                                    true,
+                                    theme::DUR_SLOW,
+                                ))
+                            } else {
+                                1.0
+                            };
                             let dibuja = |ui: &mut egui::Ui| {
+                                if entrada < 1.0 {
+                                    ui.multiply_opacity(entrada);
+                                    // Sube ocho píxeles. Más se lee como un
+                                    // sobresalto; menos no se percibe.
+                                    ui.add_space((1.0 - entrada) * 8.0);
+                                }
                         for (clase, texto) in trozo {
                             let (prefijo, color) = match *clase {
                                 'c' => ("❯ ", theme::acc()),
@@ -18407,21 +18525,102 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                                     .show(ui, dibuja)
                                     .response
                                     .rect;
+                                // LA FRANJA LATE MIENTRAS CORRE. Un color fijo
+                                // dice «este bloque es el último», no «esto está
+                                // pasando ahora». El latido es lo que distingue
+                                // lo uno de lo otro sin leer nada, y es la razón
+                                // de que la animación esté aquí y no en un
+                                // adorno: el canto izquierdo del bloque que
+                                // trabaja es donde ya está mirando el ojo.
+                                let viva = if corriendo && motion() {
+                                    let t = ui.input(|i| i.time) as f32;
+                                    // Entre 0,45 y 1: no se apaga del todo, para
+                                    // que la franja no parpadee sino que respire.
+                                    franja.gamma_multiply(0.45 + 0.55 * (0.5 + 0.5 * (t * 3.2).sin()))
+                                } else {
+                                    franja
+                                };
                                 ui.painter().rect_filled(
                                     egui::Rect::from_min_max(
                                         egui::pos2(r.left(), r.top()),
                                         egui::pos2(r.left() + 2.0, r.bottom()),
                                     ),
                                     theme::capsule(2.0),
-                                    franja,
+                                    viva,
                                 );
-                                // Mientras corre, la franja va en acento. Es el
-                                // único sitio del carril donde se ve que algo
-                                // sigue vivo sin subir a mirar la cabecera.
-                                if corriendo {
+                                if corriendo || entrada < 1.0 {
                                     ui.ctx().request_repaint_after(
-                                        std::time::Duration::from_millis(120),
+                                        std::time::Duration::from_millis(16),
                                     );
+                                }
+                                // ── LAS ACCIONES DEL BLOQUE ─────────────────
+                                //
+                                // Solo al pasar el ratón por encima. Dos botones
+                                // fijos por bloque en una transcripción de
+                                // treinta serían sesenta controles compitiendo
+                                // con el texto; al pasar por encima son dos, y
+                                // están donde se está mirando.
+                                //
+                                // Se colocan con `put` sobre el rectángulo que
+                                // el bloque ACABA de ocupar: el alto de un
+                                // bloque no se sabe hasta haberlo pintado.
+                                if ui.rect_contains_pointer(r) {
+                                    let bw = 24.0;
+                                    let caja = egui::Rect::from_min_size(
+                                        egui::pos2(r.right() - bw * 2.0 - 6.0, r.top()),
+                                        egui::vec2(bw * 2.0 + 2.0, 20.0),
+                                    );
+                                    let mut copiar = false;
+                                    let mut relanzar = false;
+                                    // `allocate_new_ui` y no `allocate_ui_at_rect`,
+                                    // que egui 0.29 marca obsoleto.
+                                    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(caja), |ui| {
+                                        ui.horizontal(|ui| {
+                                            copiar = ui
+                                                .add(egui::Button::new("⧉").small().frame(false))
+                                                .on_hover_text(i18n::tr("Copiar este bloque"))
+                                                .clicked();
+                                            // RELANZAR SOLO SI HAY UN COMANDO Y
+                                            // NADA EN VUELO. Ofrecerlo con algo
+                                            // corriendo invita a lanzar dos cosas
+                                            // a la vez sobre el mismo servidor.
+                                            if trozo.iter().any(|(m, _)| *m == 'c')
+                                                && self.nx_fase.is_none()
+                                            {
+                                                relanzar = ui
+                                                    .add(
+                                                        egui::Button::new("↻")
+                                                            .small()
+                                                            .frame(false),
+                                                    )
+                                                    .on_hover_text(i18n::tr("Volver a lanzarlo"))
+                                                    .clicked();
+                                            }
+                                        });
+                                    });
+                                    if copiar {
+                                        let t = trozo
+                                            .iter()
+                                            .map(|(m, x)| {
+                                                if matches!(m, 'c' | 'p') {
+                                                    format!("❯ {x}")
+                                                } else {
+                                                    x.clone()
+                                                }
+                                            })
+                                            .collect::<Vec<_>>()
+                                            .join("\n");
+                                        ui.output_mut(|o| o.copied_text = t);
+                                    }
+                                    if relanzar {
+                                        // El comando, no la frase: lo que se
+                                        // relanza es lo que se ejecutó.
+                                        if let Some((_, cmd)) =
+                                            trozo.iter().find(|(m, _)| *m == 'c')
+                                        {
+                                            repetir = Some(cmd.clone());
+                                        }
+                                    }
                                 }
                             } else {
                                 dibuja(ui);
@@ -18430,6 +18629,14 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                     });
             });
 
+        // EL RELANZAR, YA FUERA DEL PINTADO. Dentro se estaba leyendo `nx_lines`
+        // prestado y esto escribe en él. Va por la misma puerta que un comando
+        // escrito a mano —guardrail y confirmación de lo destructivo— porque es
+        // exactamente eso: un comando que se lanza contra un servidor.
+        if let Some(cmd) = repetir {
+            let host = h.clone();
+            self.nx_gate_remote(&host, cmd);
+        }
         if enviar {
             let texto = std::mem::take(&mut self.term_input).trim().to_string();
             // CON UN COMANDO EN VUELO, lo que se escribe es una RESPUESTA para
