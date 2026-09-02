@@ -17971,12 +17971,52 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
             //
             // No abre una sesión persistente, y la V2 tampoco: llama a la puerta
             // y enciende la luz.
-            if !matches!(self.nx_estado.get(&h.id), Some(Conexion::Probando)) && ui
-                .add(egui::Button::new(i18n::tr("Conectar")).small())
-                .on_hover_text(i18n::tr("Comprobar que responde y con qué sistema"))
-                .clicked()
-            {
-                self.nx_conectar(&h);
+            // ── EL BOTÓN DICE EN QUÉ ESTADO ESTÁ, y no siempre lo mismo ──────
+            //
+            // Ponía «Conectar» pase lo que pase, también con el equipo ya
+            // respondiendo — y entonces el único control visible de la cabecera
+            // ofrece hacer algo que ya está hecho. Reportado: «al momento de
+            // darle en conectar, el botón se queda así con la misma acción».
+            //
+            // «DESCONECTAR» Y NO «CERRAR SESIÓN», Y LA PALABRA IMPORTA. Aquí no
+            // hay sesión que cerrar: WinRM no la abre —cada `Invoke-Command` va
+            // y vuelve— y la V2 tampoco. Lo único que existe es lo que Lucy
+            // RECUERDA de haber llamado a la puerta: el sistema que contestó, lo
+            // que tardó y el punto encendido del carril. Eso es lo que se
+            // suelta. Llamarlo «cerrar sesión» prometería que al otro lado se
+            // termina algo, y no se termina nada.
+            let estado = self.nx_estado.get(&h.id);
+            let (rotulo, ayuda, conectado) = match estado {
+                Some(Conexion::Probando) => ("Conectando…", "", false),
+                Some(Conexion::Ok { .. }) => (
+                    "Desconectar",
+                    "Olvida lo que se sabe de este equipo. WinRM no mantiene una \
+                     sesión abierta, así que no hay nada que cerrar al otro lado.",
+                    true,
+                ),
+                Some(Conexion::Fallo(_)) => (
+                    "Reintentar",
+                    "Volver a llamar a la puerta",
+                    false,
+                ),
+                None => ("Conectar", "Comprobar que responde y con qué sistema", false),
+            };
+            let probando = matches!(estado, Some(Conexion::Probando));
+            let pulsado = ui
+                .add_enabled(!probando, egui::Button::new(i18n::tr(rotulo)).small())
+                .on_hover_text(i18n::tr(ayuda))
+                .clicked();
+            if pulsado {
+                if conectado {
+                    self.nx_estado.remove(&h.id);
+                    self.nx_lines_mut(&h.id).push((
+                        'i',
+                        i18n::tr("Desconectado. Lo que hay arriba se queda para leerlo.")
+                            .to_string(),
+                    ));
+                } else {
+                    self.nx_conectar(&h);
+                }
             }
             if self.nx_busy {
                 ui.add_space(8.0);
@@ -18495,6 +18535,25 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                 if !parado && !cmd.is_empty() && !salida.trim().is_empty() {
                     self.nx_diagnostica(&id, &cmd, &salida);
                 }
+            } else if salida.chars().count() >= lucy_core::nexshell::MIN_SALIDA_RESUMEN {
+                // ── Y SI SALIÓ BIEN PERO ES ILEGIBLE, SE LEE ─────────────────
+                //
+                // Reportado: «al momento de pedirle que revisara si existen
+                // actualizaciones, trae la información en crudo, no procesa la
+                // información ni da análisis».
+                //
+                // Exacto, y es lo que separa una shell con IA de una terminal.
+                // `Get-WindowsUpdate` devuelve el volcado de un objeto COM:
+                // cuarenta propiedades por actualización, con
+                // `System.__ComObject` en la mitad de ellas. Lo que se preguntó
+                // fue «¿hay actualizaciones?» y lo que vuelve son doscientas
+                // líneas donde la respuesta está enterrada.
+                //
+                // POR UMBRAL Y NO SIEMPRE. `Get-Service Spooler` son tres líneas
+                // que se leen de un vistazo: resumirlas costaría dinero para
+                // devolver una frase más larga que la salida. Ver
+                // `MIN_SALIDA_RESUMEN`.
+                self.nx_resume(&id, &cmd, &salida);
             }
         }
     }
@@ -18551,6 +18610,52 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                 // UN FALLO SE TRAGA. Esto es una ayuda sobre un error que el
                 // operador ya está viendo; que además no se pueda explicar no
                 // merece una segunda línea roja debajo de la primera.
+                Err(_) => None,
+            };
+            let _ = tx.send(r);
+        });
+    }
+
+    /// Lee lo que devolvió un comando y dice qué hay dentro.
+    ///
+    /// EL MISMO CANAL QUE EL DIAGNÓSTICO, y a propósito: los dos son «lo que
+    /// Lucy tiene que decir sobre el último comando», nunca coinciden —o falló o
+    /// salió bien— y compartir el canal es lo que garantiza que no se pisen. Dos
+    /// canales serían dos formas de que llegaran dos comentarios a la vez.
+    ///
+    /// Se distingue por lo que trae: `causa` es el resumen, y `prueba` viene
+    /// vacía porque de un comando que funcionó no hay nada que proponer.
+    fn nx_resume(&mut self, id: &str, cmd: &str, salida: &str) {
+        if self.nx_diag_rx.is_some() {
+            return;
+        }
+        let so = match self.nx_estado.get(id) {
+            Some(Conexion::Ok { os, .. }) if !os.is_empty() => os.clone(),
+            _ => "Windows".to_string(),
+        };
+        let prompt = lucy_core::nexshell::summarize_prompt(cmd, salida, &so);
+        let modelo = self.chat_model.clone();
+        let privado = self.privacy;
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.nx_diag_rx = Some((id.to_string(), rx));
+        std::thread::spawn(move || {
+            let r = match lucy_core::cloud::allowed(&modelo, privado) {
+                Ok(()) => {
+                    let mut out = String::new();
+                    for ev in lucy_core::cloud::start(
+                        modelo,
+                        vec![lucy_core::turns::Turn::user(prompt)],
+                    ) {
+                        if let lucy_core::chat::ChatEvent::Token(t) = ev {
+                            out.push_str(&t);
+                        }
+                    }
+                    lucy_core::nexshell::parse_resumen(&out).map(|causa| {
+                        lucy_core::nexshell::Diagnostico { causa, prueba: String::new() }
+                    })
+                }
+                // Se traga: la salida en crudo sigue arriba y se puede leer. Que
+                // además no se haya podido resumir no merece una línea roja.
                 Err(_) => None,
             };
             let _ = tx.send(r);
