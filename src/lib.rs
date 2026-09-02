@@ -103,6 +103,10 @@ pub mod watch;
 /// Lo que el equipo ES —fabricante, modelo, graficas, numero de serie, zocalos—
 /// frente a lo que esta haciendo, que es de `system`. Se pregunta una vez.
 pub mod hardware;
+
+/// Lo que hay en el portapapeles cuando NO es texto: ficheros copiados del
+/// Explorador y capturas de pantalla. egui solo entrega el texto.
+pub mod clipboard;
 /// La frase que se enseña: la única capa donde entra el modelo, y atado.
 pub mod redacta;
 /// El prompt de sistema, por secciones. Port de la ARQUITECTURA de

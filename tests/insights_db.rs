@@ -249,8 +249,24 @@ fn insights_y_el_reloj_del_mantenimiento() {
     assert!(maintenance::ultima(maintenance::CONSOLIDAR).is_some());
     assert!(maintenance::ultima(maintenance::INSIGHTS).is_some());
     // Y la nota de la reflexión dice por qué no salió nada, no solo que no salió.
+    //
+    // SE COMPRUEBA EL SIGNIFICADO Y NO UNA PALABRA. Esto miraba que la nota
+    // contuviera «elegibles», y era cierto mientras la nota fuera una frase en
+    // español escrita en el núcleo. Al pasar a `Cifras` la columna guarda
+    // `s|1|motivo` y la palabra se mudó a la tabla de idiomas del shell — que
+    // era justo el objetivo del cambio, porque una frase en español no se puede
+    // traducir a los otros cuatro idiomas ni leer para nada más.
+    //
+    // Buscar la palabra ahora sería atarse otra vez a la redacción. Lo que hay
+    // que exigir es lo que el operador necesita: que la pasada en blanco diga
+    // POR QUÉ, porque un cero pelado es indistinguible de una avería.
     let (_, nota) = maintenance::ultima(maintenance::INSIGHTS).expect("fila");
-    assert!(nota.contains("elegibles"), "nota: {nota}");
+    match maintenance::Cifras::de_nota(&nota) {
+        maintenance::Cifras::SinPatrones { motivo, .. } => {
+            assert!(!motivo.trim().is_empty(), "no dice por qué no salió nada: {nota}");
+        }
+        otra => panic!("se esperaba una pasada sin patrones con su motivo: {otra:?} — {nota}"),
+    }
 
     // La segunda tanda seguida no repite nada.
     let t = maintenance::tanda(&std::sync::atomic::AtomicBool::new(false));
@@ -264,7 +280,16 @@ fn insights_y_el_reloj_del_mantenimiento() {
         maintenance::CONSOLIDAR,
         &std::sync::atomic::AtomicBool::new(false),
     );
-    assert!(nota.contains("miradas"), "nota: {nota}");
+    // Por las CIFRAS y no por la palabra, por lo mismo que arriba: la columna
+    // guarda `c|miradas|grupos|fundidas` y «miradas» vive en la tabla del shell.
+    match maintenance::Cifras::de_nota(&nota) {
+        maintenance::Cifras::Consolidacion { miradas, .. } => {
+            // Las dos memorias que este test acaba de escribir. Que la pasada
+            // MIRE algo es lo que distingue «corrió» de «no llegó a la base».
+            assert!(miradas > 0, "la pasada no miró ninguna memoria: {nota}");
+        }
+        otra => panic!("se esperaban cifras de consolidación: {otra:?} — {nota}"),
+    }
     let (despues, guardada) = maintenance::ultima(maintenance::CONSOLIDAR).expect("fila");
     assert!(despues >= antes);
     assert_eq!(guardada, nota, "la nota devuelta y la de disco tienen que ser la misma");
