@@ -155,6 +155,108 @@ pub fn translate_prompt(peticion: &str, shell: &str, so: &str) -> String {
 /// Lo que el modelo contesta cuando no hay comando posible.
 pub const NO_COMMAND: &str = "SIN_COMANDO";
 
+/// Cuanta salida del comando fallido se le enseña al modelo.
+///
+/// Mil doscientos caracteres. La causa de un fallo esta casi siempre en las
+/// primeras lineas del error —«no se reconoce como cmdlet», «permiso denegado»,
+/// «no such file»— y mandar la salida entera de un `Get-EventLog` que ademas
+/// fallo al final serian decenas de miles de tokens para diagnosticar algo que
+/// cabia en tres renglones.
+pub const MAX_SALIDA_DIAG: usize = 1_200;
+
+/// Lo que se le pide al modelo cuando un comando ha fallado.
+///
+/// ── POR QUE ESTO NO ES OTRA TRADUCCION ───────────────────────────────────────
+///
+/// `translate_prompt` pide UN COMANDO y prohibe explicar. Aqui es al reves: lo
+/// que hace falta primero es la CAUSA en una linea, porque un comando alternativo
+/// sin saber por que fallo el primero es adivinar delante del operador.
+///
+/// El formato de dos campos es el mismo truco que en `suggest`: plano, con una
+/// marca por linea, y lo que no encaje se descarta sin drama. Un modelo pequeño
+/// devuelve JSON roto la mitad de las veces.
+///
+/// Y EL COMANDO ES OPCIONAL A PROPOSITO. Hay fallos que no se arreglan con otro
+/// comando —una credencial que caduco, un servicio que hay que levantar a mano—
+/// y ofrecer uno cualquiera para no dejar el hueco vacio es peor que decir que no
+/// lo hay.
+pub fn diagnose_prompt(cmd: &str, salida: &str, shell: &str, so: &str) -> String {
+    let corta: String = salida.chars().take(MAX_SALIDA_DIAG).collect();
+    format!(
+        "Un comando de {shell} ha fallado en un equipo que ejecuta: {so}.
+
+         Comando: {cmd}
+         Salida:
+{corta}
+
+         Contesta EXACTAMENTE en este formato, sin markdown y sin nada mas:
+         CAUSA: <por que fallo, en una sola frase corta>
+         PRUEBA: <un solo comando de {shell} que lo resuelva o avance>
+
+         Si no hay ningun comando que lo arregle, escribe la linea PRUEBA asi:
+         PRUEBA: {NO_COMMAND}"
+    )
+}
+
+/// Lo que el modelo contesto al diagnosticar: la causa y, si la hay, otra vía.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Diagnostico {
+    pub causa: String,
+    /// Vacio = no hay comando que lo arregle, y decirlo es una respuesta.
+    pub prueba: String,
+}
+
+/// Lee la respuesta del diagnostico.
+///
+/// TOLERANTE CON EL ADORNO, igual que el lector de atajos: viñetas, asteriscos y
+/// dos puntos de mas. Lo que no se tolera es inventar — si no hay linea de causa,
+/// no hay diagnostico, y quien llama se calla en vez de enseñar medio.
+pub fn parse_diagnostico(salida: &str) -> Option<Diagnostico> {
+    // Los razonadores abren `<think>`: dentro hay frases que empiezan por CAUSA.
+    let limpio = match salida.rfind("</think>") {
+        Some(i) => &salida[i + "</think>".len()..],
+        None => salida,
+    };
+    let mut d = Diagnostico::default();
+    for linea in limpio.lines() {
+        let l = linea.trim().trim_start_matches(['-', '*', '·', '•', ' ', '\t', '#']);
+        let bajo = l.to_ascii_lowercase();
+        // EL ESPACIO VA EN EL MISMO CONJUNTO QUE LOS ADORNOS, no en un `trim`
+        // aparte. Es la lección que `suggest::parse` ya lleva escrita: con
+        // `**CAUSA:** "no existe la ruta"`, quitar primero los asteriscos deja
+        // el recorte parado en el espacio de detrás, y sale ` "no existe la
+        // ruta` con la comilla pegada. Un solo recorte que se coma las dos
+        // cosas lo resuelve.
+        let corta = |l: &str, n: usize| {
+            l[n..]
+                .trim_matches(|c: char| {
+                    c.is_whitespace() || matches!(c, '"' | '«' | '»' | '*' | ':')
+                })
+                .to_string()
+        };
+        if d.causa.is_empty() {
+            if let Some(p) = bajo.find("causa:") {
+                d.causa = corta(l, p + "causa:".len());
+                continue;
+            }
+        }
+        if d.prueba.is_empty() {
+            if let Some(p) = bajo.find("prueba:") {
+                d.prueba = clean_command(&corta(l, p + "prueba:".len()));
+            }
+        }
+    }
+    if d.causa.is_empty() {
+        return None;
+    }
+    // «SIN_COMANDO» es una respuesta, no un comando. Se convierte en el hueco
+    // vacio que ya significa «no hay otra via».
+    if d.prueba.contains(NO_COMMAND) {
+        d.prueba.clear();
+    }
+    Some(d)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -241,5 +343,79 @@ mod tests {
         assert!(p.contains("bash"));
         assert!(p.contains("dnf"), "no le recuerda el gestor de paquetes");
         assert!(p.contains(NO_COMMAND), "no le da una salida para lo imposible");
+    }
+
+    #[test]
+    fn el_diagnostico_saca_la_causa_y_la_alternativa() {
+        // Exactamente el fallo de la captura del operador: `Get-WindowsUpdate`
+        // sobre un Server 2022 donde el modulo PSWindowsUpdate no esta puesto.
+        let d = parse_diagnostico(
+            "CAUSA: el modulo PSWindowsUpdate no esta instalado en ese servidor
+             PRUEBA: Install-Module PSWindowsUpdate -Force -Scope AllUsers",
+        )
+        .expect("no leyo el diagnostico");
+        assert!(d.causa.starts_with("el modulo PSWindowsUpdate"));
+        assert_eq!(d.prueba, "Install-Module PSWindowsUpdate -Force -Scope AllUsers");
+    }
+
+    #[test]
+    fn sin_alternativa_el_hueco_se_queda_vacio() {
+        // Hay fallos que no arregla otro comando —una credencial caducada, un
+        // servicio que hay que levantar a mano— y ofrecer uno cualquiera para no
+        // dejar el hueco vacio es peor que decir que no lo hay.
+        let d = parse_diagnostico(
+            "CAUSA: la credencial guardada ya no vale
+PRUEBA: SIN_COMANDO",
+        )
+        .expect("no leyo la causa");
+        assert!(!d.causa.is_empty());
+        assert!(d.prueba.is_empty(), "invento un comando: {:?}", d.prueba);
+    }
+
+    #[test]
+    fn sin_causa_no_hay_diagnostico() {
+        // Medio diagnostico es peor que ninguno: un comando propuesto sin decir
+        // por que fallo el anterior es adivinar delante del operador.
+        assert!(parse_diagnostico("PRUEBA: Get-Service").is_none());
+        assert!(parse_diagnostico("").is_none());
+        assert!(parse_diagnostico("no se que decirte").is_none());
+    }
+
+    #[test]
+    fn aguanta_que_el_modelo_lo_adorne() {
+        // Viñetas, asteriscos y comillas: lo mismo que ya tolera el lector de
+        // atajos, y por la misma razon.
+        let d = parse_diagnostico(
+            "- **CAUSA:** \"no existe la ruta\"\n  \
+             * PRUEBA: `New-Item -ItemType Directory /opt/lucy`",
+        )
+        .expect("el adorno lo tumbo");
+        assert_eq!(d.causa, "no existe la ruta");
+        assert_eq!(d.prueba, "New-Item -ItemType Directory /opt/lucy");
+    }
+
+    #[test]
+    fn el_bloque_de_pensamiento_no_se_cuela() {
+        // Un razonador escribe dentro de `<think>` frases que empiezan por
+        // CAUSA. La de dentro no es la respuesta.
+        let d = parse_diagnostico(
+            "<think>CAUSA: quiza sea el permiso</think>
+CAUSA: falta el modulo
+PRUEBA: SIN_COMANDO",
+        )
+        .expect("no leyo");
+        assert_eq!(d.causa, "falta el modulo");
+    }
+
+    #[test]
+    fn la_salida_que_se_manda_esta_acotada() {
+        // Un `Get-EventLog` que falla al final trae decenas de miles de
+        // caracteres, y la causa esta en los primeros renglones.
+        let enorme = "x".repeat(50_000);
+        let p = diagnose_prompt("Get-EventLog -LogName X", &enorme, "PowerShell", "Windows Server 2022");
+        assert!(p.len() < MAX_SALIDA_DIAG + 1_000, "manda la salida entera: {} chars", p.len());
+        assert!(p.contains("Get-EventLog"), "perdio el comando que fallo");
+        assert!(p.contains("Windows Server 2022"), "perdio el sistema del equipo");
+        assert!(p.contains(NO_COMMAND), "no le da salida para lo que no se arregla");
     }
 }
