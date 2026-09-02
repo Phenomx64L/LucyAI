@@ -4899,6 +4899,13 @@ struct App {
     dedup_rx: Option<std::sync::mpsc::Receiver<Result<lucy_core::consolidate::Report, String>>>,
     /// La tanda de mantenimiento en vuelo, si hay una.
     mant_rx: Option<std::sync::mpsc::Receiver<lucy_core::maintenance::Tanda>>,
+    /// Lo que trae el portapapeles cuando NO es texto, en vuelo.
+    ///
+    /// EN UN HILO, como todo lo que llama a PowerShell: leer el portapapeles son
+    /// unos cientos de milisegundos, y un `Ctrl+V` que congela la ventana medio
+    /// segundo se siente roto aunque funcione.
+    #[allow(clippy::type_complexity)]
+    pegar_rx: Option<std::sync::mpsc::Receiver<Result<Vec<std::path::PathBuf>, String>>>,
     /// Lo que el equipo ES. Llega tarde y una sola vez.
     ///
     /// EN UN HILO Y NO EN EL ARRANQUE, porque la sonda es una llamada a
@@ -5614,6 +5621,7 @@ impl App {
             dedup_rx: None,
             cris_hechas: std::collections::HashSet::new(),
             mant_rx: None,
+            pegar_rx: None,
             hw: None,
             // SE LANZA AQUI Y NO EN EL PRIMER FOTOGRAMA. Es una sola vez en toda
             // la vida del proceso; ponerlo en el bucle obligaria a llevar un
@@ -6043,6 +6051,40 @@ impl App {
         self.cris_rx.push((uid, rx));
     }
 
+    /// Recoge lo que traía el portapapeles y lo adjunta.
+    ///
+    /// EL SILENCIO SOLO PARA EL CASO NORMAL. Un `Ctrl+V` con algo que no es
+    /// texto ni fichero ni imagen —una celda de Excel, un trozo de dibujo— no
+    /// tiene nada que decir: se calla. Un FALLO sí se dice, en el carril de la
+    /// pestaña: si el portapapeles lo tiene bloqueado otra aplicación, callarse
+    /// deja al operador pulsando `Ctrl+V` una y otra vez sin saber por qué no
+    /// pasa nada — que es justo la queja que trajo esto aquí.
+    fn pump_pegar(&mut self) {
+        let Some(rx) = &self.pegar_rx else { return };
+        match rx.try_recv() {
+            Ok(r) => {
+                self.pegar_rx = None;
+                match r {
+                    Ok(v) if !v.is_empty() => self.attach(&v),
+                    Ok(_) => {}
+                    Err(e) => {
+                        let ti = self.tab;
+                        if let Some(t) = self.tabs.get_mut(ti) {
+                            t.ws.trace_push(lucy_core::agent::TraceEntry {
+                                phase: "error".into(),
+                                label: "Pegar".into(),
+                                detail: e,
+                                ..Default::default()
+                            });
+                        }
+                    }
+                }
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => self.pegar_rx = None,
+        }
+    }
+
     /// Recoge lo que WMI dijo del equipo. Una vez y ya.
     ///
     /// UN FALLO SE TRAGA. WMI no contesta en todas las máquinas —está apagado en
@@ -6449,6 +6491,10 @@ impl eframe::App for App {
         // salida se acumulaba en el canal y el indicador seguía girando sobre un
         // hilo que había acabado.
         self.pump_nx_remote();
+        // Y LA TRADUCCIÓN, AQUÍ TAMBIÉN. Vivía al final de la vista de la
+        // máquina local: mirando un equipo remoto no se ejecutaba, y una frase
+        // en lenguaje natural dejaba la sesión colgada hasta reiniciar.
+        self.pump_nx();
         // Y la sonda de salud de un equipo remoto, por lo mismo: tarda lo que
         // tarde la red y el operador se va a mirar otra pantalla mientras.
         self.pump_remoto();
@@ -6477,6 +6523,7 @@ impl eframe::App for App {
         }
         self.pump_mantenimiento();
         self.pump_hardware();
+        self.pump_pegar();
         if let Some(m) = self.tema_pendiente.take() {
             theme::switch(ctx, m);
         }
@@ -6883,6 +6930,48 @@ impl eframe::App for App {
             });
             if !soltados.is_empty() {
                 self.attach(&soltados);
+            }
+            // ── PEGAR ────────────────────────────────────────────────────────
+            //
+            // POR LA TECLA Y NO POR EL EVENTO DE PEGADO, y esa es toda la pieza.
+            // egui entrega `Event::Paste` con una CADENA: su integración de
+            // portapapeles es de texto. Una captura de pantalla o un fichero
+            // copiado del Explorador no producen ningún evento, así que un
+            // `Ctrl+V` con eso dentro no llegaba a la aplicación — no es que
+            // fallara, es que no ocurría nada, que es lo que el operador
+            // describió como «no está disponible».
+            //
+            // El resto de la tubería ya estaba entera: arrastrar y soltar,
+            // lectura en hilo, troceado de PDF y chips. Faltaba la forma de
+            // entrar que más se usa.
+            //
+            // SI HAY TEXTO, NO SE MIRA NADA MÁS. Un `Ctrl+V` sobre texto tiene
+            // que seguir siendo instantáneo; lanzar PowerShell para descubrir
+            // que era texto sería pagar medio segundo en el caso normal.
+            let (hay_texto, hay_ctrl_v) = ctx.input(|i| {
+                (
+                    i.events
+                        .iter()
+                        .any(|e| matches!(e, egui::Event::Paste(t) if !t.trim().is_empty())),
+                    i.events.iter().any(|e| {
+                        matches!(
+                            e,
+                            egui::Event::Key {
+                                key: egui::Key::V,
+                                pressed: true,
+                                modifiers,
+                                ..
+                            } if modifiers.command
+                        )
+                    }),
+                )
+            });
+            if hay_ctrl_v && !hay_texto && self.pegar_rx.is_none() {
+                let (tx, rx) = std::sync::mpsc::channel();
+                std::thread::spawn(move || {
+                    let _ = tx.send(lucy_core::clipboard::del_portapapeles());
+                });
+                self.pegar_rx = Some(rx);
             }
             // Mientras el fichero está en el aire, la ventana lo dice. Sin esta
             // señal, arrastrar sobre una aplicación es adivinar si va a aceptar.
@@ -17751,7 +17840,12 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
         if enviar {
             self.nx_submit();
         }
-        self.pump_nx();
+        // El bombeo de la traducción SUBIÓ A `update`, por lo mismo que el de la
+        // ejecución remota: se quedó aquí, dentro de la vista de la máquina
+        // local, y con un equipo remoto delante no corría NUNCA. La traducción
+        // llegaba al canal, nadie la recogía, y `nx_busy` se quedaba en alto para
+        // siempre — con el compositor convertido en caja de respuesta, el
+        // contador clavado en cero y el botón de detener sin nada que detener.
     }
 
     /// La sesión contra un equipo remoto.
@@ -17845,6 +17939,20 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                     // un comando corriendo en una máquina de verdad, y dejar de
                     // leer no lo para.
                     self.nx_stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                    // Y SI LO QUE ESTÁ EN VUELO ES UNA TRADUCCIÓN, se suelta la
+                    // pantalla aquí mismo. Ahí no hay proceso que matar: hay una
+                    // petición a un modelo que puede tardar en contestar o no
+                    // contestar nunca. Levantar la bandera y esperar dejaba el
+                    // botón sin efecto visible, que es como no tener botón.
+                    //
+                    // Soltar el receptor descarta la respuesta si llega tarde,
+                    // que es lo correcto: el operador ya dijo que no la quería.
+                    if self.nx_rx.take().is_some() {
+                        self.nx_busy = false;
+                        self.nx_started = None;
+                        let destino = self.nx_destino.take();
+                        self.nx_aviso(destino.as_ref(), i18n::tr("(detenido)").as_ref());
+                    }
                 }
                 ui.ctx().request_repaint();
             }
@@ -17969,6 +18077,14 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                         for (clase, texto) in lineas {
                             let (prefijo, color) = match *clase {
                                 'c' => ("❯ ", theme::acc()),
+                                // LO QUE PIDIO EL OPERADOR, en su propia marca.
+                                // Lleva el mismo simbolo que un comando porque
+                                // las dos cosas son «esto lo escribi yo», pero
+                                // en un color mas apagado: lo que se ejecuto de
+                                // verdad es la linea `c` que viene despues, y
+                                // pintarlas iguales seria decir que la frase y
+                                // el comando son lo mismo.
+                                'p' => ("❯ ", theme::txt3()),
                                 'e' => ("", theme::red()),
                                 // Lo que dice LUCY, no el equipo: conectando,
                                 // conectado, detenido. En otro color porque no
@@ -18032,7 +18148,17 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
         let id = h.id.clone();
         self.nx_lines_mut(&id).push((
             'i',
-            format!("Conectando a {} ({}:{})…", h.name, h.host, h.port),
+            // POR LA TABLA. Era un `format!` suelto, asi que la primera
+            // linea que ve el operador de un equipo remoto salia en español en
+            // los cinco idiomas.
+            i18n::trf(
+                "Conectando a {equipo} ({host}:{puerto})…",
+                &[
+                    ("equipo", &h.name),
+                    ("host", &h.host),
+                    ("puerto", &h.port.to_string()),
+                ],
+            ),
         ));
         let (host, tx) = (h.clone(), self.nx_conn_tx.clone());
         std::thread::spawn(move || {
@@ -18049,10 +18175,23 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                     Conexion::Ok { os: p.os.clone(), ms: p.ms },
                     (
                         'i',
-                        format!(
-                            "✓ Conectado en {} ms{}",
-                            p.ms,
-                            if p.os.is_empty() { String::new() } else { format!(" · {}", p.os) }
+                        // Lo mismo, y aqui habia ademas DOS versiones de la
+                        // misma frase en el fichero: la de la prueba de conexion
+                        // si pasaba por la tabla y esta no. Ahora comparten
+                        // clave.
+                        i18n::trf(
+                            "✓ Conectado en {ms} ms{so}",
+                            &[
+                                ("ms", &p.ms.to_string()),
+                                (
+                                    "so",
+                                    &if p.os.is_empty() {
+                                        String::new()
+                                    } else {
+                                        format!(" · {}", p.os)
+                                    },
+                                ),
+                            ],
                         ),
                     ),
                 ),
@@ -18786,6 +18925,22 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
             ),
             None => ("PowerShell", self.sys.snapshot().os),
         };
+        // LO QUE PIDIÓ EL OPERADOR, EN LA TRANSCRIPCIÓN. No se escribía en
+        // ninguna parte: se pedía una frase, la caja se vaciaba, y en la pantalla
+        // no quedaba rastro ni de la pregunta ni de que se estuviera haciendo
+        // algo con ella. Al volver el comando traducido aparecía un `❯ Get-…`
+        // salido de la nada, sin la frase que lo produjo — que es justo lo que
+        // hace falta para saber si Lucy entendió lo que se le pidió.
+        //
+        // Con marca propia (`p`) y no con la del comando: son dos cosas
+        // distintas y confundirlas es no poder distinguir lo que uno escribió de
+        // lo que se ejecutó.
+        if let Some(h) = &destino {
+            let id = h.id.clone();
+            self.nx_lines_mut(&id).push(('p', texto.clone()));
+        } else {
+            self.nx_say(&format!("❯ {texto}"));
+        }
         self.nx_destino = destino;
         let prompt = lucy_core::nexshell::translate_prompt(&texto, shell, &so);
         let modelo = self.chat_model.clone();
@@ -18793,6 +18948,17 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
         let (tx, rx) = std::sync::mpsc::channel();
         self.nx_busy = true;
         self.nx_rx = Some(rx);
+        // EL RELOJ, QUE NO SE PONÍA. La cabecera enseña `nx_started.elapsed()`, y
+        // sin esto se quedaba clavado en «ejecutando… 0s» — que es exactamente el
+        // texto fijo que el comentario de la cabecera dice que se quiso evitar,
+        // porque no distingue «avanza» de «se colgó».
+        self.nx_started = Some(Instant::now());
+        // Y UNA BANDERA NUEVA PARA ESTA TRADUCCIÓN. `nx_stop` es el mismo campo
+        // que usa la ejecución remota; reutilizar el de la vez anterior —que
+        // puede estar ya en alto— haría que la traducción se cortara sola nada
+        // más empezar.
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.nx_stop = stop.clone();
         std::thread::spawn(move || {
             let r = match lucy_core::cloud::allowed(&modelo, privado) {
                 Ok(()) => {
@@ -18804,6 +18970,14 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                         modelo,
                         vec![lucy_core::turns::Turn::user(prompt)],
                     ) {
+                        // SE MIRA ENTRE TOKEN Y TOKEN. No corta una petición ya
+                        // lanzada —para eso haría falta que el cliente HTTP lo
+                        // soportara— pero deja de consumirla y de pagarla en
+                        // cuanto el operador dice basta. La pantalla se libera
+                        // igual desde el otro lado: ver el botón de detener.
+                        if stop.load(std::sync::atomic::Ordering::Relaxed) {
+                            return;
+                        }
                         match ev {
                             lucy_core::chat::ChatEvent::Token(t) => out.push_str(&t),
                             lucy_core::chat::ChatEvent::Error(e) => err = Some(e),
@@ -18847,7 +19021,12 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                 self.nx_rx = None;
                 self.nx_busy = false;
                 let destino = self.nx_destino.take();
-                self.nx_aviso(destino.as_ref(), &format!("No se pudo traducir: {e}"));
+                // POR LA TABLA. Este `format!` suelto sacaba el error en
+                // español en los cinco idiomas — el mismo agujero de siempre.
+                self.nx_aviso(
+                    destino.as_ref(),
+                    &i18n::trf("No se pudo traducir: {e}", &[("e", &e)]),
+                );
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {}
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
@@ -23332,6 +23511,43 @@ mod presupuesto {
             gpus: vec!["NVIDIA GeForce RTX 5070 Laptop GPU".into()],
             sockets,
         }
+    }
+
+    #[test]
+    fn los_recogedores_de_nexshell_corren_aunque_se_mire_otra_pantalla() {
+        // ESTE TEST EXISTE POR UN FALLO REPORTADO. `pump_nx` —el que recoge la
+        // traduccion de lenguaje natural— vivia al final de `nx_local`, la vista
+        // de ESTA maquina. Con un equipo remoto delante no se ejecutaba nunca:
+        // la respuesta del modelo llegaba al canal, nadie la recogia, y la
+        // sesion se quedaba colgada. El compositor pasaba a modo respuesta, el
+        // contador se clavaba en «ejecutando… 0s» y el boton de detener no tenia
+        // nada que detener.
+        //
+        // Se comprueba SOBRE EL FUENTE porque lo que hay que fijar es donde esta
+        // la llamada, y eso no se puede observar ejecutando: un recogedor que no
+        // corre no falla, simplemente no hace nada.
+        // LAS AGUJAS SE ARMAN EN EJECUCION, y no es un capricho: `include_str!`
+        // se trae el fichero ENTERO, este modulo de pruebas incluido. Escritas
+        // como literales, el test se encontraba a si mismo y contaba tres
+        // llamadas donde hay una.
+        let fuente = include_str!("main.rs");
+        let aguja = |f: &str| format!("self.{f}();");
+        let bucle = fuente
+            .find(&aguja("pump_nx_remote"))
+            .expect("desaparecio el bombeo de la ejecucion remota");
+        let traduccion = fuente
+            .find(&aguja("pump_nx"))
+            .expect("desaparecio el bombeo de la traduccion");
+        assert_eq!(
+            fuente.matches(&aguja("pump_nx")).count(),
+            1,
+            "hay mas de una llamada: una de ellas se quedo en una vista"
+        );
+        // Los dos juntos, en el mismo bloque de bombeos del bucle.
+        assert!(
+            traduccion.abs_diff(bucle) < 600,
+            "el bombeo de la traduccion se separo del de la ejecucion remota"
+        );
     }
 
     #[test]

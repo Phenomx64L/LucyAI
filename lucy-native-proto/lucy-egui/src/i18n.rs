@@ -303,6 +303,13 @@ pub const FRASES: &[Frase] = &[
         "#{id} · Sitzung {sesion} · {chars} Zeichen gelesen",
     ),
     f!(
+        "(detenido)",
+        "(stopped)",
+        "(interrompido)",
+        "(arrêté)",
+        "(angehalten)",
+    ),
+    f!(
         "(el comando no devolvió nada)",
         "(the command returned nothing)",
         "(o comando não devolveu nada)",
@@ -840,6 +847,13 @@ pub const FRASES: &[Frase] = &[
         "Ligado em {ms} ms",
         "Connecté en {ms} ms",
         "Verbunden in {ms} ms",
+    ),
+    f!(
+        "Conectando a {equipo} ({host}:{puerto})…",
+        "Connecting to {equipo} ({host}:{puerto})…",
+        "Conectando a {equipo} ({host}:{puerto})…",
+        "Connexion à {equipo} ({host}:{puerto})…",
+        "Verbinde mit {equipo} ({host}:{puerto})…",
     ),
     f!("Conectando…", "Connecting…", "A ligar…", "Connexion…", "Verbinde…"),
     f!("Conectar", "Connect", "Ligar", "Connecter", "Verbinden"),
@@ -4100,6 +4114,13 @@ pub const FRASES: &[Frase] = &[
     // Severidad y estado: vienen de `lucy-core`, que no sabe de idiomas, y se
     // traducen en el punto de uso. «OK» se queda igual en los cinco.
     f!("⛨  Escanear", "⛨  Scan", "⛨  Analisar", "⛨  Analyser", "⛨  Scannen"),
+    f!(
+        "✓ Conectado en {ms} ms{so}",
+        "✓ Connected in {ms} ms{so}",
+        "✓ Conectado em {ms} ms{so}",
+        "✓ Connecté en {ms} ms{so}",
+        "✓ Verbunden in {ms} ms{so}",
+    ),
     f!(
         "✓ Todos los servicios automáticos en ejecución",
         "✓ All automatic services running",
