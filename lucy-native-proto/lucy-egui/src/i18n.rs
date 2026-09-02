@@ -980,6 +980,20 @@ pub const FRASES: &[Frase] = &[
         "Ignorer la suggestion",
         "Vorschlag verwerfen",
     ),
+    f!(
+        "Desconectado. Lo que hay arriba se queda para leerlo.",
+        "Disconnected. What is above stays there to read.",
+        "Desconectado. O que está acima fica para ler.",
+        "Déconnecté. Ce qui est au-dessus reste consultable.",
+        "Getrennt. Was darüber steht, bleibt lesbar.",
+    ),
+    f!(
+        "Desconectar",
+        "Disconnect",
+        "Desconectar",
+        "Déconnecter",
+        "Trennen",
+    ),
     f!("Descripción", "Description", "Descrição", "Description", "Beschreibung"),
     f!(
         "Desde el escaneo anterior",
@@ -2383,6 +2397,13 @@ pub const FRASES: &[Frase] = &[
         "Ollama · {n} modèles",
         "Ollama · {n} Modelle",
     ),
+    f!(
+        "Olvida lo que se sabe de este equipo. WinRM no mantiene una sesión abierta, así que no hay nada que cerrar al otro lado.",
+        "Forget what is known about this machine. WinRM keeps no open session, so there is nothing to close on the other side.",
+        "Esquece o que se sabe desta máquina. O WinRM não mantém uma sessão aberta, portanto não há nada para fechar do outro lado.",
+        "Oublier ce que l'on sait de cette machine. WinRM ne garde aucune session ouverte, il n'y a donc rien à fermer de l'autre côté.",
+        "Vergisst, was über dieses Gerät bekannt ist. WinRM hält keine offene Sitzung, es gibt also nichts zu schließen.",
+    ),
     f!("Operador", "Operator", "Operador", "Opérateur", "Operator"),
     f!("Orden enviada", "Instruction sent", "Ordem enviada", "Ordre envoyé", "Befehl gesendet"),
     f!(
@@ -3148,6 +3169,13 @@ pub const FRASES: &[Frase] = &[
         "Die Agenten-Leiste wieder öffnen",
     ),
     // ── La ayuda de cada módulo ──────────────────────────────────────────────
+    f!(
+        "Volver a llamar a la puerta",
+        "Knock again",
+        "Bater de novo à porta",
+        "Frapper à nouveau",
+        "Erneut anklopfen",
+    ),
     f!(
         "Volver a los de fábrica",
         "Reset to defaults",
