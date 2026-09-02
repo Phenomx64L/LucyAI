@@ -893,6 +893,13 @@ pub const FRASES: &[Frase] = &[
         "Copier l'inventaire en CSV",
         "Inventar als CSV kopieren",
     ),
+    f!(
+        "Copiar este bloque",
+        "Copy this block",
+        "Copiar este bloco",
+        "Copier ce bloc",
+        "Diesen Block kopieren",
+    ),
     f!("Copiar la ruta", "Copy path", "Copiar o caminho", "Copier le chemin", "Pfad kopieren"),
     f!("Copiar la salida", "Copy output", "Copiar a saída", "Copier la sortie", "Ausgabe kopieren"),
     f!(
@@ -979,6 +986,13 @@ pub const FRASES: &[Frase] = &[
         "Descartar a sugestão",
         "Ignorer la suggestion",
         "Vorschlag verwerfen",
+    ),
+    f!(
+        "Desconectado, y no se vuelve a conectar solo. Lo de arriba se queda.",
+        "Disconnected, and it will not reconnect on its own. What is above stays.",
+        "Desconectado, e não se reconecta sozinho. O que está acima fica.",
+        "Déconnecté, et il ne se reconnectera pas tout seul. Ce qui est au-dessus reste.",
+        "Getrennt, und es verbindet sich nicht von selbst neu. Was darüber steht, bleibt.",
     ),
     f!(
         "Desconectado. Lo que hay arriba se queda para leerlo.",
@@ -3198,6 +3212,13 @@ pub const FRASES: &[Frase] = &[
     ),
     // ── La ayuda de cada módulo ──────────────────────────────────────────────
     f!(
+        "Volver a lanzarlo",
+        "Run it again",
+        "Executar de novo",
+        "Relancer",
+        "Erneut ausführen",
+    ),
+    f!(
         "Volver a llamar a la puerta",
         "Knock again",
         "Bater de novo à porta",
@@ -3376,6 +3397,13 @@ pub const FRASES: &[Frase] = &[
         "dos manuais ingeridos",
         "des manuels ingérés",
         "aus den eingelesenen Handbüchern",
+    ),
+    f!(
+        "desconectado",
+        "disconnected",
+        "desconectado",
+        "déconnecté",
+        "getrennt",
     ),
     f!(
         "destila las sesiones y busca lo que se repite",
@@ -3882,6 +3910,13 @@ pub const FRASES: &[Frase] = &[
         "{n_claves} de {total}",
         "{n_claves} sur {total}",
         "{n_claves} von {total}",
+    ),
+    f!(
+        "{n} comandos propuestos — apruébalos en el panel de Plan",
+        "{n} commands proposed — approve them in the Plan panel",
+        "{n} comandos propostos — aprove-os no painel Plano",
+        "{n} commandes proposées — approuvez-les dans le panneau Plan",
+        "{n} Befehle vorgeschlagen — genehmige sie im Plan-Panel",
     ),
     f!("{n} días", "{n} days", "{n} dias", "{n} jours", "{n} Tage"),
     f!(
