@@ -67,8 +67,15 @@ if ([Windows.Forms.Clipboard]::ContainsFileDropList()) {
     // `-Sta`: el portapapeles de Windows EXIGE un apartamento de hilo único.
     // `powershell.exe` 5.1 ya arranca así, pero decirlo evita que esto se rompa
     // en silencio el día que alguien cambie el intérprete.
+    // SIN VENTANA DE CONSOLA. Lucy es una aplicacion grafica: sin esta
+    // bandera, cada llamada parpadea —o deja abierta— una ventana negra en la
+    // cara del operador. Reportado al pegar: «se abre una ventana extraña de
+    // PowerShell, eso nunca habia pasado». La casa ya lo hacia en `hosts` y en
+    // `shell`; estos dos modulos son nuevos y se dejaron el detalle.
+    use std::os::windows::process::CommandExt;
     let salida = std::process::Command::new("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Sta", "-ExecutionPolicy", "Bypass", "-Command", GUION])
+        .creation_flags(crate::shell::CREATE_NO_WINDOW)
         .output()
         .map_err(|e| format!("no se pudo leer el portapapeles: {e}"))?;
     if !salida.status.success() {
