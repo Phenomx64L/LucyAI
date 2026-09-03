@@ -1365,7 +1365,40 @@ fn inv_anchos(cols: &[(&str, f32)], total: f32, gap: f32) -> Vec<f32> {
 /// Un inventario de software mezcla `7-Zip`, `git` y `Microsoft Edge`, y una
 /// ordenación sensible a mayúsculas los agrupa por si el fabricante escribió en
 /// mayúscula — que no es un criterio que nadie esté buscando.
+/// ── LA RUTA ASCII NO ES UN ATAJO, ES LA MEDICIÓN ────────────────────────────
+///
+/// Esto lo llama `inv_filas`, que corre en el cuerpo de la vista y por tanto EN
+/// CADA FOTOGRAMA. Con `to_lowercase()` a secas cada comparación pedía dos
+/// `String` al asignador, y ordenar quinientas entradas son unas cuatro mil
+/// quinientas comparaciones: nueve mil reservas por fotograma.
+///
+/// Y AQUÍ LA VERSIÓN «OBVIA» SALIÓ TRES VECES PEOR. Lo primero que se probó fue
+/// comparar carácter a carácter sin reservar —`chars().flat_map(char::to_
+/// lowercase)`— que no pide memoria y encima puede parar en la primera
+/// diferencia. Medido: 266 µs pasaron a 756. `char::to_lowercase` es maquinaria
+/// Unicode con búsqueda en tabla POR CARÁCTER, y estos nombres comparten prefijos
+/// largos —«Microsoft Visual C++ …»— así que no se para pronto y se paga el
+/// precio en cada letra. `to_lowercase()` sobre la cadena entera tiene ruta
+/// rápida para ASCII y luego compara de una vez.
+///
+/// La ruta de abajo se queda con lo bueno de las dos: sin reservar Y sin
+/// maquinaria Unicode, porque para ASCII bajar una letra es restar 32.
+///
+///     ordenar por nombre    266 µs -> 64 µs
+///     ordenar por versión   301 µs -> 41 µs
+///
+/// Lo mide `cuanto_cuesta_pintar_la_tabla_de_inventario`, que está ignorado
+/// porque un número escrito en un comentario envejece sin avisar.
+///
+/// Fuera de ASCII cae al camino de siempre, que es correcto y ahí sí hace falta:
+/// el plegado de mayúsculas de verdad depende del carácter y de su posición.
 fn cmp_txt(a: &str, b: &str) -> std::cmp::Ordering {
+    if a.is_ascii() && b.is_ascii() {
+        return a
+            .bytes()
+            .map(|c| c.to_ascii_lowercase())
+            .cmp(b.bytes().map(|c| c.to_ascii_lowercase()));
+    }
     a.to_lowercase().cmp(&b.to_lowercase())
 }
 
@@ -15405,6 +15438,97 @@ mod bucle {
             Cert { path: "/b.pem".into(), subject: "CN=nuevo".into(), expires_epoch: Some(9_999_999) },
         ];
         i
+    }
+
+    /// Un inventario del tamaño que tiene uno de verdad.
+    ///
+    /// Un equipo Windows normal lista entre trescientas y quinientas entradas de
+    /// software. La muestra de tres de arriba vale para fijar el CRITERIO de
+    /// ordenación; para medir lo que cuesta, no: con tres elementos cualquier
+    /// implementación parece gratis.
+    fn inv_grande(n: usize) -> lucy_core::inventory::Inventory {
+        use lucy_core::inventory::*;
+        Inventory {
+            software: (0..n)
+                .map(|k| Software {
+                    // Mezcla de mayúsculas y minúsculas a propósito: es lo que
+                    // hace que la comparación tenga que normalizar, que es justo
+                    // lo que se está midiendo.
+                    name: if k % 3 == 0 {
+                        format!("Microsoft Visual C++ {k} Redistributable")
+                    } else {
+                        format!("paquete-{k}")
+                    },
+                    version: format!("{}.{}.{}", k % 9, k % 7, k),
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn las_dos_rutas_de_comparacion_dicen_lo_mismo() {
+        // `cmp_txt` tiene dos caminos —uno rápido para ASCII, otro para el resto—
+        // y una optimización que cambia el ORDEN no es una optimización: es una
+        // tabla que se reordena sola el día que alguien instala un paquete con
+        // acento. Así que se comprueba contra la versión lenta, que es la
+        // definición.
+        let lenta = |a: &str, b: &str| a.to_lowercase().cmp(&b.to_lowercase());
+        let casos = [
+            // Lo que motivó la función: mayúsculas que no deben agrupar.
+            ("7-Zip", "git"),
+            ("git", "Microsoft Edge"),
+            ("Microsoft Edge", "microsoft edge"),
+            // Prefijo común largo, que es el caso real del inventario.
+            ("Microsoft Visual C++ 2015", "Microsoft Visual C++ 2019"),
+            // Longitudes distintas con la corta como prefijo de la larga.
+            ("git", "github"),
+            ("", "a"),
+            ("", ""),
+            // Fuera de ASCII: cae al camino lento en las dos.
+            ("Ñandú", "nandu"),
+            ("café", "cafe"),
+            ("Über", "uber"),
+            // Uno de cada, que es donde una comparación mixta se equivocaría.
+            ("zeta", "Ñu"),
+        ];
+        for (a, b) in casos {
+            assert_eq!(cmp_txt(a, b), lenta(a, b), "{a:?} contra {b:?}");
+            assert_eq!(cmp_txt(b, a), lenta(b, a), "{b:?} contra {a:?}");
+        }
+    }
+
+    #[test]
+    #[ignore = "es una medición, no una aserción"]
+    fn cuanto_cuesta_pintar_la_tabla_de_inventario() {
+        // POR QUE ESTO IMPORTA. `inv_tabla` llama a `inv_filas` en el cuerpo de la
+        // vista, o sea EN CADA FOTOGRAMA. Filtra y ordena el inventario entero
+        // sesenta veces por segundo aunque nadie haya tocado nada.
+        //
+        // Un número escrito en un comentario envejece sin avisar, así que queda
+        // esto para volver a medirlo. `--ignored` para correrlo.
+        use std::time::Instant;
+        let inv = inv_grande(500);
+        let frame = 16_667.0_f32;
+        for (que, orden, query) in [
+            ("ordenar por nombre", Some((0, true)), ""),
+            ("ordenar por versión", Some((1, true)), ""),
+            ("filtrar sin ordenar", None, "redistributable"),
+            ("filtrar y ordenar", Some((0, true)), "paquete"),
+        ] {
+            let t = Instant::now();
+            let vueltas = 200;
+            for _ in 0..vueltas {
+                std::hint::black_box(inv_filas(
+                    std::hint::black_box(&inv),
+                    lucy_core::inventory::Categoria::Software,
+                    std::hint::black_box(query),
+                    orden,
+                ));
+            }
+            let us = t.elapsed().as_secs_f32() * 1e6 / vueltas as f32;
+            println!("  {que:<22} {us:8.0} us   {:5.1} % de un fotograma", 100.0 * us / frame);
+        }
     }
 
     #[test]
