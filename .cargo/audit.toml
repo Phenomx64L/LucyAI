@@ -1,0 +1,42 @@
+# Auditoría de dependencias — lo que se ignora y POR QUÉ.
+#
+# ── UNA AUDITORÍA QUE SIEMPRE GRITA ENSEÑA A NO MIRARLA ───────────────────────
+#
+# `cargo audit` lee `Cargo.lock`, y un lockfile es AGNÓSTICO DE PLATAFORMA: lista
+# todo lo que cualquier objetivo podría necesitar. Lucy solo se compila para
+# Windows, así que arrastra en el lock cadenas enteras de Linux —Wayland, D-Bus,
+# accesibilidad AT-SPI— que no se compilan, no se enlazan y no existen en el
+# ejecutable que se distribuye.
+#
+# Sin esta lista, cada `cargo audit` termina en «4 vulnerabilities found!» y en
+# rojo. La segunda vez que alguien comprueba que no le afectan, deja de mirar; la
+# tercera se le pasa una de verdad. Silenciar lo que está verificado es lo que
+# hace que el aviso siguiente signifique algo.
+#
+# ── CÓMO SE COMPRUEBA, Y HAY QUE VOLVER A HACERLO ────────────────────────────
+#
+# No se cree lo escrito aquí: se mide, contra el objetivo real.
+#
+#     cargo tree --target x86_64-pc-windows-msvc -i quick-xml
+#
+# Si eso devuelve algo, esta lista dejó de ser cierta y hay que quitarla. Al
+# escribirla devolvía cero, con `iced-proto` ya fuera del workspace — era ese
+# prototipo el que traía la única `quick-xml` que sí entraba en Windows, y era
+# la 0.41.0, o sea la versión YA PARCHEADA.
+#
+# Revísalo al subir `winit`, `eframe` o `accesskit`: son los que declaran esas
+# dependencias por plataforma, y una versión nueva puede cambiar por dónde
+# entran.
+
+[advisories]
+ignore = [
+    # quick-xml: tiempo cuadrático al comprobar atributos repetidos en una
+    # etiqueta de apertura. Severidad 7.5. Llega por `wayland-scanner` (0.39.4)
+    # y por `zbus_xml` → AT-SPI (0.30.0). Ninguna de las dos se compila en
+    # Windows. Verificado con `cargo tree --target x86_64-pc-windows-msvc`.
+    "RUSTSEC-2026-0194",
+    # quick-xml: asignación sin límite de declaraciones de espacio de nombres en
+    # `NsReader`, agotamiento de memoria. Severidad 7.5. Mismas dos cadenas y la
+    # misma verificación.
+    "RUSTSEC-2026-0195",
+]
