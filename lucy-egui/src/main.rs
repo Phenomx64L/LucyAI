@@ -404,6 +404,31 @@ struct ChatMsg {
     /// únicamente en la petición, la segunda pregunta sobre la misma captura
     /// llegaría sin ella y Lucy contestaría que no ve ninguna imagen.
     images: Vec<lucy_core::turns::Image>,
+    /// Lo que se adjunto a ESTE mensaje, para pintarlo.
+    ///
+    /// ── ANTES ERA TEXTO, Y POR ESO SE VEIA PLANO ─────────────────────────────
+    ///
+    /// Los adjuntos se pegaban al cuerpo del mensaje con
+    /// `shown.push_str("\n⎘ nombre")`. Para el pintor eran renglones como
+    /// cualquier otro: sin icono, sin tamaño, sin miniatura y sin forma de
+    /// distinguir una captura de una frase. Reportado: «al mandar el mensaje se
+    /// ve todo plano».
+    ///
+    /// Guardarlos aparte es lo que permite que el pintor sepa que son y les de
+    /// la forma que les toca. El texto del mensaje vuelve a ser SOLO lo que el
+    /// operador escribio.
+    adjuntos: Vec<AdjuntoVisto>,
+}
+
+/// Un adjunto tal como se ENSEÑA en el hilo. Lo que viaja al modelo es otra
+/// cosa —`turns::Image` y el texto pegado al prompt— y mezclarlos haria que
+/// cambiar la presentacion cambiara lo que se manda.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AdjuntoVisto {
+    nombre: String,
+    kind: AttachKind,
+    /// De donde salio. Vacia = no se pudo leer; entonces no hay miniatura.
+    ruta: String,
 }
 
 impl ChatMsg {
@@ -413,6 +438,7 @@ impl ChatMsg {
             text,
             stamp: hhmm(),
             images: Vec::new(),
+            adjuntos: Vec::new(),
         }
     }
 
@@ -422,6 +448,7 @@ impl ChatMsg {
             text: String::new(),
             stamp: hhmm(),
             images: Vec::new(),
+            adjuntos: Vec::new(),
         }
     }
 }
@@ -1401,6 +1428,11 @@ impl ChatMsg {
             text,
             stamp: s.stamp.clone(),
             images: Vec::new(),
+            // LOS CHIPS TAMPOCO VUELVEN, por lo mismo que las imágenes: el
+            // fichero de sesión guarda cuántas había, no cuáles. Un mensaje
+            // restaurado enseña su texto y la nota de las imágenes que no
+            // volvieron, que es lo que se puede decir con verdad.
+            adjuntos: Vec::new(),
         }
     }
 }
@@ -5047,6 +5079,39 @@ struct App {
     dedup_rx: Option<std::sync::mpsc::Receiver<Result<lucy_core::consolidate::Report, String>>>,
     /// La tanda de mantenimiento en vuelo, si hay una.
     mant_rx: Option<std::sync::mpsc::Receiver<lucy_core::maintenance::Tanda>>,
+    /// Las miniaturas ya subidas a la GPU, por ruta.
+    ///
+    /// POR RUTA Y NO POR MENSAJE: la misma captura adjuntada dos veces es una
+    /// textura, no dos. Y `None` guardado significa «se intento y no se pudo»,
+    /// que es lo que impide reintentar la decodificacion en cada fotograma de
+    /// un fichero que no es una imagen valida.
+    minis: std::collections::HashMap<String, Option<egui::TextureHandle>>,
+    /// Las miniaturas que se estan decodificando, con su ruta.
+    ///
+    /// EN UN HILO, porque decodificar una captura son decenas de milisegundos y
+    /// un frame son 16,7. Hacerlo en el hilo que pinta daria un tiron cada vez
+    /// que apareciera un mensaje con imagen.
+    #[allow(clippy::type_complexity)]
+    mini_rx: Vec<(String, std::sync::mpsc::Receiver<Option<lucy_core::attach::Miniatura>>)>,
+    /// Cuando se pidio restaurar, para comprobar despues que sirvio de algo.
+    ///
+    /// ── RESTAURAR NO SIEMPRE RESTAURA ────────────────────────────────────────
+    ///
+    /// Reportado: «hay veces donde se inicia maximizada y cuando le das a
+    /// restaurar sigue maximizada, lo que obliga a ajustar la ventana a mano».
+    ///
+    /// `ViewportCommand::Maximized(false)` le dice a Windows «vuelve al tamaño
+    /// de antes», y Windows lo hace: vuelve al RECTANGULO GUARDADO. El problema
+    /// es cuando NO HAY ninguno — una ventana que nacio ya maximizada nunca ha
+    /// tenido un tamaño anterior al que volver, asi que restaurarla la deja
+    /// exactamente igual. El boton funciona; lo que no existe es el destino.
+    ///
+    /// Asi que se pide restaurar, se espera a que el compositor conteste, y si
+    /// la ventana sigue ocupando la pantalla se le da un tamaño a mano. Es el
+    /// mismo patron que `ventana_curada` usa para el caso contrario —nacer
+    /// colapsada— y por la misma razon: hay estados de los que Windows no sabe
+    /// salir solo.
+    restaurando: Option<Instant>,
     /// Por que el automatico no ha tomado el paso siguiente.
     ///
     /// ── EL MOTIVO ESTABA, Y CAIA DONDE NADIE MIRA ────────────────────────────
@@ -5811,6 +5876,9 @@ impl App {
             dedup_rx: None,
             cris_hechas: std::collections::HashSet::new(),
             mant_rx: None,
+            minis: std::collections::HashMap::new(),
+            mini_rx: Vec::new(),
+            restaurando: None,
             auto_pausa: None,
             nx_fase: None,
             nx_diag_rx: None,
@@ -6687,6 +6755,8 @@ impl eframe::App for App {
         self.pump_nx_remote();
         self.pump_nx_diag();
         self.pump_nx_plazo();
+        self.pump_restaurar(ctx);
+        self.pump_minis(ctx);
         // Y LA TRADUCCIÓN, AQUÍ TAMBIÉN. Vivía al final de la vista de la
         // máquina local: mirando un equipo remoto no se ejecutaba, y una frase
         // en lenguaje natural dejaba la sesión colgada hasta reiniciar.
@@ -7967,7 +8037,10 @@ impl App {
 
         for i in 0..n {
             let m = &self.tabs[self.tab].log[i];
-            let (text, stamp) = (m.text.clone(), m.stamp.clone());
+            // SE CLONAN ANTES DE PINTAR, como el texto y la marca de hora: el
+            // pintor del chip necesita `&mut self` para la caché de miniaturas,
+            // y `m` es un préstamo del propio registro.
+            let (text, stamp, adjuntos) = (m.text.clone(), m.stamp.clone(), m.adjuntos.clone());
             // Un comando ejecutado se dibuja plegado y en una línea: es un
             // evento del flujo, no algo que alguien dijo.
             if let Role::Exec(cmd, ok, out) = &m.role {
@@ -8012,11 +8085,26 @@ impl App {
                                     .rounding(egui::Rounding::same(theme::R_LG))
                                     .inner_margin(egui::Margin::symmetric(12.0, 9.0))
                                     .show(ui, |ui| {
-                                        ui.label(
-                                            egui::RichText::new(&text)
-                                                .size(theme::FS_BODY)
-                                                .color(theme::txt()),
-                                        );
+                                        // LOS ADJUNTOS ARRIBA Y EL TEXTO DEBAJO,
+                                        // que es el orden en que ocurrieron: se
+                                        // suelta el fichero y luego se escribe
+                                        // sobre él. Al revés, la orden queda
+                                        // separada de lo que la motivó.
+                                        if !adjuntos.is_empty() {
+                                            for a in &adjuntos {
+                                                self.chip_enviado(ui, a, bubble_w - 24.0);
+                                            }
+                                            if !text.trim().is_empty() {
+                                                ui.add_space(6.0);
+                                            }
+                                        }
+                                        if !text.trim().is_empty() {
+                                            ui.label(
+                                                egui::RichText::new(&text)
+                                                    .size(theme::FS_BODY)
+                                                    .color(theme::txt()),
+                                            );
+                                        }
                                     });
                                 match msg_actions(ui, &stamp, true) {
                                     MsgAction::Copy => copiar = Some(text.clone()),
@@ -8937,7 +9025,166 @@ fn orden_de_ventana(icon: icons::Icon, maximizada: bool) -> egui::ViewportComman
                 // los dos primeros botones dejaron de coincidir y CERRAR pasaba
                 // a maximizar. El icono es lo que identifica al boton.
                 ctx.send_viewport_cmd(Self::orden_de_ventana(icon, maximized));
+                // SE ANOTA QUE SE PIDIÓ RESTAURAR, para comprobar luego que
+                // sirvió de algo. Ver `restaurando`: una ventana que nació
+                // maximizada no tiene rectángulo anterior al que volver, y
+                // Windows la deja igual sin decir nada.
+                if maximized && !matches!(icon, icons::Icon::Close | icons::Icon::Minimize) {
+                    self.restaurando = Some(Instant::now());
+                }
             }
+        }
+    }
+
+    /// Cuánto se le da al compositor para aplicar el «restaurar».
+    ///
+    /// Doscientos milisegundos. La orden no es síncrona: se manda al hilo de la
+    /// ventana y el tamaño nuevo llega uno o dos frames después. Comprobar antes
+    /// mediría el tamaño de antes y siempre concluiría que no sirvió.
+    const ESPERA_RESTAURAR_MS: u128 = 200;
+
+    /// Qué parte de la pantalla tiene que seguir ocupando para dar el restaurar
+    /// por fallido.
+    ///
+    /// El 94 %. Una ventana restaurada de verdad deja bordes y barra de tareas a
+    /// la vista; una que sigue maximizada ocupa casi todo. El margen es para no
+    /// confundir con una ventana que el operador estiró él a pantalla completa —
+    /// ésa no se toca, porque ahí el tamaño SÍ lo eligió alguien.
+    const RESTAURAR_FALLIDO: f32 = 0.94;
+
+    /// Un adjunto ya enviado, dentro de la burbuja.
+    ///
+    /// ── LO QUE SE VEIA ANTES ─────────────────────────────────────────────────
+    ///
+    /// Un renglon de texto: `⎘ captura.png`. Sin icono, sin tamaño, sin
+    /// miniatura, del mismo color y del mismo peso que la frase de al lado. No
+    /// se distinguia una captura de una linea escrita.
+    ///
+    /// Ahora: marco propio, icono por clase, nombre recortado por el LADO
+    /// CORRECTO —el final, que es donde vive la extension— y, si es imagen, su
+    /// miniatura de verdad.
+    fn chip_enviado(&mut self, ui: &mut egui::Ui, a: &AdjuntoVisto, ancho: f32) {
+        let es_img = a.kind == AttachKind::Image && !a.ruta.is_empty();
+        // La miniatura se pide UNA vez por ruta. Ver `minis`.
+        if es_img && !self.minis.contains_key(&a.ruta) && !self.mini_rx.iter().any(|(r, _)| *r == a.ruta) {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let ruta = std::path::PathBuf::from(&a.ruta);
+            std::thread::spawn(move || {
+                let _ = tx.send(lucy_core::attach::miniatura(
+                    &ruta,
+                    lucy_core::attach::LADO_MINIATURA,
+                ));
+            });
+            self.mini_rx.push((a.ruta.clone(), rx));
+        }
+        let tex = self.minis.get(&a.ruta).and_then(|t| t.clone());
+        ui.add_space(4.0);
+        egui::Frame::none()
+            .fill(theme::bg2())
+            .stroke(egui::Stroke::new(1.0_f32, theme::bdr()))
+            .rounding(egui::Rounding::same(theme::R_MD))
+            .inner_margin(egui::Margin::same(6.0))
+            .show(ui, |ui| {
+                ui.set_max_width(ancho);
+                if let Some(t) = &tex {
+                    // LA PROPORCION SE RESPETA. `Miniatura` viene ya encajada en
+                    // su cuadro sin deformar; aqui solo se acota el ancho para
+                    // que una captura apaisada no empuje la burbuja.
+                    let [w, h] = t.size();
+                    let esc = (ancho.min(220.0) / w as f32).min(1.0);
+                    ui.add(
+                        egui::Image::new(t)
+                            .fit_to_exact_size(egui::vec2(w as f32 * esc, h as f32 * esc))
+                            .rounding(egui::Rounding::same(theme::R_SM)),
+                    );
+                    ui.add_space(4.0);
+                }
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    ui.label(
+                        egui::RichText::new(attach_glyph(a.kind))
+                            .size(12.0)
+                            .color(theme::acc()),
+                    );
+                    // POR EL FINAL. Un nombre largo recortado por delante pierde
+                    // la extension, que es lo que dice de que va el fichero:
+                    // `informe-anual-2026-definitivo…` no distingue un PDF de un
+                    // XML. `recorta_visual` conserva la cola.
+                    ui.label(
+                        egui::RichText::new(recorta_visual(&a.nombre, 38))
+                            .size(theme::FS_CAPTION)
+                            .monospace()
+                            .color(theme::txt2()),
+                    )
+                    .on_hover_text(&a.nombre);
+                });
+            });
+    }
+
+    /// Recoge las miniaturas y las sube a la GPU.
+    ///
+    /// LA TEXTURA SE CREA AQUI Y NO EN EL HILO: `TextureHandle` necesita el
+    /// contexto de egui, que no cruza a otro hilo. El hilo hace lo caro
+    /// —decodificar y reducir— y esto hace lo que solo se puede hacer aqui.
+    fn pump_minis(&mut self, ctx: &egui::Context) {
+        let mut llegadas: Vec<(String, Option<lucy_core::attach::Miniatura>)> = Vec::new();
+        self.mini_rx.retain(|(ruta, rx)| match rx.try_recv() {
+            Ok(m) => {
+                llegadas.push((ruta.clone(), m));
+                false
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => true,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                llegadas.push((ruta.clone(), None));
+                false
+            }
+        });
+        for (ruta, m) in llegadas {
+            let tex = m.map(|mini| {
+                let img = egui::ColorImage::from_rgba_unmultiplied(
+                    [mini.ancho as usize, mini.alto as usize],
+                    &mini.rgba,
+                );
+                ctx.load_texture(format!("mini:{ruta}"), img, egui::TextureOptions::LINEAR)
+            });
+            // SE GUARDA TAMBIEN EL FALLO. Sin esto, un fichero que no decodifica
+            // se reintentaria en cada fotograma: un hilo por frame para volver a
+            // fallar.
+            self.minis.insert(ruta, tex);
+        }
+    }
+
+    /// Comprueba que el «restaurar» hizo algo, y si no, le da un tamaño.
+    fn pump_restaurar(&mut self, ctx: &egui::Context) {
+        let Some(desde) = self.restaurando else { return };
+        if desde.elapsed().as_millis() < Self::ESPERA_RESTAURAR_MS {
+            ctx.request_repaint_after(std::time::Duration::from_millis(60));
+            return;
+        }
+        self.restaurando = None;
+        // Si volvió a maximizarse por su cuenta no hay nada que arreglar: el
+        // operador pulsó otra vez.
+        if ctx.input(|i| i.viewport().maximized.unwrap_or(false)) {
+            return;
+        }
+        let (v, pantalla) = ctx.input(|i| {
+            (
+                i.screen_rect().size(),
+                i.viewport().monitor_size.unwrap_or(egui::vec2(1920.0, 1080.0)),
+            )
+        });
+        if v.x >= pantalla.x * Self::RESTAURAR_FALLIDO
+            && v.y >= pantalla.y * Self::RESTAURAR_FALLIDO
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
+                VENTANA[0], VENTANA[1],
+            )));
+            // Y AL CENTRO. Sin esto, la ventana encoge dejando la esquina
+            // superior izquierda donde estaba, que en un monitor grande la deja
+            // arrinconada arriba a la izquierda — se ve como otro fallo.
+            let x = ((pantalla.x - VENTANA[0]) * 0.5).max(0.0);
+            let y = ((pantalla.y - VENTANA[1]) * 0.5).max(0.0);
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(x, y)));
         }
     }
 
@@ -9947,8 +10194,19 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
         // Fuera del préstamo de la pestaña: la petición del título se lanza
         // DESPUÉS de soltarla, porque `pide_titulo` necesita `&mut self`.
         let mut pedir_titulo: Option<(usize, String)> = None;
+        // LO QUE SE ENSEÑA, APARTE DE LO QUE SE MANDA. `adjuntos` lleva el
+        // nombre y el motivo del bloqueo, que es lo que el prompt necesita;
+        // `vistos` lleva la clase y la ruta, que es lo que el pintor necesita.
+        // Antes solo existía el primero, y por eso el hilo no podía dibujar más
+        // que un renglón de texto por fichero.
+        let mut vistos: Vec<AdjuntoVisto> = Vec::new();
         for a in &self.tabs[self.tab].attachments {
             adjuntos.push((a.name.clone(), a.blocked.clone()));
+            vistos.push(AdjuntoVisto {
+                nombre: a.name.clone(),
+                kind: a.kind,
+                ruta: a.path.clone(),
+            });
             if !a.ready() {
                 continue;
             }
@@ -10043,12 +10301,13 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
             }
             // En la conversación se ve la orden del operador, no el prompt con
             // los ficheros pegados: eso es fontanería, no lo que él escribió.
-            let mut shown = text.clone();
-            for (n, _) in &adjuntos {
-                shown.push_str(&format!("\n⎘ {n}"));
-            }
-            let mut msg = ChatMsg::new(true, shown);
+            // EL TEXTO ES SOLO LO QUE ESCRIBIO EL OPERADOR. Aqui se le pegaban
+            // los nombres de los adjuntos como renglones —`⎘ captura.png`— y el
+            // pintor no tenia forma de saber que eran. Ahora van aparte, con su
+            // clase y su ruta, y el hilo los dibuja como chips.
+            let mut msg = ChatMsg::new(true, text.clone());
             msg.images = imagenes;
+            msg.adjuntos = vistos;
             t.log.push(msg);
             t.attachments.clear();
             // El presupuesto de pasos automáticos se renueva con cada orden. Es
