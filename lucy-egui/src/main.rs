@@ -1365,6 +1365,34 @@ fn inv_anchos(cols: &[(&str, f32)], total: f32, gap: f32) -> Vec<f32> {
 /// Un inventario de software mezcla `7-Zip`, `git` y `Microsoft Edge`, y una
 /// ordenación sensible a mayúsculas los agrupa por si el fabricante escribió en
 /// mayúscula — que no es un criterio que nadie esté buscando.
+/// ¿Hay que dibujar de verdad un mensaje que ocupa `[arriba, arriba + alto]`?
+///
+/// ── POR QUÉ EL HILO NECESITA ESTO ───────────────────────────────────────────
+///
+/// `transcript` recorría `for i in 0..n` sobre TODOS los mensajes, dentro de un
+/// `ScrollArea` que no virtualiza. Una conversación larga se maquetaba entera en
+/// cada fotograma, estuviera visible o no, y además clonaba tres campos por
+/// mensaje para poder pintarlos. Medido con `cuanto_cuesta_maquetar_la_
+/// conversacion_entera`, y solo el Markdown, que es una cota inferior:
+///
+///      10 mensajes    93 µs     0,6 % de un fotograma
+///     200 mensajes  1458 µs     8,7 %
+///     500 mensajes  3179 µs    19,1 %
+///
+/// Y se paga justo cuando peor viene: en reposo la ventana repinta a 1 Hz, pero
+/// mientras llega una respuesta repinta sin parar — que es cuando el hilo es
+/// largo y hay alguien mirando.
+///
+/// SUELTA Y PURA para poder fijarla con un test, porque el fallo que puede tener
+/// no avisa: un mensaje que se salta cuando tocaba dibujarlo deja un hueco en
+/// blanco, y eso no se cae ni se registra en ningún sitio.
+///
+/// `alto <= 0.0` significa «nunca se ha medido», y entonces SIEMPRE se dibuja:
+/// es el primer fotograma de ese mensaje y hay que verlo para saber lo que ocupa.
+fn hace_falta_dibujar(arriba: f32, alto: f32, visible: egui::Rangef, margen: f32) -> bool {
+    alto <= 0.0 || (arriba + alto >= visible.min - margen && arriba <= visible.max + margen)
+}
+
 /// ── LA RUTA ASCII NO ES UN ATAJO, ES LA MEDICIÓN ────────────────────────────
 ///
 /// Esto lo llama `inv_filas`, que corre en el cuerpo de la vista y por tanto EN
@@ -4822,6 +4850,21 @@ struct App {
     view: View,
     // chat — Ollama local REAL (streaming vía lucy_core::chat)
     md_cache: CommonMarkCache,
+    /// Lo que ocupó cada mensaje del hilo la última vez que se dibujó.
+    ///
+    /// Es lo que permite saltarse los que no se ven: para dejar el hueco correcto
+    /// hay que saber cuánto ocupa lo que no se dibuja, y eso solo se sabe
+    /// habiéndolo dibujado alguna vez. Un cero significa «todavía no», y entonces
+    /// se dibuja.
+    alturas: Vec<f32>,
+    /// A qué pestaña y a qué ancho corresponden esas alturas.
+    ///
+    /// LAS DOS COSAS INVALIDAN. Cambiar de pestaña es obvio; el ancho lo es menos
+    /// y es peor: un mensaje que ocupaba tres líneas ocupa cinco en una ventana
+    /// más estrecha, así que las alturas viejas se quedan cortas justo cuando
+    /// menos margen hay. El ancho se guarda redondeado para no invalidar por una
+    /// décima durante un arrastre de borde.
+    alturas_de: (usize, i32),
     /// Las terminales abiertas. Siempre hay al menos una.
     tabs: Vec<ChatTab>,
     tab: usize,
@@ -5799,6 +5842,8 @@ impl App {
         Self {
             view: View::TerminalIa,
             md_cache: CommonMarkCache::default(),
+            alturas: Vec::new(),
+            alturas_de: (usize::MAX, 0),
             tabs,
             tab,
             tabs_opened: abiertas,
@@ -8054,6 +8099,15 @@ impl App {
     /// `ancho` viene medido FUERA del `ScrollArea` a propósito: ver el
     /// comentario de quien la llama. Dentro, `available_width` puede venir
     /// inflado por lo que desbordó en el fotograma anterior.
+    /// Cuánto se dibuja por encima y por debajo de lo que se ve.
+    ///
+    /// Generoso a propósito. Lo que se paga por dibujar de más es tiempo; lo que
+    /// se paga por dibujar de menos es un hueco en blanco en mitad de la
+    /// conversación, y eso no es una optimización fallida, es un fallo. Con este
+    /// margen, para que un mensaje desapareciera su altura recordada tendría que
+    /// estar equivocada en más de seiscientos píxeles.
+    const MARGEN_HILO: f32 = 600.0;
+
     fn transcript(&mut self, ui: &mut egui::Ui, ancho: f32) {
         let busy = self.tabs[self.tab].busy();
         let n = self.tabs[self.tab].log.len();
@@ -8062,6 +8116,20 @@ impl App {
         // margen— quedarse con el grande volvería a desbordar.
         let full = ancho.min(ui.available_width().max(220.0));
         let me = initials(&user_name());
+
+        // ── Lo que no se ve no se dibuja ────────────────────────────────────
+        //
+        // Las alturas valen para una pestaña y un ancho; si cambia cualquiera de
+        // los dos se tiran y se vuelven a medir dibujando un fotograma entero.
+        // Ese fotograma cuesta lo que costaban todos antes, y es el único.
+        let clave = (self.tabs[self.tab].uid, full.round() as i32);
+        if self.alturas_de != clave {
+            self.alturas_de = clave;
+            self.alturas.clear();
+        }
+        self.alturas.resize(n, 0.0);
+        let visible = ui.clip_rect().y_range();
+
         let mut copiar: Option<String> = None;
         // `(índice, acción)` — se aplica DESPUÉS del bucle: tocar el registro
         // mientras se dibuja es cómo se sale del índice a media pasada.
@@ -8076,7 +8144,24 @@ impl App {
             .map(|m| lucy_core::tags::detect_code_gen_intent(&m.text))
             .unwrap_or(false);
 
+        // La altura de un mensaje se cobra EN LA VUELTA SIGUIENTE, y no al final
+        // de la suya, porque el cuerpo tiene `continue` por varios sitios —el
+        // comando plegado, por ejemplo— y una medida escrita al final del bucle
+        // se los saltaría todos. Así se mide siempre, salga por donde salga.
+        let mut midiendo: Option<(usize, f32)> = None;
         for i in 0..n {
+            if let Some((j, arriba)) = midiendo.take() {
+                self.alturas[j] = ui.cursor().top() - arriba;
+            }
+            let arriba = ui.cursor().top();
+            let alto = self.alturas[i];
+            if !hace_falta_dibujar(arriba, alto, visible, Self::MARGEN_HILO) {
+                // El hueco exacto que ocupaba: el `ScrollArea` tiene que seguir
+                // midiendo lo mismo o la barra daría saltos al desplazarse.
+                ui.add_space(alto);
+                continue;
+            }
+            midiendo = Some((i, arriba));
             let m = &self.tabs[self.tab].log[i];
             // SE CLONAN ANTES DE PINTAR, como el texto y la marca de hora: el
             // pintor del chip necesita `&mut self` para la caché de miniaturas,
@@ -8319,6 +8404,10 @@ impl App {
                 });
             }
             });
+        }
+        // El último mensaje no tiene vuelta siguiente que lo cobre.
+        if let Some((j, arriba)) = midiendo.take() {
+            self.alturas[j] = ui.cursor().top() - arriba;
         }
         if let Some(t) = copiar {
             ui.ctx().copy_text(t);
@@ -15464,6 +15553,144 @@ mod bucle {
                 .collect(),
             ..Default::default()
         }
+    }
+
+    /// Un mensaje de conversación del tamaño que tienen los de verdad.
+    fn msg_muestra(i: usize) -> String {
+        if i.is_multiple_of(3) {
+            format!(
+                "He revisado el equipo **SRV-{i:03}** y esto es lo que sale:\n\n\
+                 - Disco `C:` al {} %\n\
+                 - {} servicios detenidos que deberían estar arriba\n\
+                 - Último parche: hace {} días\n\n\
+                 ```powershell\nGet-Service | Where-Object {{ $_.Status -eq 'Stopped' }}\n```\n",
+                60 + i % 35,
+                i % 7,
+                i % 90
+            )
+        } else {
+            format!(
+                "Revisa el estado de SRV-{i:03}, sobre todo el espacio en disco y \
+                 si quedó algún servicio caído tras el reinicio de anoche."
+            )
+        }
+    }
+
+    #[test]
+    #[ignore = "es una medición, no una aserción"]
+    fn cuanto_cuesta_maquetar_la_conversacion_entera() {
+        // LO QUE SE QUIERE SABER. `transcript` recorre `for i in 0..n` sobre TODOS
+        // los mensajes, dentro de un `ScrollArea` sin virtualizar. O sea que una
+        // conversación larga se maqueta entera en cada fotograma, esté visible o
+        // no. La pregunta no es si eso es feo —lo es— sino cuánto cuesta, porque
+        // de eso depende si vale la pena el riesgo de virtualizarla.
+        //
+        // Se mide el coste DOMINANTE —el Markdown— sin construir un `App`, que
+        // arrastra base de datos y ventana. Es un límite inferior: el bucle real
+        // hace además avatares, chips y botones por mensaje.
+        use std::time::Instant;
+        let ctx = egui::Context::default();
+        let frame = 16_667.0_f32;
+        println!("  {:>5}  {:>12} {:>12}   {:>8}", "msgs", "entera", "virtualizada", "de un frame");
+        for n in [10_usize, 50, 200, 500] {
+            let msgs: Vec<String> = (0..n).map(msg_muestra).collect();
+            let mut medida = [0.0_f32; 2];
+            for (modo, salida) in [(false, 0_usize), (true, 1)] {
+                let mut cache = CommonMarkCache::default();
+                let mut alturas = vec![0.0_f32; n];
+                // Cuatro fotogramas: los tres primeros llenan las cachés de
+                // Markdown y de galeras de egui, y ADEMÁS miden las alturas. Se
+                // cronometra el cuarto, que es el régimen — medir el primero
+                // sería medir el arranque, que se paga una vez.
+                for k in 0..4 {
+                    let t = Instant::now();
+                    // CON TAMAÑO DE VENTANA EXPLÍCITO. Un `Context` sin él se
+                    // comporta como si la pantalla fuera enorme: el recorte lo
+                    // abarca todo, no se salta ni un mensaje, y la medición diría
+                    // que virtualizar no sirve de nada. 1200×800 es una ventana
+                    // de trabajo normal.
+                    let input = egui::RawInput {
+                        time: Some(k as f64 * 0.016),
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1200.0, 800.0),
+                        )),
+                        ..Default::default()
+                    };
+                    let _ = ctx.run(input, |c| {
+                        egui::CentralPanel::default().show(c, |ui| {
+                            egui::ScrollArea::vertical().show(ui, |ui| {
+                                let visible = ui.clip_rect().y_range();
+                                let mut midiendo: Option<(usize, f32)> = None;
+                                for (i, m) in msgs.iter().enumerate() {
+                                    if let Some((j, a)) = midiendo.take() {
+                                        alturas[j] = ui.cursor().top() - a;
+                                    }
+                                    let arriba = ui.cursor().top();
+                                    if modo
+                                        && !hace_falta_dibujar(
+                                            arriba,
+                                            alturas[i],
+                                            visible,
+                                            App::MARGEN_HILO,
+                                        )
+                                    {
+                                        ui.add_space(alturas[i]);
+                                        continue;
+                                    }
+                                    midiendo = Some((i, arriba));
+                                    CommonMarkViewer::new().show(ui, &mut cache, m);
+                                }
+                                if let Some((j, a)) = midiendo.take() {
+                                    alturas[j] = ui.cursor().top() - a;
+                                }
+                            });
+                        });
+                    });
+                    if k == 3 {
+                        medida[salida] = t.elapsed().as_secs_f32() * 1e6;
+                    }
+                }
+            }
+            println!(
+                "  {n:5}  {:9.0} us {:9.0} us   {:5.1} % -> {:.1} %",
+                medida[0],
+                medida[1],
+                100.0 * medida[0] / frame,
+                100.0 * medida[1] / frame
+            );
+        }
+    }
+
+    #[test]
+    fn un_mensaje_solo_se_salta_si_esta_lejos_de_lo_que_se_ve() {
+        // EL FALLO QUE ESTO CAZA NO AVISA. Un mensaje que se salta cuando tocaba
+        // dibujarlo no revienta ni se registra: deja un hueco en blanco en mitad
+        // de la conversación, y quien lo sufre piensa que se perdió un mensaje.
+        // Así que se fija el criterio, que es «en la duda, dibujar».
+        let ver = egui::Rangef::new(1000.0, 1800.0);
+        let m = App::MARGEN_HILO;
+        let dibuja = |arriba, alto| hace_falta_dibujar(arriba, alto, ver, m);
+
+        // Dentro de lo que se ve, de las tres maneras de estarlo.
+        assert!(dibuja(1200.0, 100.0), "entero dentro");
+        assert!(dibuja(900.0, 200.0), "asomando por arriba");
+        assert!(dibuja(1750.0, 300.0), "asomando por abajo");
+        assert!(dibuja(500.0, 2000.0), "más alto que la ventana entera");
+
+        // En el margen: fuera de la vista pero se dibuja igual, que es el seguro.
+        assert!(dibuja(1800.0 + m - 1.0, 50.0), "justo dentro del margen de abajo");
+        assert!(dibuja(1000.0 - m - 40.0, 50.0), "justo dentro del margen de arriba");
+
+        // Lejos de verdad: aquí sí se salta.
+        assert!(!dibuja(1800.0 + m + 1.0, 50.0), "muy por debajo");
+        assert!(!dibuja(0.0, 300.0), "muy por encima");
+
+        // SIN MEDIR SE DIBUJA SIEMPRE, esté donde esté. Es el primer fotograma de
+        // ese mensaje y hay que verlo para saber lo que ocupa; saltárselo lo
+        // dejaría en cero para siempre, invisible y sin hueco.
+        assert!(dibuja(0.0, 0.0), "nunca medido, muy por encima");
+        assert!(dibuja(9_000.0, 0.0), "nunca medido, muy por debajo");
     }
 
     #[test]
