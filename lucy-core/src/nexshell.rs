@@ -148,8 +148,39 @@ pub fn translate_prompt(peticion: &str, shell: &str, so: &str) -> String {
          envolventes. Prefiere comandos NO interactivos. Usa el gestor de paquetes que \
          corresponda a ese sistema (dnf en Fedora/RHEL, apt en Debian/Ubuntu, pacman en Arch, \
          zypper en SUSE, apk en Alpine; winget o Get-WindowsUpdate en Windows).\n\
-         Si no se puede resolver en un comando, responde exactamente: SIN_COMANDO"
+         Si no se puede resolver en UN comando, responde con esta forma exacta, en una \
+         sola línea:\n\
+         SIN_COMANDO: <por qué no se puede, en una frase corta>"
     )
+}
+
+/// Por qué el modelo dijo que no había comando posible. `None` = sí lo había.
+///
+/// ── UNA NEGATIVA SIN MOTIVO ES MEDIA RESPUESTA ───────────────────────────────
+///
+/// Antes se pedía la palabra `SIN_COMANDO` a secas, y quien preguntaba «instala
+/// winget» en un Server 2022 recibía «no supe convertir eso en un comando». Y el
+/// modelo SÍ sabía por qué —winget no viene en Windows Server y ponerlo son
+/// varios pasos, no uno— pero no había dónde decirlo.
+///
+/// Es el mismo agujero que tenía un comando fallido antes del diagnóstico: la
+/// respuesta terminaba justo donde empezaba lo útil.
+///
+/// TOLERANTE CON EL ADORNO y con la falta de motivo: un modelo que conteste
+/// `SIN_COMANDO` a secas —porque se le pidió así en una versión anterior, o
+/// porque le dio por ahí— sigue reconociéndose como negativa, solo que muda.
+pub fn motivo_sin_comando(bruto: &str) -> Option<String> {
+    let i = bruto.find(NO_COMMAND)?;
+    let resto = &bruto[i + NO_COMMAND.len()..];
+    // La primera línea de lo que sigue: si el modelo se explayó, el motivo es la
+    // frase, no el ensayo.
+    let motivo = resto
+        .lines()
+        .next()
+        .unwrap_or("")
+        .trim_matches(|c: char| c.is_whitespace() || matches!(c, ':' | '-' | '—' | '.' | '"' | '*'))
+        .to_string();
+    Some(motivo)
 }
 
 /// Lo que el modelo contesta cuando no hay comando posible.
@@ -581,5 +612,50 @@ Hay 2 actualizaciones criticas.",
         assert!(p.contains("CIFRAS"), "no le pide los numeros");
         assert!(p.contains(NO_SUMMARY), "no le da salida para lo que no dice nada");
         assert!(p.contains("Windows Server 2022"), "perdio el sistema del equipo");
+    }
+
+    #[test]
+    fn una_negativa_trae_su_motivo() {
+        // El caso del operador: «instala winget» en un Server 2022. El modelo SI
+        // sabe por que no se puede en un comando; antes no habia donde decirlo.
+        let m = motivo_sin_comando(
+            "SIN_COMANDO: winget no viene en Windows Server 2022 y ponerlo son varios pasos",
+        )
+        .expect("no reconocio la negativa");
+        assert!(m.starts_with("winget no viene"), "{m}");
+    }
+
+    #[test]
+    fn una_negativa_muda_sigue_siendo_una_negativa() {
+        // Un modelo que conteste la palabra a secas —porque se le pidio asi en
+        // una version anterior, o porque le dio por ahi— tiene que reconocerse
+        // igual. Lo que cambia es que no hay motivo que enseñar.
+        assert_eq!(motivo_sin_comando("SIN_COMANDO"), Some(String::new()));
+        assert_eq!(motivo_sin_comando("SIN_COMANDO:"), Some(String::new()));
+    }
+
+    #[test]
+    fn un_comando_de_verdad_no_es_una_negativa() {
+        assert!(motivo_sin_comando("Get-Service Spooler").is_none());
+        assert!(motivo_sin_comando("").is_none());
+    }
+
+    #[test]
+    fn el_motivo_es_la_frase_y_no_el_ensayo() {
+        // Un modelo servicial se explaya debajo. El motivo es la primera linea.
+        let m = motivo_sin_comando(
+            "SIN_COMANDO: hacen falta varios pasos
+Primero descarga el paquete…
+Luego…",
+        )
+        .expect("no leyo");
+        assert_eq!(m, "hacen falta varios pasos");
+    }
+
+    #[test]
+    fn al_traducir_se_le_pide_el_motivo_de_la_negativa() {
+        let p = translate_prompt("instala winget", "PowerShell", "Windows Server 2022");
+        assert!(p.contains(NO_COMMAND), "no le da salida para lo imposible");
+        assert!(p.contains("por qué no se puede"), "no le pide el motivo");
     }
 }
