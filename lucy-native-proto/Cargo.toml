@@ -5,7 +5,19 @@
 # NO toca lucy-svelte ni su git. Correr cada proto en una máquina bloqueada/RDP.
 [workspace]
 resolver = "2"
-members = ["proto-core", "egui-proto", "iced-proto", "lucy-egui"]
+# LOS DOS PROTOTIPOS SALEN DEL WORKSPACE. `egui-proto` e `iced-proto` son las
+# dos maquetas de 190 lineas con las que se decidio la migracion, sin tocar desde
+# el 2 de agosto de 2026 y sin que nadie dependa de ellas. Siguen en el disco y en
+# la historia; lo que dejan de hacer es entrar en la compilacion.
+#
+# NO ES LIMPIEZA COSMETICA, ESTA MEDIDO: `iced-proto` arrastra 253 crates —el
+# framework iced entero, con syntect, plist y quick-xml detras— y el workspace
+# pasaba de 804 dependencias cuando `lucy-egui` necesita 330. Eso es tiempo de
+# compilacion, un `Cargo.lock` que nadie puede revisar, y ruido en `cargo audit`:
+# los dos advisories de alta severidad que salian eran de esas cadenas.
+#
+# `proto-core` se queda: `lucy-egui` depende de el de verdad.
+members = ["proto-core", "lucy-egui"]
 
 [workspace.dependencies]
 portable-pty = "0.8"
