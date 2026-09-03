@@ -3331,13 +3331,6 @@ fn set_motion(on: bool) {
     MOTION.store(on, std::sync::atomic::Ordering::Relaxed);
 }
 
-/// `--ease-out`, la curva de entrada del CSS: rápida al principio y asentándose
-/// al final. Un movimiento lineal se nota mecánico justo porque nada en el
-/// mundo físico arranca y para de golpe.
-fn ease_out(t: f32) -> f32 {
-    1.0 - (1.0 - t).powi(3)
-}
-
 /// La opacidad de entrada de algo que acaba de aparecer, de 0 a 1.
 ///
 /// NO SE USA `animate_bool_with_time` PARA ESTO, y ahí había un fallo silencioso:
@@ -3360,7 +3353,7 @@ fn entrada(ctx: &egui::Context, id: egui::Id, dur: f32) -> f32 {
     if t < 1.0 {
         ctx.request_repaint();
     }
-    ease_out(t)
+    theme::ease_out(t)
 }
 
 /// Lo mismo, escalonado: cada elemento de una lista entra un poco después que el
@@ -3381,7 +3374,7 @@ fn entrada_lista(ctx: &egui::Context, id: egui::Id, i: usize) -> f32 {
     if t < 1.0 {
         ctx.request_repaint();
     }
-    ease_out(t)
+    theme::ease_out(t)
 }
 
 /// Envuelve un bloque en su opacidad de entrada.
@@ -3421,7 +3414,7 @@ fn sparkline(ui: &mut egui::Ui, w: f32, h: f32, data: &[f32], color: egui::Color
         return;
     }
     let reveal = if motion() {
-        ease_out(
+        theme::ease_out(
             ui.ctx()
                 .animate_bool_with_time(ui.id().with("spark"), true, theme::DUR_SLOW),
         )
@@ -3575,11 +3568,11 @@ fn alertas_alto(n_filas: usize) -> f32 {
 fn alerta_chip(ui: &mut egui::Ui, w: f32, texto: &str, nivel: lucy_core::thresholds::Nivel) -> bool {
     let (col, bg) = color_nivel(nivel);
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, ALERTA_H), egui::Sense::click());
-    ui.painter().rect_filled(rect, egui::Rounding::same(999.0), bg);
+    ui.painter().rect_filled(rect, theme::capsule(ALERTA_H), bg);
     if resp.hovered() {
         ui.painter().rect_stroke(
             rect,
-            egui::Rounding::same(999.0),
+            theme::capsule(ALERTA_H),
             egui::Stroke::new(1.0_f32, col),
         );
     }
@@ -8070,7 +8063,7 @@ impl App {
             // bloque que aparece de golpe en mitad de un hilo se lee como un
             // salto; con 200 ms se lee como algo que llega.
             let t_in = if motion() {
-                ease_out(ui.ctx().animate_bool_with_time(
+                theme::ease_out(ui.ctx().animate_bool_with_time(
                     egui::Id::new(("msg", self.tabs[self.tab].uid, i)),
                     true,
                     theme::DUR_BASE,
@@ -8148,7 +8141,7 @@ impl App {
                         let t = ui.ctx().animate_bool_with_time(
                             egui::Id::new(("pulse", i)),
                             (ui.input(|x| x.time) * 1.6) as i64 % 2 == 0,
-                            0.5,
+                            theme::DUR_PULSO,
                         );
                         theme::acc().linear_multiply(0.10 + 0.14 * t)
                     } else {
@@ -8451,7 +8444,7 @@ impl App {
                         ui.ctx().request_repaint();
                     } else if mresp.hovered() {
                         ui.painter()
-                            .rect_filled(mr, egui::Rounding::same(6.0), theme::bg4());
+                            .rect_filled(mr, egui::Rounding::same(theme::R_XS), theme::bg4());
                     }
                     icons::draw(
                         ui.painter(),
@@ -8503,9 +8496,9 @@ impl App {
                     let (ar, aresp) =
                         ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::click());
                     if auto {
-                        ui.painter().rect_filled(ar, egui::Rounding::same(6.0), theme::acc_bg());
+                        ui.painter().rect_filled(ar, egui::Rounding::same(theme::R_XS), theme::acc_bg());
                     } else if aresp.hovered() {
-                        ui.painter().rect_filled(ar, egui::Rounding::same(6.0), theme::bg4());
+                        ui.painter().rect_filled(ar, egui::Rounding::same(theme::R_XS), theme::bg4());
                     }
                     icons::draw(
                         ui.painter(),
@@ -9011,7 +9004,7 @@ impl App {
                 // se puede deshacer.
                 ui.painter().rect_filled(
                     r,
-                    egui::Rounding::same(6.0),
+                    egui::Rounding::same(theme::R_XS),
                     if danger { theme::red().linear_multiply(0.85) } else { theme::bg4() },
                 );
             }
@@ -11465,7 +11458,7 @@ impl App {
         let Some(t0) = self.dash_shown else { return 1.0 };
         let delay = idx.min(6) as f32 * 0.05;
         let t = (t0.elapsed().as_secs_f32() - delay) / theme::DUR_SLOW;
-        ease_out(t.clamp(0.0, 1.0))
+        theme::ease_out(t.clamp(0.0, 1.0))
     }
 
     /// Tarjeta KPI: rótulo de instrumento, cifra héroe, tendencia o barra, y el
@@ -11510,7 +11503,7 @@ impl App {
                 let shown = ui.ctx().animate_value_with_time(
                     egui::Id::new(("kpi", k.title)),
                     k.value,
-                    if motion() { 0.65 } else { 0.0 },
+                    if motion() { theme::DUR_CIFRA } else { 0.0 },
                 );
                 ui.label(
                     egui::RichText::new(format!("{shown:.0}"))

@@ -582,8 +582,62 @@ pub const DUR_BASE: f32 = 0.2;
 /// `--dur-slow` — 320 ms.
 pub const DUR_SLOW: f32 = 0.32;
 
+// ── LO QUE NO ES UNA TRANSICIÓN ─────────────────────────────────────────────
+//
+// Los tres de arriba son la escala de TRANSICIONES: algo pasa de un estado a
+// otro y hay que acompañarlo. Por eso acaba en 320 ms — más allá, una transición
+// deja de leerse como respuesta y empieza a leerse como espera.
+//
+// Estos dos son otra cosa, y por eso estaban escritos a mano: no acompañan un
+// cambio de estado, son el movimiento EN SÍ. Meterlos en la escala de arriba
+// habría sido forzarlos a un papel que no hacen; dejarlos sin nombre era dejar
+// dos números sueltos en mitad de una vista.
+
+/// `--dur-cifra` — 650 ms: lo que tarda una cifra del Dashboard en llegar a su
+/// valor nuevo.
+///
+/// Es LARGA A PROPÓSITO. El punto no es disimular el cambio sino que se vea que
+/// hay uno: una cifra que salta de golpe se lee como texto estático que alguien
+/// reemplazó, y entonces nadie se entera de que el número acaba de moverse.
+pub const DUR_CIFRA: f32 = 0.65;
+
+/// `--dur-pulso` — 500 ms de ida: medio ciclo del latido de «trabajando».
+///
+/// No tiene principio ni final, así que no es una duración de transición: es el
+/// periodo de una respiración. Un segundo entero por ciclo, que es el ritmo al
+/// que un latido se lee como vida y no como parpadeo.
+pub const DUR_PULSO: f32 = 0.5;
+
+/// `--ease-out`, la curva de entrada del CSS: rápida al principio y asentándose
+/// al final. Un movimiento lineal se nota mecánico justo porque nada en el
+/// mundo físico arranca y para de golpe.
+///
+/// VIVE AQUÍ, CON LAS DURACIONES, y no en `main.rs` como estaba: la curva y el
+/// tiempo son la misma decisión partida en dos, y tenerlas en ficheros distintos
+/// es cómo se acaba con seis sitios suavizados y cuatro sin suavizar sin que
+/// nadie lo haya decidido.
+///
+/// SOLO PARA PROGRESOS de 0 a 1 —lo que devuelve `animate_bool_with_time`—.
+/// NUNCA sobre lo que devuelve `animate_value_with_time`, que ya es el valor
+/// interpolado y no una fracción: un medidor parado en 0.5 saldría pintado a
+/// 0.875. Los cuatro sitios que animan valores están lineales por obligación, no
+/// por olvido.
+pub fn ease_out(t: f32) -> f32 {
+    1.0 - (1.0 - t).powi(3)
+}
+
 // ── Radios ───────────────────────────────────────────────────────────────────
 
+/// `--r-xs` — lo pequeño de verdad: un control de veintidós de alto, un
+/// rectángulo pintado dentro de una fila.
+///
+/// EL PELDAÑO QUE FALTABA. La escala empezaba en 8 y por debajo no había nada,
+/// así que seis sitios escribían un `6.0` a mano. No es que el 6 estuviera mal
+/// —a esa altura el 8 se pasa y se lee como cápsula fallida— es que no tenía
+/// nombre, y un número sin nombre es un número que el siguiente copia mal. Ya
+/// pasó: la nota de `concentrico` cuenta un segmentado que llevaba 6 donde
+/// tocaba 5, y el 6 venía justo de copiar el de al lado.
+pub const R_XS: f32 = 6.0;
 /// `--r-sm` — controles, chips.
 pub const R_SM: f32 = 8.0;
 /// `--r-md` — botones, campos, elementos de navegación.
@@ -601,9 +655,15 @@ pub const R_LG: f32 = 12.0;
 /// justo lo que hay que evitar.
 ///
 /// La familia de píldoras de Lucy ya era cápsula de verdad —`tag_chip` con 9
-/// sobre 18, `insignia` con 11 sobre 22, `meter` con `h / 2.0`, y cinco sitios
+/// sobre 18, `insignia` con 11 sobre 22, `meter` con `h / 2.0`, y varios sitios
 /// más con un 999 que se pasa de largo a propósito— pero cada una a su manera.
 /// Esto es esa misma cuenta, con nombre.
+///
+/// QUEDAN DOS `999` Y SE QUEDAN. Son dos `Frame` cuya altura la decide el texto
+/// que llevan dentro, así que no hay alto que pasarle a esta función: el 999 es
+/// ahí la forma correcta de decir «redondea todo lo que puedas», y egui lo recorta
+/// a la mitad del lado corto. Los otros dos que había —los del chip de alerta—
+/// sí tenían su altura a la vista, `ALERTA_H`, y ahora la usan.
 pub fn capsule(alto: f32) -> Rounding {
     Rounding::same(alto / 2.0)
 }

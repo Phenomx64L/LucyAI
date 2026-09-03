@@ -416,7 +416,7 @@ impl App {
                             // de la nueva entrarían ya hechos.
                             let id_bloque = ui.id().with((&h.id, b.desde));
                             let entrada = if motion() && es_peticion {
-                                ease_out(ui.ctx().animate_bool_with_time(
+                                theme::ease_out(ui.ctx().animate_bool_with_time(
                                     id_bloque,
                                     true,
                                     theme::DUR_SLOW,

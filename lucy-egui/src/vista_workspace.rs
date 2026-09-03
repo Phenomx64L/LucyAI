@@ -201,7 +201,7 @@ impl App {
                                     1.0_f32,
                                     theme::amber().linear_multiply(0.4),
                                 ))
-                                .rounding(egui::Rounding::same(6.0))
+                                .rounding(egui::Rounding::same(theme::R_XS))
                                 .min_size(egui::vec2(0.0, 22.0));
                                 if ui
                                     .add_enabled(!busy, b)
@@ -258,7 +258,7 @@ impl App {
                         )
                         .fill(theme::acc())
                         .stroke(egui::Stroke::NONE)
-                        .rounding(egui::Rounding::same(6.0))
+                        .rounding(egui::Rounding::same(theme::R_XS))
                         .min_size(egui::vec2(0.0, 22.0));
                         if ui
                             .add_enabled(!busy, b)
