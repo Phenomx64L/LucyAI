@@ -2392,6 +2392,13 @@ pub const FRASES: &[Frase] = &[
         "Transkription fehlgeschlagen: {e}",
     ),
     f!(
+        "No se resuelve con un solo comando: {motivo}",
+        "This takes more than one command: {motivo}",
+        "Não se resolve com um só comando: {motivo}",
+        "Cela ne tient pas en une seule commande : {motivo}",
+        "Das geht nicht mit einem einzigen Befehl: {motivo}",
+    ),
+    f!(
         "No supe convertir eso en un comando.",
         "I couldn't turn that into a command.",
         "Não soube converter isso num comando.",
