@@ -34,12 +34,11 @@ pub fn normalize(cmd: &str) -> String {
     let mut s = cmd.to_string();
     // Comilla invertida de PowerShell y acento circunflejo de cmd: los dos
     // escapan el carácter siguiente y los dos parten una palabra por la mitad.
-    s = Regex::new(r"[`^]([^\r\n])").unwrap().replace_all(&s, "$1").into_owned();
+    s = ESCAPES.replace_all(&s, "$1").into_owned();
     // Concatenación de cadenas: 'Remo' + 've-Item'. Seis vueltas, que es lo que
     // hace el original — más niveles solo aparecen en un ataque de laboratorio.
-    let concat = Regex::new(r#"(['"])([^'"`]*)['"]\s*\+\s*['"]([^'"`]*)['"]"#).unwrap();
     for _ in 0..6 {
-        let nuevo = concat.replace_all(&s, "$1$2$3$1").into_owned();
+        let nuevo = CONCAT.replace_all(&s, "$1$2$3$1").into_owned();
         if nuevo == s {
             break;
         }
@@ -48,21 +47,78 @@ pub fn normalize(cmd: &str) -> String {
     // Variables de entorno de las dos sintaxis. `%WINDIR%\System32` y
     // `$env:SystemRoot\System32` son la misma ruta escrita de dos formas, y la
     // lista solo reconoce una.
-    for (var, valor) in [
+    for (pct, env, valor) in ENTORNO.iter() {
+        s = pct.replace_all(&s, *valor).into_owned();
+        s = env.replace_all(&s, *valor).into_owned();
+    }
+    s
+}
+
+/// La comilla invertida de PowerShell y el acento circunflejo de cmd.
+///
+/// Los dos escapan el carácter siguiente y los dos parten una palabra por la
+/// mitad: `Rem`+backtick+`ove-Item` se lee como dos trozos y esquiva la lista.
+///
+/// COMPILADA UNA VEZ, como las otras dos de este fichero. Estaba dentro de
+/// `normalize`, o sea que se compilaba en cada comprobación de comando. Ver
+/// [`ENTORNO`] para la medición completa.
+static ESCAPES: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"[`^]([^\r\n])").expect("regex de escapes"));
+
+/// La concatenación de cadenas: `'Remo' + 've-Item'`.
+///
+/// Y ÉSTA ERA LA CARA DE VERDAD, porque se usaba dentro de un bucle de seis
+/// vueltas. Compilarla fuera del bucle ya lo evitaba a medias —el original lo
+/// hacía— pero seguía siendo una compilación por llamada.
+static CONCAT: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"(['"])([^'"`]*)['"]\s*\+\s*['"]([^'"`]*)['"]"#).expect("regex de concatenación")
+});
+
+/// Las doce expresiones de las variables de entorno, compiladas UNA vez.
+///
+/// ── ESTO SE COMPILABA EN CADA LLAMADA, Y ESTÁ MEDIDO ─────────────────────────
+///
+/// Los doce `Regex::new` vivían dentro del bucle de `normalize`. Compilar una
+/// expresión regular no es gratis, y doce por llamada tampoco:
+///
+/// ```text
+///   antes:  5093 us por llamada
+///   frame:  16667 us a 60 fps
+/// ```
+///
+/// El TREINTA POR CIENTO del presupuesto de un fotograma, en una función que
+/// `coste_de_paso` llama —vía `solo_lectura`— en cada evaluación del bucle
+/// automático. El resto de este fichero ya usaba `Lazy` para sus dos listas: la
+/// del bucle era la excepción, no el criterio.
+///
+/// EL PATRÓN NO DEPENDE DE NADA DE FUERA. Las seis variables son literales
+/// —`systemroot`, `windir`…— sin metacaracteres, así que compilarlas al arrancar
+/// da exactamente lo mismo que compilarlas cada vez. Y de paso desaparecen los
+/// dos `unwrap()` de producción: aquí un patrón malformado revienta el primer
+/// test que toque el módulo, que es donde tiene que reventar.
+///
+/// Variables de entorno de las dos sintaxis. `%WINDIR%\System32` y
+/// `$env:SystemRoot\System32` son la misma ruta escrita de dos formas, y la
+/// lista solo reconoce una.
+static ENTORNO: Lazy<Vec<(Regex, Regex, &'static str)>> = Lazy::new(|| {
+    [
         ("systemroot", "C:\\Windows"),
         ("windir", "C:\\Windows"),
         ("systemdrive", "C:"),
         ("programdata", "C:\\ProgramData"),
         ("temp", "C:\\Windows\\Temp"),
         ("tmp", "C:\\Windows\\Temp"),
-    ] {
-        let pct = Regex::new(&format!(r"(?i)%{var}%")).unwrap();
-        s = pct.replace_all(&s, valor).into_owned();
-        let env = Regex::new(&format!(r"(?i)\$\{{?env:{var}\}}?")).unwrap();
-        s = env.replace_all(&s, valor).into_owned();
-    }
-    s
-}
+    ]
+    .into_iter()
+    .map(|(var, valor)| {
+        (
+            Regex::new(&format!(r"(?i)%{var}%")).expect("regex de %VAR%"),
+            Regex::new(&format!(r"(?i)\$\{{?env:{var}\}}?")).expect("regex de $env:VAR"),
+            valor,
+        )
+    })
+    .collect()
+});
 
 /// La lista, tal cual la de la app.
 ///
@@ -267,5 +323,84 @@ mod solo_mira {
     fn un_destructivo_disfrazado_de_consulta_no_cuela() {
         // `is_destructive` manda: si esa lista lo senala, da igual como empiece.
         assert!(!solo_lectura("Get-Content x | Invoke-Expression"));
+    }
+}
+
+#[cfg(test)]
+mod velocidad {
+    /// Cuánto cuesta normalizar un comando. Solo lectura.
+    ///
+    /// ── EXISTE PORQUE AQUÍ HUBO UN FALLO DE 5 MILISEGUNDOS ───────────────────
+    ///
+    /// `normalize` compilaba catorce expresiones regulares en CADA llamada: dos
+    /// al principio y doce en el bucle de variables de entorno. Y no es una
+    /// función de arranque — `coste_de_paso` la llama a través de
+    /// `solo_lectura` en cada evaluación del bucle automático.
+    ///
+    /// ```text
+    ///   antes    5093 us por llamada    (el 30 % de un frame a 60 fps)
+    ///   después    16 us por llamada    (el 0,1 %)
+    /// ```
+    ///
+    /// Se queda como instrumento, ignorado, porque un número medido una vez y
+    /// escrito en un comentario envejece sin avisar. Con esto se vuelve a medir:
+    ///
+    /// `cargo test -p lucy-core --lib velocidad::cuanto_cuesta_normalizar -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn cuanto_cuesta_normalizar() {
+        let cmd = "Get-Service | Where-Object Status -eq 'Stopped' | Select-Object Name";
+        let n = 2_000;
+        let t = std::time::Instant::now();
+        for _ in 0..n {
+            std::hint::black_box(super::normalize(std::hint::black_box(cmd)));
+        }
+        let d = t.elapsed();
+        println!(
+            "
+  {n} llamadas en {:?}  ->  {:.1} us por llamada",
+            d,
+            d.as_secs_f64() * 1e6 / n as f64
+        );
+        println!("  (a 60 fps, un frame son 16667 us)
+");
+    }
+
+    /// LAS EXPRESIONES NO SE VUELVEN A COMPILAR POR LLAMADA.
+    ///
+    /// El guardián de la regresión, y mira el tiempo porque es lo único que
+    /// distingue las dos versiones: las dos dan el mismo resultado. Un umbral
+    /// generoso —cien veces el coste medido— para que no se caiga en una máquina
+    /// cargada ni en una compilación de depuración lenta, pero que se cae seguro
+    /// si alguien vuelve a meter un `Regex::new` dentro de la función.
+    #[test]
+    fn normalizar_no_recompila_sus_expresiones() {
+        let cmd = r"Remove-Item %WINDIR%\System32 -Recurse";
+        // Una primera para que `Lazy` haga su trabajo fuera de la medición.
+        let _ = super::normalize(cmd);
+        let n = 200;
+        let t = std::time::Instant::now();
+        for _ in 0..n {
+            std::hint::black_box(super::normalize(std::hint::black_box(cmd)));
+        }
+        let us = t.elapsed().as_secs_f64() * 1e6 / n as f64;
+        assert!(
+            us < 1_600.0,
+            "normalizar cuesta {us:.0} us por llamada: alguien volvió a compilar \
+             expresiones dentro de la función (medido: 16 us con `Lazy`, 5093 sin él)"
+        );
+    }
+
+    /// Y que la normalización SIGUE HACIENDO LO MISMO tras el cambio.
+    ///
+    /// La optimización no vale nada si cambia lo que la lista reconoce: esto es
+    /// lo que decide si un comando pide confirmación antes de correr.
+    #[test]
+    fn la_normalizacion_no_cambio_con_el_cambio() {
+        // Los tres disfraces que la funcion deshace, uno por mecanismo.
+        assert!(super::normalize(r"Remo`ve-Item C:\x").contains("Remove-Item"));
+        assert!(super::normalize("'Remo' + 've-Item'").contains("Remove-Item"));
+        assert!(super::normalize(r"del %WINDIR%\System32").contains(r"C:\Windows"));
+        assert!(super::normalize("del $env:SystemRoot").contains(r"C:\Windows"));
     }
 }
