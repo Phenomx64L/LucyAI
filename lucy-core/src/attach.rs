@@ -282,7 +282,61 @@ pub fn b64_encode(bytes: &[u8]) -> String {
     out
 }
 
+
+/// Una imagen reducida, lista para subir a la GPU.
+///
+/// EN RGBA CRUDO y no en un `DynamicImage`: quien la recibe es el shell, y lo
+/// unico que sabe hacer con esto es armar una textura. Devolver el tipo del
+/// crate `image` obligaria al shell a depender de `image` para nada.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Miniatura {
+    pub ancho: u32,
+    pub alto: u32,
+    /// Cuatro bytes por pixel, sin padding.
+    pub rgba: Vec<u8>,
+}
+
+/// El lado maximo de una miniatura, en pixeles.
+///
+/// ── POR QUE 160 Y NO EL TAMAÑO DE PANTALLA ───────────────────────────────────
+///
+/// La miniatura sube a la GPU como textura y se queda ahi mientras el mensaje
+/// este en la conversacion. Una captura de 4K son 33 MB en RGBA; treinta
+/// mensajes con captura serian un giga de memoria de video por una conversacion
+/// de una tarde.
+///
+/// 160 es lo que se ve: un chip que cabe en la fila del compositor y se
+/// reconoce de un vistazo. Quien quiera mirarla de verdad abre el fichero.
+pub const LADO_MINIATURA: u32 = 160;
+
+/// Reduce una imagen del disco. `None` si no es una imagen o no se pudo leer.
+///
+/// BLOQUEANTE: decodificar una captura de pantalla son decenas de milisegundos
+/// y un frame son 16,7. Quien llama ya esta en un hilo.
+///
+/// SE MANTIENE LA PROPORCION. `thumbnail` de `image` encaja la imagen DENTRO del
+/// cuadro sin deformarla, asi que una captura apaisada sale apaisada. Deformarla
+/// para llenar un cuadrado haria irreconocible justo lo que la miniatura viene a
+/// hacer reconocible.
+pub fn miniatura(ruta: &std::path::Path, lado: u32) -> Option<Miniatura> {
+    if Kind::of(ruta) != Kind::Image {
+        return None;
+    }
+    let img = image::open(ruta).ok()?;
+    let mini = img.thumbnail(lado, lado).to_rgba8();
+    Some(Miniatura {
+        ancho: mini.width(),
+        alto: mini.height(),
+        rgba: mini.into_raw(),
+    })
+}
+
 #[cfg(test)]
+// Igual que en `maintenance`, `suggest`, `clipboard` y `nexshell`: la asercion
+// del lado de la miniatura compara CONSTANTES entre si. Clippy la ve evaluable en
+// compilacion y avisa; es una guarda de invariante — fija que una miniatura siga
+// siendo una miniatura, porque lo que la hace pequeña es que sube a la GPU.
+#[allow(clippy::assertions_on_constants)]
 mod tests {
     use super::*;
     use std::path::Path;
@@ -424,5 +478,43 @@ mod tests {
         let a = Attachment::read(Path::new("no-existe-este-fichero.txt"));
         assert!(!a.blocked.is_empty());
         assert_eq!(a.name, "no-existe-este-fichero.txt");
+    }
+
+    #[test]
+    fn una_miniatura_cabe_en_su_cuadro_y_no_se_deforma() {
+        // Contra un PNG de verdad: el icono del propio proyecto, que es cuadrado
+        // de 256. Si esto se cae, o el crate `image` perdio el formato o la
+        // ruta cambio — las dos cosas hay que saberlas.
+        let icono = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../lucy-svelte/icon.png");
+        if !icono.exists() {
+            // Sin el repositorio unificado al lado no hay contra que medir.
+            return;
+        }
+        let m = miniatura(&icono, LADO_MINIATURA).expect("no decodifico el PNG");
+        assert!(m.ancho <= LADO_MINIATURA && m.alto <= LADO_MINIATURA, "{}x{}", m.ancho, m.alto);
+        assert!(m.ancho.max(m.alto) == LADO_MINIATURA, "no lleno el cuadro por el lado largo");
+        assert_eq!(
+            m.rgba.len(),
+            (m.ancho * m.alto * 4) as usize,
+            "el buffer no cuadra con las dimensiones"
+        );
+    }
+
+    #[test]
+    fn lo_que_no_es_una_imagen_no_da_miniatura() {
+        // Un `.txt` o un PDF no tienen miniatura, y pedirsela al decodificador
+        // seria leer megabytes para fallar.
+        let txt = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+        assert!(miniatura(&txt, LADO_MINIATURA).is_none());
+        assert!(miniatura(std::path::Path::new("no-existe.png"), LADO_MINIATURA).is_none());
+    }
+
+    #[test]
+    fn el_lado_esta_acotado_porque_esto_sube_a_la_gpu() {
+        // Una captura de 4K son 33 MB en RGBA. Treinta mensajes con captura
+        // serian un giga de memoria de video por una conversacion de una tarde.
+        assert!(LADO_MINIATURA <= 320, "una miniatura de este tamaño no es una miniatura");
+        assert!(LADO_MINIATURA >= 64, "por debajo de esto no se reconoce nada");
     }
 }

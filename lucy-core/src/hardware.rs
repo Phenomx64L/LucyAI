@@ -174,8 +174,15 @@ if (-not $serie) { $serie = $csp.IdentifyingNumber }
   gpus       = @(Get-CimInstance Win32_VideoController | ForEach-Object { [string]$_.Name })
 } | ConvertTo-Json -Compress
 "#;
+    // SIN VENTANA DE CONSOLA. Lucy es una aplicacion grafica: sin esta
+    // bandera, cada llamada parpadea —o deja abierta— una ventana negra en la
+    // cara del operador. Reportado al pegar: «se abre una ventana extraña de
+    // PowerShell, eso nunca habia pasado». La casa ya lo hacia en `hosts` y en
+    // `shell`; estos dos modulos son nuevos y se dejaron el detalle.
+    use std::os::windows::process::CommandExt;
     let salida = std::process::Command::new("powershell")
         .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", GUION])
+        .creation_flags(crate::shell::CREATE_NO_WINDOW)
         .output()
         .map_err(|e| format!("no se pudo lanzar PowerShell: {e}"))?;
     if !salida.status.success() {

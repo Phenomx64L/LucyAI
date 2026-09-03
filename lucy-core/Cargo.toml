@@ -47,7 +47,7 @@ winapi = { version = "0.3", features = [
 ] }
 # Codificación PNG de la captura. Sin características por defecto: el resto de
 # formatos que trae `image` son megabytes de decodificadores que aquí no se usan.
-image = { version = "0.25", default-features = false, features = ["png"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp"] }
 
 [features]
 default = []
