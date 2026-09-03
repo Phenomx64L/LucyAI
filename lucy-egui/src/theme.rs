@@ -275,36 +275,54 @@ pub struct Paleta {
 ///
 /// El hover baja lo mismo que bajaba antes, para que la distancia entre reposo y
 /// hover siga siendo la que era.
+/// ── LOS CUATRO CLAROS BAJARON UN PELDAÑO, Y NO POR GUSTO ────────────────────
+///
+/// Pasaban el contraste sobre las cuatro superficies, pero por centésimas: 4.51
+/// el Cian sobre `bg4`, 4.55 la Esmeralda. Y ahí no acaba la lista de sitios
+/// donde el acento hace de texto — `color_nivel` devuelve el par
+/// `(acc(), acc_bg())`, o sea ACENTO SOBRE SU PROPIO CHIP, que es la superficie
+/// más dura que existe porque el fondo lleva dentro el mismo color de la letra.
+///
+/// Y ese chip tiene un techo que no depende del tinte: cuando el tinte se
+/// desvanece el chip tiende a la superficie, así que el contraste sobre el chip
+/// NUNCA pasa del contraste sobre la superficie. Con los valores viejos ese techo
+/// era 4.51 —justo el mínimo— y el chip se quedaba debajo por definición. Bajar
+/// el alfa no podía arreglarlo; había que darle aire al acento.
+///
+/// EL HOVER SE MUEVE LO MISMO QUE LA BASE. Oscurecer solo la base habría dejado
+/// las dos a tres milésimas de luminosidad en el Cian: un control que no contesta
+/// al ratón, que es el mismo fallo mudo que ya documenta `bg3`. La separación de
+/// cada pareja se conserva exacta.
 pub const PALETAS: &[Paleta] = &[
     Paleta {
         nombre: "Esmeralda",
         clave: "esmeralda",
-        claro: (0x0E, 0x7B, 0x5B),
-        claro_hover: (0x0C, 0x67, 0x4C),
+        claro: (0x0D, 0x6E, 0x52),
+        claro_hover: (0x0B, 0x5A, 0x43),
         oscuro: (0x3D, 0xD6, 0xA4),
         oscuro_hover: (0x34, 0xC2, 0x96),
     },
     Paleta {
         nombre: "Cian",
         clave: "cian",
-        claro: (0x0C, 0x77, 0x8C),
-        claro_hover: (0x0B, 0x68, 0x7B),
+        claro: (0x0B, 0x6A, 0x7D),
+        claro_hover: (0x0A, 0x5B, 0x6C),
         oscuro: (0x4C, 0xD2, 0xE8),
         oscuro_hover: (0x3F, 0xBC, 0xD1),
     },
     Paleta {
         nombre: "Violeta",
         clave: "violeta",
-        claro: (0x6D, 0x4A, 0xCF),
-        claro_hover: (0x5B, 0x3C, 0xB3),
+        claro: (0x6A, 0x46, 0xCE),
+        claro_hover: (0x59, 0x3B, 0xAF),
         oscuro: (0xA8, 0x8B, 0xFF),
         oscuro_hover: (0x96, 0x79, 0xF0),
     },
     Paleta {
         nombre: "Magenta",
         clave: "magenta",
-        claro: (0xB8, 0x36, 0x8C),
-        claro_hover: (0x9C, 0x2B, 0x76),
+        claro: (0xA5, 0x30, 0x7E),
+        claro_hover: (0x89, 0x26, 0x67),
         oscuro: (0xF0, 0x7A, 0xC4),
         oscuro_hover: (0xDC, 0x69, 0xB1),
     },
@@ -359,6 +377,36 @@ pub fn acc_hover() -> Color32 {
 pub fn acc_ink() -> Color32 {
     if light() { Color32::from_rgb(0xFF, 0xFF, 0xFF) } else { Color32::from_rgb(0x07, 0x13, 0x0E) }
 }
+/// Un color al `alfa` por ciento, PREMULTIPLICADO EN GAMMA.
+///
+/// ── POR QUE NO SE USA `from_rgba_unmultiplied`, QUE ES LO NATURAL ───────────
+///
+/// Porque no hace lo que parece. Ese constructor premultiplica en espacio
+/// LINEAL y guarda el resultado en gamma:
+///
+///     guardado = gamma( lineal(canal) × alfa/255 )
+///
+/// Para el verde de la Esmeralda oscura —`0xD6`, alfa 31— eso da 81, donde la
+/// cuenta ingenua daría 26. El tinte que el comentario llamaba «al 12 %» se
+/// pintaba con un 38 % de fuerza, y nadie lo veía porque el número escrito era
+/// el correcto: el que mentía era el constructor.
+///
+/// LO QUE COSTABA. El chip de alerta pinta el texto ENCIMA de su propio tinte
+/// —`alerta_chip`, con el par que devuelve `color_nivel`— y con el tinte al 38 %
+/// el fondo se acerca tanto a la letra que el contraste caía a 2.77 en el chip
+/// CRÍTICO del tema oscuro, que es la cosa más importante que hay en pantalla.
+/// Ninguna combinación de alfa lo arreglaba: al 6 % seguía en 4.47.
+///
+/// `Color32` es gamma con alfa premultiplicado —lo dice su propia documentación,
+/// y su `lerp` opera en gamma—, así que multiplicar aquí en gamma es hablar en
+/// el idioma del tipo. El chip pasa a valer lo que dice, y de paso queda más
+/// discreto, que es hacia donde va esta interfaz.
+fn tinte(rgb: (u8, u8, u8), alfa: u8) -> Color32 {
+    let k = |v: u8| ((v as u16 * alfa as u16) / 255) as u8;
+    let (r, g, b) = rgb;
+    Color32::from_rgba_premultiplied(k(r), k(g), k(b), alfa)
+}
+
 /// `--accent-bg` — el acento al 12 %: chip teñido, píldora activa.
 ///
 /// CALCULADO DEL ACENTO y no escrito a mano como antes. Con cuatro paletas, una
@@ -366,38 +414,66 @@ pub fn acc_ink() -> Color32 {
 /// a mano cada vez que se toca un color — y que se desincronizan en silencio,
 /// dejando un chip verde en una interfaz violeta.
 pub fn acc_bg() -> Color32 {
-    let (r, g, b) = acc_rgb();
-    Color32::from_rgba_unmultiplied(r, g, b, 31)
+    tinte(acc_rgb(), 31)
 }
 /// `--accent-line` — el acento al 28 %.
 #[allow(dead_code)]
 pub fn acc_line() -> Color32 {
-    let (r, g, b) = acc_rgb();
-    Color32::from_rgba_unmultiplied(r, g, b, 71)
+    tinte(acc_rgb(), 71)
 }
 
 // ── Semánticos ───────────────────────────────────────────────────────────────
 // Contenidos, no de neón: el Cockpit se apoya en el contraste, no en el color.
+//
+// ── LOS TRES DEL TEMA CLARO SE OSCURECIERON, Y ESTA ES LA CUENTA ─────────────
+//
+// El guardián de contraste medía la escalera de texto y los cuatro acentos, pero
+// NO los semánticos. En ese hueco vivían los peores números de toda la interfaz:
+//
+//     ámbar  #B57614   3.27 sobre `bg4`   (y 3.04 sobre su propio chip)
+//     rojo   #D64545   3.79 sobre `bg4`
+//     azul   #5162DC   4.41 sobre `bg4`
+//
+// Y no era un color de adorno pagando el precio de serlo. De los 49 usos de
+// `amber` y los 46 de `red`, la inmensa mayoría son TEXTO: `.color(…)`,
+// `colored_label`, y los pares `("!", amber())` que rotulan un estado. El listón
+// es 4.5, no el 3.0 de una línea.
+//
+// El tema OSCURO no se tocó: pasaba entero, y con holgura —el ámbar oscuro da
+// 10.26 sobre el lienzo—. Esto era un problema del tema claro y de nadie más.
+//
+// Los tres valores nuevos son el más cercano al original que llega a 4.5 contra
+// LA PEOR superficie y contra su propio chip, moviendo SOLO la luminosidad: el
+// tono y la saturación no se tocan, así que es el mismo ámbar de siempre, más
+// hondo. Es el mismo criterio con el que ya se corrigió `faint()`.
 
 /// `--user` — el operador. También la subida de red.
 pub fn blue() -> Color32 {
-    if light() { Color32::from_rgb(0x51, 0x62, 0xDC) } else { Color32::from_rgb(0x80, 0x98, 0xFF) }
+    if light() { Color32::from_rgb(0x4F, 0x60, 0xDC) } else { Color32::from_rgb(0x80, 0x98, 0xFF) }
 }
 /// `--warning`.
 pub fn amber() -> Color32 {
-    if light() { Color32::from_rgb(0xB5, 0x76, 0x14) } else { Color32::from_rgb(0xE5, 0xB5, 0x67) }
+    if light() { Color32::from_rgb(0x86, 0x57, 0x0F) } else { Color32::from_rgb(0xE5, 0xB5, 0x67) }
 }
-/// `--warning-bg` — `rgba(229,181,103,0.12)`.
+/// `--warning-bg` — el ámbar al 12 %: chip de aviso.
+///
+/// CALCULADO DEL COLOR, como `acc_bg`. Antes eran dos constantes premultiplicadas
+/// escritas a mano —`(25,17,3,36)` en claro— y el problema no es que estuvieran
+/// mal: es que oscurecer `amber()` las habría dejado atrás, pintando texto ámbar
+/// nuevo sobre un chip ámbar viejo. Es exactamente la desincronización silenciosa
+/// que la nota de `acc_bg` describe, y aquí estaba esperando su turno.
 pub fn amber_bg() -> Color32 {
-    if light() { Color32::from_rgba_premultiplied(25, 17, 3, 36) } else { Color32::from_rgba_premultiplied(27, 21, 12, 31) }
+    let c = amber();
+    tinte((c.r(), c.g(), c.b()), 31)
 }
 /// `--danger`.
 pub fn red() -> Color32 {
-    if light() { Color32::from_rgb(0xD6, 0x45, 0x45) } else { Color32::from_rgb(0xF0, 0x6E, 0x6E) }
+    if light() { Color32::from_rgb(0xB5, 0x28, 0x28) } else { Color32::from_rgb(0xF0, 0x6E, 0x6E) }
 }
-/// `--danger-bg` — `rgba(240,110,110,0.12)`.
+/// `--danger-bg` — el rojo al 12 %: chip crítico. Derivado, ver `amber_bg`.
 pub fn red_bg() -> Color32 {
-    if light() { Color32::from_rgba_premultiplied(25, 8, 8, 31) } else { Color32::from_rgba_premultiplied(28, 13, 13, 31) }
+    let c = red();
+    tinte((c.r(), c.g(), c.b()), 31)
 }
 
 // ── Tipografía ───────────────────────────────────────────────────────────────
@@ -1043,10 +1119,15 @@ mod tests {
 
     #[test]
     fn the_palette_matches_the_cockpit_tokens() {
-        // Pinta los valores contra `src/lib/styles/cockpit-tokens.css` de la app
-        // real. Si allí se retoca el tema y aquí no, las dos interfaces divergen
-        // en silencio — que es exactamente la deriva que ya pasó una vez, cuando
-        // esto copiaba los tokens del Lucy clásico.
+        // NACIÓ COMPARANDO CONTRA `src/lib/styles/cockpit-tokens.css` de la V1,
+        // para que las dos caras no divergieran en silencio. Esa cara ya no
+        // existe: el repositorio se reestructuró y no queda una línea de Svelte,
+        // así que el cotejo se quedó sin la otra mitad.
+        //
+        // Se conserva por lo que hace HOY, que sigue valiendo: clava los valores
+        // del tema oscuro. Un retoque accidental —un dedo en un dígito hex— no se
+        // ve mirando la pantalla, y aquí sí se ve. El nombre se deja para no
+        // romper la traza con los commits que lo mencionan.
         let _t = serie();
         set_mode(Mode::Dark);
         assert_eq!(bg(), Color32::from_rgb(0x0A, 0x0E, 0x14), "--surface-0");
@@ -1092,7 +1173,11 @@ mod tests {
         set_mode(Mode::Light);
         assert!(light());
         assert_eq!(bg(), Color32::from_rgb(0xF4, 0xF6, 0xFA), "--surface-0 claro");
-        assert_eq!(acc(), Color32::from_rgb(0x0E, 0x7B, 0x5B), "--accent claro");
+        // `#0D6E52`, UN PELDAÑO POR DEBAJO DEL `#0E7B5B` DE ANTES. Aquel pasaba
+        // sobre las cuatro superficies por centésimas y no llegaba sobre su
+        // propio chip teñido, que es donde `color_nivel` lo pone. Lo comprueba
+        // `un_chip_tenido_es_una_superficie_mas`.
+        assert_eq!(acc(), Color32::from_rgb(0x0D, 0x6E, 0x52), "--accent claro");
         assert_eq!(txt(), Color32::from_rgb(0x0E, 0x16, 0x21), "--text-primary claro");
         set_mode(Mode::Dark);
     }
@@ -1168,6 +1253,29 @@ mod tests {
         [bg(), bg2(), bg3(), bg4()]
     }
 
+    /// Un color translúcido resuelto SOBRE una superficie opaca.
+    ///
+    /// Hace falta porque los chips teñidos son una superficie más y no estaban en
+    /// la lista. `amber_bg()` no es un color: es ámbar al 12 % esperando a que
+    /// algo se vea por debajo, y `contraste` sobre el valor crudo compara contra
+    /// un alfa que nadie llega a ver nunca.
+    fn compuesto(frente: Color32, fondo: Color32) -> Color32 {
+        let a = frente.a() as f32 / 255.0;
+        // `Color32` guarda SIEMPRE premultiplicado, venga de `from_rgba_unmultiplied`
+        // o de `from_rgba_premultiplied`. Sobre premultiplicado la mezcla es una
+        // suma —el canal ya trae su alfa dentro— y no el `f*a + b*(1-a)` de toda
+        // la vida, que lo aplicaría dos veces y dejaría el chip más pálido de lo
+        // que se ve.
+        let mezcla = |f: u8, b: u8| {
+            (f as f32 + b as f32 * (1.0 - a)).round().clamp(0.0, 255.0) as u8
+        };
+        Color32::from_rgb(
+            mezcla(frente.r(), fondo.r()),
+            mezcla(frente.g(), fondo.g()),
+            mezcla(frente.b(), fondo.b()),
+        )
+    }
+
     /// El mínimo de la norma para texto normal. Todo lo que se lee tiene que
     /// llegar aquí, contra CUALQUIERA de las superficies — no contra la mejor.
     const AA: f32 = 4.5;
@@ -1185,6 +1293,105 @@ mod tests {
                     assert!(
                         r >= AA,
                         "{m:?}: {nombre} sobre la superficie {i} da {r:.2}, y hace falta {AA}"
+                    );
+                }
+            }
+        }
+        set_mode(Mode::Dark);
+    }
+
+    #[test]
+    fn los_semanticos_tambien_son_texto() {
+        // EL HUECO POR EL QUE SE COLARON LOS PEORES NÚMEROS DE LA INTERFAZ. El
+        // guardián medía la escalera de texto y los cuatro acentos; el ámbar, el
+        // rojo y el azul no los miraba nadie. En claro daban 3.27, 3.79 y 4.41
+        // sobre `bg4` mientras todo lo demás pasaba.
+        //
+        // Y son texto: de los 49 usos de `amber` y los 46 de `red`, la mayoría
+        // son `.color(…)`, `colored_label` o pares `(rótulo, color)`. Ninguno
+        // pinta un relleno.
+        let _t = serie();
+        for m in [Mode::Dark, Mode::Light] {
+            set_mode(m);
+            for (nombre, color) in [("amber", amber()), ("red", red()), ("blue", blue())] {
+                for (i, s) in superficies().iter().enumerate() {
+                    let r = contraste(color, *s);
+                    assert!(
+                        r >= AA,
+                        "{m:?}: {nombre} sobre la superficie {i} da {r:.2}, y hace falta {AA}"
+                    );
+                }
+            }
+        }
+        set_mode(Mode::Dark);
+    }
+
+    #[test]
+    fn un_chip_tenido_es_una_superficie_mas() {
+        // LA SUPERFICIE MÁS DURA QUE EXISTE, y por eso se le olvida a todo el
+        // mundo: el fondo del chip lleva dentro el mismo color que la letra, así
+        // que el contraste sale mucho más bajo que sobre el lienzo. `color_nivel`
+        // devuelve exactamente estos tres pares —el chip de nivel de disco— y
+        // daban 3.04 el ámbar, 3.44 el rojo y 3.85–4.37 los acentos.
+        //
+        // El chip se resuelve sobre CADA superficie, porque un mismo chip cae
+        // sobre el lienzo en el panel y sobre `bg4` dentro de una fila.
+        let _t = serie();
+        for (i, p) in PALETAS.iter().enumerate() {
+            set_paleta(i);
+            for m in [Mode::Dark, Mode::Light] {
+                set_mode(m);
+                for (nombre, tinta, tinte) in [
+                    ("acento", acc(), acc_bg()),
+                    ("aviso", amber(), amber_bg()),
+                    ("crítico", red(), red_bg()),
+                ] {
+                    for (j, s) in superficies().iter().enumerate() {
+                        let chip = compuesto(tinte, *s);
+                        let r = contraste(tinta, chip);
+                        assert!(
+                            r >= AA,
+                            "{} en {m:?}: {nombre} sobre su chip en la superficie {j} \
+                             da {r:.2}, y hace falta {AA}",
+                            p.nombre
+                        );
+                    }
+                }
+            }
+        }
+        set_paleta(0);
+        set_mode(Mode::Dark);
+    }
+
+    #[test]
+    fn los_tintes_salen_de_su_color_y_no_de_una_tabla() {
+        // Las tres parejas color/chip se calculan del color. Escritas a mano
+        // —como estaban `amber_bg` y `red_bg`— sobreviven intactas a un retoque
+        // del color y dejan letra nueva sobre fondo viejo, sin avisar. Es la
+        // misma trampa que ya se cerró para el acento, y aquí seguía abierta.
+        let _t = serie();
+        for m in [Mode::Dark, Mode::Light] {
+            set_mode(m);
+            for (nombre, tinta, tinte) in [
+                ("acento", acc(), acc_bg()),
+                ("aviso", amber(), amber_bg()),
+                ("crítico", red(), red_bg()),
+            ] {
+                assert!(tinte.a() < 255, "{m:?}: el chip de {nombre} es opaco");
+                // Exacto, sin tolerancia: la premultiplicación en gamma es una
+                // multiplicación entera, así que el canal guardado TIENE que ser
+                // el producto. Si alguien vuelve a `from_rgba_unmultiplied` —que
+                // multiplica en lineal— esto salta, y salta por el motivo justo.
+                let a = tinte.a() as u16;
+                for (canal, x, y) in [
+                    ('r', tinte.r(), tinta.r()),
+                    ('g', tinte.g(), tinta.g()),
+                    ('b', tinte.b(), tinta.b()),
+                ] {
+                    let esperado = ((y as u16 * a) / 255) as u8;
+                    assert_eq!(
+                        x, esperado,
+                        "{m:?}: el chip de {nombre} no sale de su color (canal {canal})"
                     );
                 }
             }
