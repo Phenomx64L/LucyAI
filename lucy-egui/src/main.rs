@@ -19797,8 +19797,26 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                 self.nx_rx = None;
                 self.nx_busy = false;
                 let destino = self.nx_destino.take();
-                if cmd.is_empty() || cmd.contains(lucy_core::nexshell::NO_COMMAND) {
-                    self.nx_aviso(destino.as_ref(), i18n::tr("No supe convertir eso en un comando."));
+                // ── LA NEGATIVA, CON SU MOTIVO ───────────────────────────────
+                //
+                // Decía «No supe convertir eso en un comando» y ahí terminaba la
+                // conversación. El modelo SÍ sabía por qué —«instala winget» en
+                // un Server 2022 no es un comando, son varios pasos— pero no
+                // había dónde decirlo. Es el mismo agujero que tenía un comando
+                // fallido antes del diagnóstico: la respuesta se acaba justo
+                // donde empieza lo útil.
+                let sin = lucy_core::nexshell::motivo_sin_comando(&cmd);
+                if cmd.is_empty() || sin.is_some() {
+                    let motivo = sin.unwrap_or_default();
+                    let texto = if motivo.is_empty() {
+                        i18n::tr("No supe convertir eso en un comando.").to_string()
+                    } else {
+                        i18n::trf(
+                            "No se resuelve con un solo comando: {motivo}",
+                            &[("motivo", &motivo)],
+                        )
+                    };
+                    self.nx_aviso(destino.as_ref(), &texto);
                     return;
                 }
                 // La traducción vuelve al equipo QUE LA PIDIÓ. Sin guardar el
