@@ -319,6 +319,44 @@ fn openai_content(t: &Turn) -> serde_json::Value {
     serde_json::Value::Array(blocks)
 }
 
+/// Cómo viaja el prompt de sistema en el cuerpo de cada proveedor.
+///
+/// ── APARTE Y PURA PARA PODER PROBARLA ────────────────────────────────────────
+///
+/// Lo que se arregló aquí fue exactamente «una función que nadie llamaba»:
+/// `prompt::build` insertaba la marca de caché, la constante estaba, el orden por
+/// estabilidad estaba, y `stream` mandaba el sistema como una cadena plana. Una
+/// prueba de `parte_por_cache` a solas habría repetido el error — habría pasado
+/// igual de verde con el cableado desconectado.
+///
+/// ── LOS DOS COMPORTAMIENTOS ─────────────────────────────────────────────────
+///
+/// Anthropic recibe DOS BLOQUES con el punto de corte al final del primero. La
+/// caché es una coincidencia de prefijo: se cachea todo lo anterior al
+/// `cache_control`, y un byte distinto antes de ese punto invalida el resto. Por
+/// eso `build` deja lo estable delante y aquí solo hay que partir por la marca.
+///
+/// Los demás reciben UNA CADENA SIN LA MARCA. Ninguno cachea por punto de corte,
+/// y hasta ahora se les entregaba el comentario HTML literal en medio de las
+/// instrucciones — a los cuatro, incluidos los tres que ni siquiera tienen caché.
+fn sistema_json(p: Provider, system: &str) -> serde_json::Value {
+    let (estable, volatil) = crate::prompt::parte_por_cache(system);
+    match p {
+        Provider::Anthropic => {
+            let mut bloques = vec![serde_json::json!({
+                "type": "text",
+                "text": estable,
+                "cache_control": { "type": "ephemeral" },
+            })];
+            if !volatil.is_empty() {
+                bloques.push(serde_json::json!({ "type": "text", "text": volatil }));
+            }
+            serde_json::Value::Array(bloques)
+        }
+        _ => serde_json::json!(crate::prompt::sin_marca(system).as_ref()),
+    }
+}
+
 fn stream(
     p: Provider,
     model: &str,
@@ -347,7 +385,7 @@ fn stream(
                 "messages": msgs,
             });
             if !system.is_empty() {
-                body["system"] = serde_json::json!(system);
+                body["system"] = sistema_json(p, &system);
             }
             if let Some(e) = effort {
                 body["output_config"] = serde_json::json!({ "effort": e });
@@ -375,8 +413,10 @@ fn stream(
                 .collect();
             let mut body = serde_json::json!({ "contents": contents });
             if !system.is_empty() {
+                // Sin la marca: Gemini no cachea por punto de corte, y el
+                // comentario HTML solo sería ruido en sus instrucciones.
                 body["systemInstruction"] =
-                    serde_json::json!({ "parts": [{ "text": system }] });
+                    serde_json::json!({ "parts": [{ "text": sistema_json(p, &system) }] });
             }
             (
                 // La clave va en cabecera y no en la query: una URL con el
@@ -390,7 +430,12 @@ fn stream(
             // lista, y es el único sitio donde va.
             let mut msgs: Vec<serde_json::Value> = Vec::with_capacity(hist.len() + 1);
             if !system.is_empty() {
-                msgs.push(serde_json::json!({ "role": "system", "content": system }));
+                // Sin la marca, por lo mismo que Gemini. Aquí entran también
+                // Ollama y los cuatro compatibles con OpenAI: ninguno cachea por
+                // punto de corte, y el comentario se les entregaba literal.
+                msgs.push(
+                    serde_json::json!({ "role": "system", "content": sistema_json(p, &system) }),
+                );
             }
             msgs.extend(
                 hist.iter().map(|t| {
@@ -496,7 +541,27 @@ pub fn usage(p: Provider, v: &serde_json::Value) -> Option<(u32, u32)> {
     match p {
         Provider::Anthropic => {
             let u = v.get("usage").or_else(|| v.get("message")?.get("usage"))?;
-            Some((n(u.get("input_tokens")), n(u.get("output_tokens"))))
+            // ── LOS TRES CAMPOS, Y SUMARLOS NO ES OPCIONAL ───────────────────
+            //
+            // `input_tokens` de Anthropic es SOLO EL RESTO NO CACHEADO. El total
+            // del prompt es `input_tokens + cache_creation + cache_read`, y
+            // desde que el sistema viaja con punto de corte esos dos últimos se
+            // llevan unos dos mil tokens por turno.
+            //
+            // Leyendo solo el primero, el contador de gasto habría pasado a
+            // marcar cincuenta tokens donde hay dos mil — y de ese contador
+            // cuelga el tope que apaga el automático. Un tope que no se entera
+            // de lo que se gasta no es un tope.
+            //
+            // PENDIENTE, Y ES EL DESCUENTO: una lectura de caché cuesta la
+            // décima parte que un token normal, y aquí se suman al mismo precio.
+            // O sea que la cifra es un TECHO honesto —nunca por debajo— y sigue
+            // valiendo lo mismo que antes de conectar la caché. Enseñar el
+            // ahorro de verdad pide columnas nuevas en la tabla de gasto.
+            let entrada = n(u.get("input_tokens"))
+                + n(u.get("cache_creation_input_tokens"))
+                + n(u.get("cache_read_input_tokens"));
+            Some((entrada, n(u.get("output_tokens"))))
         }
         Provider::Gemini => {
             let u = v.get("usageMetadata")?;
@@ -875,5 +940,125 @@ mod motivos {
         );
         // Una trama normal de texto no trae uso, y no debe inventarlo.
         assert_eq!(usage(Provider::OpenAi, &json!({"choices":[{"delta":{"content":"x"}}]})), None);
+    }
+}
+
+#[cfg(test)]
+mod cache_de_prompt {
+    use super::*;
+    use crate::prompt::CACHE_BOUNDARY;
+
+    /// Un sistema con las dos mitades, como el que arma `prompt::build`.
+    fn sistema() -> String {
+        format!("Eres Lucy y estas son tus reglas.\n\n{CACHE_BOUNDARY}\nEl equipo va al 4 % de CPU.")
+    }
+
+    #[test]
+    fn anthropic_recibe_dos_bloques_con_el_corte_al_final_del_estable() {
+        let v = sistema_json(Provider::Anthropic, &sistema());
+        let bloques = v.as_array().expect("el sistema de Anthropic va en bloques");
+        assert_eq!(bloques.len(), 2, "lo estable y lo que cambia van separados");
+
+        // El punto de corte va en el PRIMERO. En el segundo sería inútil: se
+        // cachearía también lo que cambia en cada turno, así que cada petición
+        // escribiría una entrada nueva y ninguna se leería jamás — pagando la
+        // prima de escritura sin ahorrar un token.
+        assert_eq!(
+            bloques[0]["cache_control"]["type"], "ephemeral",
+            "lo estable no lleva punto de corte: no se cachea nada"
+        );
+        assert!(
+            bloques[1].get("cache_control").is_none(),
+            "el punto de corte alcanza a lo que cambia: cada turno escribiría una caché nueva"
+        );
+        assert!(bloques[0]["text"].as_str().unwrap().contains("Eres Lucy"));
+        assert!(bloques[1]["text"].as_str().unwrap().contains("4 %"));
+    }
+
+    #[test]
+    fn la_marca_no_llega_a_ningun_proveedor() {
+        // ERA UN FALLO REAL Y DE LOS CALLADOS: el comentario HTML se le entregaba
+        // literal al modelo en medio de sus instrucciones, en los cuatro
+        // proveedores — incluidos los tres que ni siquiera tienen caché de
+        // prompt y por tanto no ganaban nada a cambio del ruido.
+        for p in [
+            Provider::Anthropic,
+            Provider::Gemini,
+            Provider::OpenAi,
+            Provider::Xai,
+            Provider::DeepSeek,
+            Provider::Nvidia,
+            Provider::Ollama,
+        ] {
+            let texto = sistema_json(p, &sistema()).to_string();
+            assert!(
+                !texto.contains("LUCY_CACHE_BOUNDARY"),
+                "{}: la marca viaja al modelo",
+                p.label()
+            );
+        }
+    }
+
+    #[test]
+    fn partir_el_sistema_no_pierde_ni_una_palabra() {
+        // La comprobación que hace segura toda la pieza. Un corte que se coma
+        // una sección no falla por ninguna parte: el modelo simplemente deja de
+        // saber algo, y eso se manifiesta como «Lucy se ha vuelto tonta».
+        let s = sistema();
+        let (estable, volatil) = crate::prompt::parte_por_cache(&s);
+        let junto: String = format!("{estable}{volatil}").split_whitespace().collect();
+        let original: String = s.replace(CACHE_BOUNDARY, "").split_whitespace().collect();
+        assert_eq!(junto, original, "el corte perdió texto");
+    }
+
+    #[test]
+    fn sin_marca_todo_es_estable_y_se_cachea_entero() {
+        // `prompt_weak` no escribe la marca, y un prompt en el que ninguna
+        // sección resultó inestable tampoco. Ahí todo es cacheable, y va en un
+        // solo bloque con su punto de corte.
+        let v = sistema_json(Provider::Anthropic, "Solo lo fijo.");
+        let bloques = v.as_array().unwrap();
+        assert_eq!(bloques.len(), 1);
+        assert_eq!(bloques[0]["cache_control"]["type"], "ephemeral");
+        assert_eq!(sistema_json(Provider::Ollama, "Solo lo fijo."), "Solo lo fijo.");
+    }
+}
+
+#[cfg(test)]
+mod uso_con_cache {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn el_prompt_cacheado_sigue_contando_entero() {
+        // LO QUE ESTO EVITA. Con el sistema partido por punto de corte,
+        // `input_tokens` de Anthropic pasa a ser solo el resto: los ~2.000
+        // tokens del prefijo se facturan en los otros dos campos. Leyendo solo
+        // el primero, el contador de gasto marcaría cincuenta donde hay dos mil
+        // — y de ese contador cuelga el tope que apaga el modo automático.
+        let trama = json!({"usage": {
+            "input_tokens": 53,
+            "cache_creation_input_tokens": 2022,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 140
+        }});
+        assert_eq!(usage(Provider::Anthropic, &trama), Some((2075, 140)));
+
+        // El turno siguiente lee lo que el anterior escribió. Mismo total.
+        let leido = json!({"usage": {
+            "input_tokens": 53,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 2022,
+            "output_tokens": 90
+        }});
+        assert_eq!(usage(Provider::Anthropic, &leido), Some((2075, 90)));
+    }
+
+    #[test]
+    fn sin_cache_la_cuenta_no_cambia() {
+        // Una respuesta sin los campos de caché —un modelo que no la soporta, o
+        // un prefijo por debajo del mínimo cacheable— cuenta como siempre.
+        let trama = json!({"usage": {"input_tokens": 2075, "output_tokens": 140}});
+        assert_eq!(usage(Provider::Anthropic, &trama), Some((2075, 140)));
     }
 }

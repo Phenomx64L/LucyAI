@@ -32,6 +32,52 @@ use std::sync::{Mutex, OnceLock};
 /// manda y la otra la lee, se entiendan.
 pub const CACHE_BOUNDARY: &str = "<!-- LUCY_CACHE_BOUNDARY -->";
 
+/// El prompt partido en dos: lo estable y lo que cambia.
+///
+/// ── LO QUE FALTABA, Y ERA LA LÍNEA QUE ENCIENDE TODO ESTO ───────────────────
+///
+/// Este fichero está organizado entero alrededor de la marca: `stable()` en el
+/// trait, el orden por prioridad, un test que fija que ninguna sección estable
+/// caiga por debajo de una que cambia, y comentarios que explican que Principles
+/// e Insights van por debajo de 40 «para que se cobren como caché».
+///
+/// Y nadie leía la marca. `build` la insertaba, `cloud` mandaba el sistema como
+/// una cadena plana, y el único sitio que volvía a mirar la constante era un
+/// test. O sea: la mitad estable se pagaba entera en cada vuelta de cada cadena
+/// automática —que es justo donde más vueltas hay—, y el comentario HTML se le
+/// entregaba literal al modelo en medio de sus instrucciones, en los cuatro
+/// proveedores, incluidos los tres que ni siquiera tienen caché de prompt.
+///
+/// ── POR QUÉ DEVUELVE DOS TROZOS Y NO QUITA LA MARCA ─────────────────────────
+///
+/// Porque los dos consumidores necesitan cosas distintas. Anthropic quiere los
+/// dos trozos por separado, para poner el punto de corte al final del primero;
+/// los demás quieren el texto sin la marca. Una función que solo la borrara
+/// dejaría al llamante que sí puede cachear sin forma de saber por dónde partir.
+///
+/// Sin marca —el prompt de los modelos flojos, o uno en el que no hubo ninguna
+/// sección inestable— todo es estable y el segundo trozo va vacío.
+pub fn parte_por_cache(p: &str) -> (&str, &str) {
+    match p.split_once(CACHE_BOUNDARY) {
+        Some((estable, volatil)) => (estable.trim_end(), volatil.trim_start()),
+        None => (p, ""),
+    }
+}
+
+/// El prompt entero sin la marca, para quien no sabe cachear.
+///
+/// Gemini, los compatibles con OpenAI y Ollama reciben el sistema como una sola
+/// cadena. Lo que NO pueden recibir es el comentario HTML en medio: es ruido en
+/// las instrucciones de un modelo que además no gana nada a cambio.
+pub fn sin_marca(p: &str) -> std::borrow::Cow<'_, str> {
+    let (estable, volatil) = parte_por_cache(p);
+    if volatil.is_empty() {
+        std::borrow::Cow::Borrowed(estable)
+    } else {
+        std::borrow::Cow::Owned(format!("{estable}\n\n{volatil}"))
+    }
+}
+
 /// Todo lo que una sección necesita para decidir si viene al caso.
 ///
 /// Referencias, sin reservar memoria: se construye en cada turno y llega a
@@ -1374,6 +1420,31 @@ mod tests {
         assert!(p.contains("linea 49"));
         assert!(!p.contains("linea 29"), "solo las últimas {LOG_LINES}");
         assert!(p.find("linea 30") < p.find("linea 49"), "el log va en su orden");
+    }
+
+    /// Cuánto mide de verdad la mitad estable del prompt.
+    ///
+    /// NO ES CURIOSIDAD: el mínimo cacheable de la API va de 512 tokens en los
+    /// modelos nuevos a 4096 en Haiku 4.5 y Opus 4.6, y por debajo de ese suelo
+    /// la caché NO FALLA — simplemente no ocurre, con la marca puesta y sin
+    /// error. Si la mitad estable no llega, conectar la caché no ahorra nada.
+    #[test]
+    #[ignore = "instrumento: cargo test -- --ignored cuanto_mide_la_mitad_estable --nocapture"]
+    fn cuanto_mide_la_mitad_estable() {
+        let _s = serie();
+        let m = snap();
+        let p = build(&Ctx { machine: Some(&m), ..Default::default() });
+        let (estable, volatil) = parte_por_cache(&p);
+        // Regla de dedo de la casa: ~4 caracteres por token en español.
+        let tok = |s: &str| s.chars().count() / 4;
+        println!(
+            "estable {} car (~{} tok) · volatil {} car (~{} tok) · total {} car",
+            estable.chars().count(),
+            tok(estable),
+            volatil.chars().count(),
+            tok(volatil),
+            p.chars().count()
+        );
     }
 
     #[test]
