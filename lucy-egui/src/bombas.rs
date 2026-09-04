@@ -939,12 +939,14 @@ impl App {
             self.nx_exec_rx = None;
             self.nx_busy = false;
             self.nx_fase = None;
-            // `manual`: este lo escribió el operador a mano en la terminal, y esa
-            // distinción con los de Lucy es lo que hace útil la columna.
+            // EL ORIGEN VIENE CON EL COMANDO, no cableado aquí. Esta línea
+            // decía «manual» fija, con un comentario que afirmaba que por aquí
+            // solo pasa lo que teclea el operador — y la traducción del modelo
+            // pasa por aquí también, desde la línea 1115 de este mismo fichero.
             let ms = self.nx_started.map_or(0, |t| t.elapsed().as_millis() as u64);
             let (cmd, salida) = self.nx_ultimo_comando(&id);
             if !cmd.is_empty() {
-                self.auditar(None, &cmd, &id, "manual", ok, ms, &salida);
+                self.auditar(None, &cmd, &id, self.nx_origen, ok, ms, &salida);
             }
             self.nx_started = None;
             if !ok {
@@ -1111,9 +1113,11 @@ impl App {
                 // La traducción vuelve al equipo QUE LA PIDIÓ. Sin guardar el
                 // destino, un comando pensado para una Debian remota acabaría
                 // ejecutándose en el PowerShell de aquí.
+                // Las dos ramas son la MISMA procedencia: esto es la
+                // traduccion que acaba de escribir el modelo.
                 match destino {
-                    Some(h) => self.nx_gate_remote(&h, cmd),
-                    None => self.nx_maybe_run(cmd),
+                    Some(h) => self.nx_gate_remote(&h, cmd, "ai"),
+                    None => self.nx_maybe_run(cmd, "ai"),
                 }
             }
             // Se dice en la propia pantalla y no en un diálogo: el operador está

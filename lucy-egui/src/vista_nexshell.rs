@@ -234,7 +234,9 @@ impl App {
                 {
                     self.nx_sugerido = None;
                     let host = h.clone();
-                    self.nx_gate_remote(&host, cmd);
+                    // Lo escribio Lucy y lo acepta una persona: el caso central
+                    // de `aceptacion()`.
+                    self.nx_gate_remote(&host, cmd, "ai");
                 }
                 if ui
                     .add(egui::Button::new("✕").small())
@@ -278,8 +280,8 @@ impl App {
             }))
             .show_separator_line(false)
             .show_inside(ui, |ui| {
-                if let Some(cmd) = confirm_strip(ui, &mut self.nx_confirm, Some(&h.id)) {
-                    self.nx_run_remote(&h, &cmd);
+                if let Some(p) = confirm_strip(ui, &mut self.nx_confirm, Some(&h.id)) {
+                    self.nx_run_remote(&h, &p.cmd, p.origen);
                 }
                 egui::Frame::none()
                     .fill(theme::bg3())
@@ -589,7 +591,9 @@ impl App {
         // exactamente eso: un comando que se lanza contra un servidor.
         if let Some(cmd) = repetir {
             let host = h.clone();
-            self.nx_gate_remote(&host, cmd);
+            // «Repetir» no es una propuesta nueva de Lucy: es una persona
+            // relanzando algo. Contarlo como propuesta inflaria `aceptacion()`.
+            self.nx_gate_remote(&host, cmd, "manual");
         }
         if enviar {
             let texto = std::mem::take(&mut self.term_input).trim().to_string();
@@ -609,7 +613,7 @@ impl App {
                 // en la mitad de los sitios: en un remoto, escribir una frase
                 // intentaba ejecutarla como comando.
                 if lucy_core::nexshell::looks_like_command(&texto) {
-                    self.nx_gate_remote(&h, texto);
+                    self.nx_gate_remote(&h, texto, "manual");
                 } else {
                     self.nx_translate(Some(h.clone()), texto);
                 }
@@ -720,7 +724,12 @@ impl App {
     /// está mirando. En remoto corre en un servidor, con una credencial
     /// guardada, y lo único que vuelve son unas líneas de salida. Tener MENOS
     /// control en el camino que llega más lejos es exactamente al revés.
-    pub(crate) fn nx_gate_remote(&mut self, h: &lucy_core::hosts::Host, cmd: String) {
+    pub(crate) fn nx_gate_remote(
+        &mut self,
+        h: &lucy_core::hosts::Host,
+        cmd: String,
+        origen: &'static str,
+    ) {
         let g = lucy_core::guard::scan(&cmd, lucy_core::guard::Role::Assistant);
         if g.decision == lucy_core::guard::Decision::Block {
             self.nx_aviso(
@@ -733,15 +742,20 @@ impl App {
             return;
         }
         if lucy_core::destructive::is_destructive(&cmd) {
-            self.nx_confirm = Some(Pendiente { host: Some(h.id.clone()), cmd });
+            self.nx_confirm = Some(Pendiente { host: Some(h.id.clone()), cmd, origen });
         } else {
-            self.nx_run_remote(h, &cmd);
+            self.nx_run_remote(h, &cmd, origen);
         }
     }
 
     /// Lanza un comando contra el equipo remoto, entregando la salida según
     /// llega.
-    pub(crate) fn nx_run_remote(&mut self, h: &lucy_core::hosts::Host, cmd: &str) {
+    pub(crate) fn nx_run_remote(
+        &mut self,
+        h: &lucy_core::hosts::Host,
+        cmd: &str,
+        origen: &'static str,
+    ) {
         let id = h.id.clone();
         self.nx_lines_mut(&id).push(('c', cmd.to_string()));
         let pw = lucy_core::hosts::password(&h.id).unwrap_or_default();
@@ -751,6 +765,7 @@ impl App {
         self.nx_busy = true;
         self.nx_stop = stop.clone();
         self.nx_exec_id = id;
+        self.nx_origen = origen;
         self.nx_exec_rx = Some(rx);
         self.nx_started = Some(Instant::now());
         self.nx_fase = Some(("Ejecutando en el equipo", Instant::now()));
@@ -1408,7 +1423,9 @@ impl App {
         self.nx_hist_idx = None;
 
         if lucy_core::nexshell::looks_like_command(&texto) {
-            self.nx_maybe_run(texto);
+            // Ya era un comando: lo escribio el operador tal cual, sin que el
+            // modelo tocara nada.
+            self.nx_maybe_run(texto, "manual");
             return;
         }
         self.nx_translate(None, texto);
@@ -1535,7 +1552,7 @@ impl App {
     ///
     /// Bloqueado NO ofrece botón, igual que en el bucle: ofrecer uno para
     /// ejecutar una firma de ataque convierte el guardrail en un trámite.
-    pub(crate) fn nx_maybe_run(&mut self, cmd: String) {
+    pub(crate) fn nx_maybe_run(&mut self, cmd: String, origen: &'static str) {
         let g = lucy_core::guard::scan(&cmd, lucy_core::guard::Role::Assistant);
         if g.decision == lucy_core::guard::Decision::Block {
             self.nx_aviso(None, &i18n::trf("Bloqueado por el guardrail: {motivo}",
@@ -1543,7 +1560,7 @@ impl App {
             return;
         }
         if lucy_core::destructive::is_destructive(&cmd) {
-            self.nx_confirm = Some(Pendiente { host: None, cmd });
+            self.nx_confirm = Some(Pendiente { host: None, cmd, origen });
         } else {
             // SE REGISTRA QUE SE MANDÓ, SIN CÓMO ACABÓ. La terminal local es un
             // PTY de verdad: no hay un evento de «este comando terminó y devolvió
@@ -1554,7 +1571,7 @@ impl App {
             // `exit_code: None` dice exactamente eso — «no se sabe» — que es para
             // lo que existe. Lo que sí es cierto y merece constancia es que Lucy
             // convirtió una frase en un comando y lo mandó a la máquina.
-            self.auditar_enviado(&cmd, "", "ai");
+            self.auditar_enviado(&cmd, "", origen);
             self.nx_run(&cmd);
         }
     }

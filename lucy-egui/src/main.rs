@@ -703,6 +703,13 @@ struct Pendiente {
     /// El id del equipo al que iba. `None` = este equipo.
     host: Option<String>,
     cmd: String,
+    /// Quién escribió el comando: `"manual"` el operador, `"ai"` el modelo.
+    ///
+    /// VIAJA CON EL COMANDO Y NO SE DEDUCE AL FINAL. Antes cada sumidero fijaba
+    /// un valor constante —el camino local escribía siempre «ai», el remoto
+    /// siempre «manual»— y los dos caminos se alcanzan desde los dos orígenes.
+    /// Lo único que sabe la verdad es quien lo mete, así que lo mete con él.
+    origen: &'static str,
 }
 
 impl Pendiente {
@@ -861,14 +868,14 @@ fn confirm_strip(
     ui: &mut egui::Ui,
     pendiente: &mut Option<Pendiente>,
     vista: Option<&str>,
-) -> Option<String> {
+) -> Option<Pendiente> {
     // SOLO la de esta vista. El campo lo comparten las dos pantallas, y un
     // comando encolado contra un servidor no puede acabar corriendo aquí porque
     // el operador cambiara de equipo antes de confirmar.
-    let cmd = match pendiente.as_ref().filter(|p| p.es_de(vista)) {
-        Some(p) => p.cmd.clone(),
-        None => return None,
-    };
+    //
+    // Devuelve el `Pendiente` ENTERO y no solo el comando, porque quien lo
+    // ejecute necesita también su origen para poder auditarlo bien.
+    let cmd = pendiente.as_ref().filter(|p| p.es_de(vista))?.cmd.clone();
     let cmd = cmd.as_str();
     let mut decidido: Option<bool> = None;
     egui::Frame::none()
@@ -904,9 +911,8 @@ fn confirm_strip(
     // la franja sigue ahí, que es lo que se esperaba de ella desde el principio.
     match decidido {
         Some(ejecutar) => {
-            let cmd = cmd.to_string();
-            *pendiente = None;
-            ejecutar.then_some(cmd)
+            let p = pendiente.take();
+            ejecutar.then_some(p).flatten()
         }
         None => None,
     }
@@ -5057,6 +5063,16 @@ struct App {
     nx_lines: std::collections::HashMap<String, Vec<(char, String)>>,
     /// El equipo cuyo comando esta en vuelo, para saber donde escribir su salida.
     nx_exec_id: String,
+    /// Quien escribio el comando remoto que esta corriendo ahora mismo.
+    ///
+    /// HACE FALTA UN CAMPO porque el comando se lanza en un sitio y la fila de
+    /// auditoria se escribe en otro: `nx_run_remote` abre el canal y el
+    /// recogedor apunta el resultado cuando llega, varios fotogramas despues.
+    /// Antes ese recogedor escribia la constante «manual», con un comentario que
+    /// afirmaba que en ese camino solo entra lo que teclea el operador — y la
+    /// traduccion del modelo entra por ahi tambien. Es el gemelo de
+    /// `exec_origen`, que ya hacia esto mismo para la ruta del agente.
+    nx_origen: &'static str,
     /// La entrada del comando remoto en vuelo, si la admite. Es lo que permite
     /// contestarle a un `sudo` o a un Â«Â¿seguro? [y/N]Â».
     nx_stdin: Option<std::process::ChildStdin>,
@@ -5960,6 +5976,7 @@ impl App {
             nx_host: None,
             nx_lines: std::collections::HashMap::new(),
             nx_exec_id: String::new(),
+            nx_origen: "manual",
             nx_stdin: None,
             nx_stdin_rx: None,
             nx_stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -13188,8 +13205,14 @@ impl App {
                 // justamente lo que hay que leer para decidir.
                 // El filtro por vista y el borrado viven DENTRO de `confirm_strip`
                 // desde que se descubrió que aquí se borraba en cada fotograma.
-                if let Some(cmd) = confirm_strip(ui, &mut self.nx_confirm, None) {
-                    self.nx_run(&cmd);
+                if let Some(p) = confirm_strip(ui, &mut self.nx_confirm, None) {
+                    // SE AUDITA AQUÍ, y antes no se auditaba en absoluto. El
+                    // camino sin confirmación apunta la fila en `nx_maybe_run`;
+                    // el que pasa por la franja se iba derecho al PTY, así que
+                    // los comandos destructivos —los únicos que exigen que
+                    // alguien diga que sí— eran justo los que no dejaban rastro.
+                    self.auditar_enviado(&p.cmd, "", p.origen);
+                    self.nx_run(&p.cmd);
                 }
                 egui::Frame::none()
                     .fill(theme::bg3())
@@ -15218,12 +15241,17 @@ mod confirmacion {
         // suelta y las dos vistas leían la misma: se encolaba un `Remove-Item`
         // contra un servidor, se cambiaba a «Este equipo» antes de confirmar, y
         // al pulsar Ejecutar el comando corría en la estación del operador.
-        let al_servidor = Pendiente { host: Some("h_1".into()), cmd: "Remove-Item C:\\".into() };
+        let al_servidor = Pendiente {
+            host: Some("h_1".into()),
+            cmd: "Remove-Item C:\\".into(),
+            origen: "ai",
+        };
         assert!(al_servidor.es_de(Some("h_1")), "su propia vista no la reconoce");
         assert!(!al_servidor.es_de(None), "la vista local se la quedaría");
         assert!(!al_servidor.es_de(Some("h_2")), "otro servidor se la quedaría");
 
-        let al_local = Pendiente { host: None, cmd: "del /s C:\\temp".into() };
+        let al_local =
+            Pendiente { host: None, cmd: "del /s C:\\temp".into(), origen: "manual" };
         assert!(al_local.es_de(None));
         assert!(!al_local.es_de(Some("h_1")), "un remoto se quedaría la del local");
     }
@@ -15247,15 +15275,18 @@ mod confirmacion {
             )),
             ..Default::default()
         };
-        let mut pendiente =
-            Some(Pendiente { host: None, cmd: "Remove-Item C:\\datos -Recurse".into() });
-        let mut lanzado: Option<String> = None;
+        let mut pendiente = Some(Pendiente {
+            host: None,
+            cmd: "Remove-Item C:\\datos -Recurse".into(),
+            origen: "ai",
+        });
+        let mut lanzado: Option<Pendiente> = None;
 
         for _ in 0..3 {
             let _ = ctx.run(input.clone(), |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    if let Some(cmd) = confirm_strip(ui, &mut pendiente, None) {
-                        lanzado = Some(cmd);
+                    if let Some(p) = confirm_strip(ui, &mut pendiente, None) {
+                        lanzado = Some(p);
                     }
                 });
             });
@@ -15263,6 +15294,9 @@ mod confirmacion {
 
         assert!(pendiente.is_some(), "la franja soltó el comando sin que nadie decidiera");
         assert!(lanzado.is_none(), "se ejecutó sin pulsar «Ejecutar»");
+        // Y el origen sigue con él: es lo que la fila de auditoría necesita para
+        // decir quién escribió el comando, y por eso viaja dentro del pendiente.
+        assert_eq!(pendiente.as_ref().map(|p| p.origen), Some("ai"));
     }
 
     #[test]
@@ -15289,6 +15323,43 @@ mod confirmacion {
                         n + 1
                     );
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn ningun_sumidero_de_auditoria_decide_el_origen_por_su_cuenta() {
+        // EL FALLO QUE ESTO FIJA. Cada camino de NexShell escribía una constante
+        // en la columna `source`: el local siempre «ai», el remoto siempre
+        // «manual». Y los dos caminos se alcanzan desde los dos orígenes —el
+        // operador tecleando, y la traducción del modelo—, así que la mitad de
+        // las filas de cada camino mentía.
+        //
+        // No afecta a `supervision()`, que suma «ai» y «manual» en el mismo cubo.
+        // Afecta a `aceptacion()`, que cuenta como propuesto lo que lleva «ai»:
+        // los comandos del operador se contaban como propuestas de Lucy que
+        // salieron bien —inflándola— y los del modelo contra un servidor no se
+        // contaban en absoluto. Es exactamente el fallo que el comentario de
+        // `aceptacion` en `lucy-core/src/audit.rs` avisa de no cometer.
+        //
+        // La regla que lo impide: el origen viaja CON el comando desde quien lo
+        // sabe. Un literal en la llamada significa que alguien volvió a
+        // decidirlo al final del camino, que es donde ya no se sabe.
+        let (ai, manual) = (format!("\"{}\"", "ai"), format!("\"{}\"", "manual"));
+        for (fichero, fuente) in [
+            ("vista_nexshell.rs", include_str!("vista_nexshell.rs")),
+            ("bombas.rs", include_str!("bombas.rs")),
+        ] {
+            for (n, linea) in fuente.lines().enumerate() {
+                let t = linea.trim_start();
+                if t.starts_with("//") || !t.contains("self.auditar") {
+                    continue;
+                }
+                assert!(
+                    !t.contains(ai.as_str()) && !t.contains(manual.as_str()),
+                    "{fichero}:{} cablea el origen en la llamada de auditoría: {t}",
+                    n + 1
+                );
             }
         }
     }
