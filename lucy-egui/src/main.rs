@@ -6316,6 +6316,29 @@ impl App {
                                 &t.uid.to_string(),
                             );
                         }
+                        // ── LA RESPUESTA NO TERMINÓ, Y HASTA AHORA NO SE DECÍA ──
+                        //
+                        // Pegado al mensaje y no en el carril de Trace: lo que
+                        // hay que corregir es la lectura de ESE texto. Quien lee
+                        // una respuesta que se acaba a media frase necesita saber
+                        // ahí mismo que no es lo que Lucy iba a decir — en un
+                        // panel lateral llega tarde y para el que ya fue a
+                        // buscarlo.
+                        //
+                        // Y no es solo el tope de salida: por aquí pasan también
+                        // `content_filter`, `SAFETY` y `refusal`.
+                        lucy_core::chat::ChatEvent::Corte(motivo) => {
+                            if let Some(last) = t.log.last_mut() {
+                                last.text.push_str(&format!(
+                                    "\n\n⚠ {}",
+                                    i18n::trf(
+                                        "La respuesta se cortó ({motivo}) — no es lo que \
+                                         iba a decir entero.",
+                                        &[("motivo", &motivo)],
+                                    )
+                                ));
+                            }
+                        }
                         lucy_core::chat::ChatEvent::Done => {
                             done = true;
                             break;

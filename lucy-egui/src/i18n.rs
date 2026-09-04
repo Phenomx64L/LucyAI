@@ -1785,6 +1785,13 @@ pub const FRASES: &[Frase] = &[
         "Die günstigste Cloud",
     ),
     f!(
+        "La respuesta se cortó ({motivo}) — no es lo que iba a decir entero.",
+        "The reply was cut off ({motivo}) — this is not all it meant to say.",
+        "A resposta foi cortada ({motivo}) — não é tudo o que ia dizer.",
+        "La réponse a été coupée ({motivo}) — ce n'est pas tout ce qu'elle allait dire.",
+        "Die Antwort wurde abgeschnitten ({motivo}) — nicht alles, was sie sagen wollte.",
+    ),
+    f!(
         "La revisión se cortó sin devolver nada.",
         "The review was cut off without returning anything.",
         "A revisão foi interrompida sem devolver nada.",
