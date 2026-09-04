@@ -2953,6 +2953,12 @@ fn nota_en_palabras(nota: &str) -> String {
             "{elegibles} elegibles · {motivo}",
             &[("elegibles", &elegibles.to_string()), ("motivo", i18n::tr(&motivo))],
         ),
+        // Se dicen las DOS cifras aunque una sea cero: «12 filas retiradas» no
+        // distingue si se limpió la auditoría o el buzón, y son cosas distintas.
+        Cifras::Poda { auditoria, avisos } => i18n::trf(
+            "{auditoria} de auditoría · {avisos} avisos vistos",
+            &[("auditoria", &auditoria.to_string()), ("avisos", &avisos.to_string())],
+        ),
         Cifras::Fallo(e) => i18n::trf("falló: {e}", &[("e", &e)]),
         Cifras::Prosa(t) => t,
     }
@@ -6581,6 +6587,9 @@ impl App {
                     }
                     if let Some(r) = t.reflexionado {
                         lineas.push(i18n::trf("reflexión: {r}", &[("r", &r.to_string())]));
+                    }
+                    if let Some(p) = t.podado {
+                        lineas.push(i18n::trf("poda: {p}", &[("p", &p.to_string())]));
                     }
                     if !lineas.is_empty() {
                         // Al carril de la pestaña activa. No es de ningún turno

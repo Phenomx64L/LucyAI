@@ -47,6 +47,7 @@ impl App {
                         [
                             lucy_core::maintenance::CONSOLIDAR,
                             lucy_core::maintenance::INSIGHTS,
+                            lucy_core::maintenance::PODA,
                         ]
                         .into_iter()
                         .map(|j| {
@@ -1108,6 +1109,17 @@ impl App {
                             "Consolidar ahora",
                             "funde memorias que dicen lo mismo; nada se borra",
                         ),
+                        // EXPLÍCITO Y NO POR DESCARTE. Esta rama era el `_`, y con
+                        // dos trabajos daba igual; con tres, la poda habría salido
+                        // rotulada «Reflexión» y con el plazo de los insights, sin
+                        // que nada fallara. Un `match` por descarte sobre una lista
+                        // que crece es una etiqueta equivocada esperando su turno.
+                        lucy_core::maintenance::PODA => (
+                            "Poda",
+                            lucy_core::maintenance::CADA_PODA,
+                            "Podar ahora",
+                            "quita lo vencido: un año de auditoría, tres meses de avisos ya vistos",
+                        ),
                         _ => (
                             "Reflexión",
                             lucy_core::maintenance::CADA_INSIGHTS,
@@ -1269,10 +1281,13 @@ impl App {
             std::thread::spawn(move || {
                 let nota = lucy_core::maintenance::corre(job, &stop);
                 let mut t = lucy_core::maintenance::Tanda::default();
-                if job == lucy_core::maintenance::CONSOLIDAR {
-                    t.consolidado = Some(nota);
-                } else {
-                    t.reflexionado = Some(nota);
+                // Por NOMBRE y no por descarte, por lo mismo que el rótulo de
+                // arriba: con dos trabajos un `else` acertaba siempre, y con tres
+                // la poda forzada a mano se reportaba como una reflexión.
+                match job {
+                    lucy_core::maintenance::CONSOLIDAR => t.consolidado = Some(nota),
+                    lucy_core::maintenance::PODA => t.podado = Some(nota),
+                    _ => t.reflexionado = Some(nota),
                 }
                 let _ = tx.send(t);
             });

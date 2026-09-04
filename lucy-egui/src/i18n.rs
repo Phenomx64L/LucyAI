@@ -2535,6 +2535,8 @@ pub const FRASES: &[Frase] = &[
         "Replier les alertes",
         "Warnungen einklappen",
     ),
+    f!("Poda", "Pruning", "Poda", "Élagage", "Bereinigung"),
+    f!("Podar ahora", "Prune now", "Podar agora", "Élaguer maintenant", "Jetzt bereinigen"),
     f!(
         "Por CLAVE, no por contraseña: la confianza se establece antes. Autoriza tu clave pública en el servidor (`~/.ssh/authorized_keys`) o ten la privada cargada en `ssh-agent`.",
         "By KEY, not password: trust is established beforehand. Authorize your public key on the server (`~/.ssh/authorized_keys`) or have the private one loaded in `ssh-agent`.",
@@ -3640,6 +3642,7 @@ pub const FRASES: &[Frase] = &[
     f!("nombre", "name", "nome", "nom", "Name"),
     f!("nuevo", "new", "novo", "nouveau", "neu"),
     f!("pegar clave", "paste key", "colar chave", "coller la clé", "Schlüssel einfügen"),
+    f!("poda: {p}", "pruning: {p}", "poda: {p}", "élagage : {p}", "Bereinigung: {p}"),
     f!(
         "por defecto {puerto}",
         "default {puerto}",
@@ -3655,6 +3658,7 @@ pub const FRASES: &[Frase] = &[
         "prochaine dans {plazo}",
         "nächste in {plazo}",
     ),
+    f!("quita lo vencido: un año de auditoría, tres meses de avisos ya vistos", "removes what has expired: a year of audit, three months of seen alerts", "remove o que venceu: um ano de auditoria, três meses de avisos já vistos", "supprime ce qui a expiré : un an d'audit, trois mois d'alertes déjà vues", "entfernt Abgelaufenes: ein Jahr Audit, drei Monate gesehene Hinweise"),
     f!("reflexión: {r}", "reflection: {r}", "reflexão: {r}", "réflexion : {r}", "Reflexion: {r}"),
     f!(
         "se llena en ~{dias} días",
@@ -3795,6 +3799,7 @@ pub const FRASES: &[Frase] = &[
         "{activos} actifs sur {n_skills}. Ceux qui sont désactivés restent sur le disque et n'entrent pas dans ce que Lucy voit, donc elle arrête de les demander. Ils s'installent dans ton profil et survivent à une réinstallation de Lucy.",
         "{activos} von {n_skills} aktiv. Die ausgeschalteten bleiben auf der Platte, aber Lucy sieht sie nicht mehr und ruft sie nicht mehr auf. Sie liegen in deinem Profil und überstehen eine Neuinstallation von Lucy.",
     ),
+    f!("{auditoria} de auditoría · {avisos} avisos vistos", "{auditoria} from audit · {avisos} seen alerts", "{auditoria} de auditoria · {avisos} avisos vistos", "{auditoria} d'audit · {avisos} alertes vues", "{auditoria} aus dem Audit · {avisos} gesehene Hinweise"),
     f!(
         "{caducados} pasos sin aprobar caducan",
         "{caducados} unapproved steps expire",
