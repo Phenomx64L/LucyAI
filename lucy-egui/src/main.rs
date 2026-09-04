@@ -819,8 +819,58 @@ fn campo(ui: &mut egui::Ui, etiqueta: &str, valor: &mut String, pista: &str) {
 ///
 /// Devuelve el veredicto en vez de ejecutar ella: así el mismo trozo sirve para
 /// el equipo local y para uno remoto, que corren por caminos distintos.
-fn confirm_strip(ui: &mut egui::Ui, cmd: &str) -> bool {
-    let mut ejecutar = false;
+/// La franja de confirmación de un comando destructivo, y la dueña del pendiente.
+///
+/// SE LLEVA EL ESTADO DENTRO, Y ÉSE ES EL ARREGLO. Antes devolvía solo un `bool`
+/// —«se pulsó Ejecutar»— y cada uno de los dos sitios que la dibujan hacía esto:
+///
+/// ```text
+///     if let Some(p) = self.nx_confirm.clone().filter(|p| p.es_de(…)) {
+///         if confirm_strip(ui, &p.cmd) {
+///             self.nx_run(&p.cmd);
+///         }
+///         self.nx_confirm = None;      ← FUERA del `if`, en CADA fotograma
+///     }
+/// ```
+///
+/// El borrado no estaba dentro de la condición: se pintaba la franja y se
+/// quitaba el pendiente en el MISMO fotograma.
+///
+/// Y lo que hacía esto difícil de ver es que egui NO REPINTA EN CONTINUO. Con la
+/// ventana quieta no hay más fotogramas, así que la franja ámbar se quedaba
+/// perfectamente visible en pantalla —la última imagen pintada— con su comando y
+/// sus dos botones. El operador la leía con calma y pulsaba «Ejecutar»… y ese
+/// clic es justamente lo que provoca el repintado siguiente, en el que
+/// `nx_confirm` ya era `None`: la franja no se dibujaba, el botón no existía, y
+/// el clic caía sobre lo que hubiera debajo.
+///
+/// O sea que no era un parpadeo de dieciséis milisegundos. Era una franja que se
+/// veía, que invitaba a pulsar, y que había soltado el comando antes de que
+/// nadie la tocara. El comando destructivo DESAPARECÍA SIN DECIR NADA — ni se
+/// ejecutaba, ni se avisaba, ni quedaba rastro.
+///
+/// Y «Cancelar» tampoco hacía nada por su cuenta —`let _ = ui.button(…)`,
+/// el clic se tiraba— pero parecía funcionar, precisamente por el mismo borrado
+/// que rompía «Ejecutar». Un botón que funciona por accidente al lado de otro
+/// que falla por el mismo motivo.
+///
+/// Ahora la franja filtra, dibuja y quita el pendiente ella sola, y solo cuando
+/// el operador decide. Los dos sitios que la llaman ya no pueden equivocarse
+/// porque ya no tocan el campo.
+fn confirm_strip(
+    ui: &mut egui::Ui,
+    pendiente: &mut Option<Pendiente>,
+    vista: Option<&str>,
+) -> Option<String> {
+    // SOLO la de esta vista. El campo lo comparten las dos pantallas, y un
+    // comando encolado contra un servidor no puede acabar corriendo aquí porque
+    // el operador cambiara de equipo antes de confirmar.
+    let cmd = match pendiente.as_ref().filter(|p| p.es_de(vista)) {
+        Some(p) => p.cmd.clone(),
+        None => return None,
+    };
+    let cmd = cmd.as_str();
+    let mut decidido: Option<bool> = None;
     egui::Frame::none()
         .fill(theme::amber_bg())
         .stroke(egui::Stroke::new(1.0_f32, theme::amber()))
@@ -842,13 +892,24 @@ fn confirm_strip(ui: &mut egui::Ui, cmd: &str) -> bool {
             ui.add_space(6.0);
             row(ui, 24.0, |ui| {
                 if ui.button(i18n::tr("Ejecutar")).clicked() {
-                    ejecutar = true;
+                    decidido = Some(true);
                 }
-                let _ = ui.button(i18n::tr("Cancelar"));
+                if ui.button(i18n::tr("Cancelar")).clicked() {
+                    decidido = Some(false);
+                }
             });
         });
     ui.add_space(6.0);
-    ejecutar
+    // El pendiente se va SOLO si el operador ha decidido. Mientras no toque nada
+    // la franja sigue ahí, que es lo que se esperaba de ella desde el principio.
+    match decidido {
+        Some(ejecutar) => {
+            let cmd = cmd.to_string();
+            *pendiente = None;
+            ejecutar.then_some(cmd)
+        }
+        None => None,
+    }
 }
 
 /// Cuántas líneas de diff caben en la ficha de un artefacto.
@@ -13125,15 +13186,10 @@ impl App {
                 // La confirmación va PEGADA al campo, no en un diálogo aparte.
                 // Un modal tapa el comando que se está juzgando, que es
                 // justamente lo que hay que leer para decidir.
-                // SOLO la que es de esta vista. El campo era una cadena suelta y
-                // las dos vistas leÃ­an la misma: un comando encolado contra un
-                // servidor acababa corriendo aquÃ­ si el operador cambiaba de
-                // equipo antes de confirmar.
-                if let Some(p) = self.nx_confirm.clone().filter(|p| p.es_de(None)) {
-                    if confirm_strip(ui, &p.cmd) {
-                        self.nx_run(&p.cmd);
-                    }
-                    self.nx_confirm = None;
+                // El filtro por vista y el borrado viven DENTRO de `confirm_strip`
+                // desde que se descubrió que aquí se borraba en cada fotograma.
+                if let Some(cmd) = confirm_strip(ui, &mut self.nx_confirm, None) {
+                    self.nx_run(&cmd);
                 }
                 egui::Frame::none()
                     .fill(theme::bg3())
@@ -15170,6 +15226,71 @@ mod confirmacion {
         let al_local = Pendiente { host: None, cmd: "del /s C:\\temp".into() };
         assert!(al_local.es_de(None));
         assert!(!al_local.es_de(Some("h_1")), "un remoto se quedaría la del local");
+    }
+
+    #[test]
+    fn la_franja_sigue_ahi_mientras_el_operador_no_decida() {
+        // EL FALLO QUE ESTO FIJA. La franja se pintaba y el pendiente se borraba
+        // en el MISMO fotograma, porque el borrado estaba fuera del `if` en los
+        // dos sitios que la dibujaban. Como egui no repinta en continuo, la
+        // franja se quedaba visible en pantalla con su botón «Ejecutar» — pero
+        // el comando ya se había soltado, y el clic caía en el vacío.
+        //
+        // Se prueban TRES fotogramas y no uno: uno solo pasaría aunque el
+        // borrado ocurriera en el segundo.
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(640.0, 480.0),
+            )),
+            ..Default::default()
+        };
+        let mut pendiente =
+            Some(Pendiente { host: None, cmd: "Remove-Item C:\\datos -Recurse".into() });
+        let mut lanzado: Option<String> = None;
+
+        for _ in 0..3 {
+            let _ = ctx.run(input.clone(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    if let Some(cmd) = confirm_strip(ui, &mut pendiente, None) {
+                        lanzado = Some(cmd);
+                    }
+                });
+            });
+        }
+
+        assert!(pendiente.is_some(), "la franja soltó el comando sin que nadie decidiera");
+        assert!(lanzado.is_none(), "se ejecutó sin pulsar «Ejecutar»");
+    }
+
+    #[test]
+    fn nadie_mas_que_la_franja_retira_una_confirmacion() {
+        // El arreglo consistió en que `confirm_strip` sea la DUEÑA del pendiente:
+        // lo filtra, lo dibuja y lo quita ella. Si alguien vuelve a quitarlo
+        // desde fuera —que es exactamente lo que pasaba— el fallo vuelve, y
+        // vuelve igual de callado.
+        //
+        // Se mira el fuente porque lo que hay que fijar es DÓNDE está escrita la
+        // línea, y eso no se observa ejecutando. Las apariciones dentro de un
+        // comentario se permiten: la propia explicación del fallo cita el código
+        // que lo causaba.
+        let aguja = format!("nx_confirm {} None", '=');
+        for (fichero, fuente) in [
+            ("main.rs", include_str!("main.rs")),
+            ("vista_nexshell.rs", include_str!("vista_nexshell.rs")),
+        ] {
+            for (n, linea) in fuente.lines().enumerate() {
+                let t = linea.trim_start();
+                if t.contains(&aguja) && !t.starts_with("//") {
+                    panic!(
+                        "{fichero}:{} retira la confirmación desde fuera de `confirm_strip`: {t}",
+                        n + 1
+                    );
+                }
+            }
+        }
     }
 }
 

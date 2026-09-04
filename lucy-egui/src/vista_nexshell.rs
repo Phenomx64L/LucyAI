@@ -278,11 +278,8 @@ impl App {
             }))
             .show_separator_line(false)
             .show_inside(ui, |ui| {
-                if let Some(p) = self.nx_confirm.clone().filter(|p| p.es_de(Some(&h.id))) {
-                    if confirm_strip(ui, &p.cmd) {
-                        self.nx_run_remote(&h, &p.cmd);
-                    }
-                    self.nx_confirm = None;
+                if let Some(cmd) = confirm_strip(ui, &mut self.nx_confirm, Some(&h.id)) {
+                    self.nx_run_remote(&h, &cmd);
                 }
                 egui::Frame::none()
                     .fill(theme::bg3())
