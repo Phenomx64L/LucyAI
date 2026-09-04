@@ -634,9 +634,25 @@ impl App {
                 _ => String::new(),
             }
         };
+        // ── LA SALIDA NO SE REPITE AQUÍ, Y ANTES SÍ ─────────────────────────
+        //
+        // Veinte líneas más arriba entra en `t.log` como `Role::Exec`, y
+        // `history()` la interpola en CADA petición de esta pestaña — incluida
+        // ésta, porque `send_raw` arma la conversación entera antes de añadir su
+        // turno. Así que el volcado viajaba dos veces en el mismo cuerpo.
+        //
+        // Y la segunda copia no era solo desperdicio. La del log pasa por
+        // `memories::scrub`; la que iba aquí iba CRUDA. O sea que una cadena de
+        // conexión con contraseña llegaba al proveedor de nube igualmente, en el
+        // mismo turno en que el `scrub` decía haberla quitado — el depurado solo
+        // servía para los turnos siguientes.
+        //
+        // Quitarla arregla las dos cosas de una vez: la mitad de los tokens de
+        // una cadena automática son salidas de comando, y ahora la única copia
+        // que sale de la máquina es la depurada.
         self.send_raw(ti, format!(
-            "He ejecutado el comando que propusiste y esta es su salida literal. \
-             {cola}{historial}\n\n$ {cmd}\n\n{body}"
+            "He ejecutado el comando que propusiste. Su salida literal está en el \
+             turno anterior, marcada como salida de `{cmd}`. {cola}{historial}"
         ));
         // Y el carril queda libre para quien lo esperaba. Esta pestaña no —
         // acaba de abrir turno y su propio cierre la reintenta—; las otras

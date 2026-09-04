@@ -17202,3 +17202,62 @@ mod cobro_por_pestana {
         assert!(cuerpo.contains("t.coste"), "no suma lo que se cobro al llegar");
     }
 }
+
+#[cfg(test)]
+mod salida_de_comando {
+    #[test]
+    fn la_salida_no_viaja_dos_veces_en_la_misma_peticion() {
+        // EL FALLO. El volcado entra en `t.log` como `Role::Exec`, y `history()`
+        // lo interpola en CADA peticion — incluida la que lo devuelve, porque
+        // `send_raw` arma la conversacion entera antes de añadir su turno. El
+        // texto de `pump_exec` lo repetia detras, asi que la misma salida viajaba
+        // dos veces en el mismo cuerpo.
+        //
+        // Y la segunda copia iba CRUDA mientras la del log pasa por `scrub`: una
+        // contraseña llegaba a la nube igual, en el turno en que el depurado
+        // decia haberla quitado.
+        //
+        // Se mira el fuente porque lo que hay que fijar es que el texto NO lleve
+        // el cuerpo, y eso no se observa ejecutando: las dos copias son validas
+        // por separado.
+        // Se lee `bombas.rs` desde aqui, asi que la aguja puede ir literal: el
+        // fichero que se examina no es el que contiene esta prueba.
+        let fuente = include_str!("bombas.rs");
+        let i = fuente
+            .find("He ejecutado el comando que propusiste")
+            .expect("desaparecio el envio de la salida");
+        let envio = &fuente[i..(i + 300).min(fuente.len())];
+        assert!(
+            !envio.contains("{body}"),
+            "la salida vuelve a viajar pegada al prompt: {envio}"
+        );
+        assert!(
+            envio.contains("turno anterior"),
+            "no se le dice al modelo donde esta la salida: {envio}"
+        );
+    }
+
+    #[test]
+    fn la_historia_sigue_llevando_la_salida() {
+        // La otra mitad del contrato: si `history` dejara de renderizar el
+        // `Role::Exec`, quitar la copia del prompt habria dejado al modelo SIN la
+        // salida — que es mucho peor que tenerla dos veces.
+        //
+        // La aguja se ancla DENTRO de `history` y no en `Role::Exec` a secas:
+        // hay otro `match` sobre la misma variante —el que guarda la pestaña en
+        // disco— y aparece antes en el fichero. Buscarla suelta examinaba el
+        // convertidor de guardado y fallaba diciendo lo contrario de lo que pasa.
+        let fuente = include_str!("main.rs");
+        // La firma entera como aguja, armada en EJECUCION: escrita como literal,
+        // esta prueba se encontraria a si misma —`include_str!` se trae el
+        // fichero entero, modulo de pruebas incluido— y examinaria su propio
+        // cuerpo en vez del de `history`. Es el fallo que ya cazo otra prueba de
+        // esta casa, anotado en `el_plazo_es_para_el_modelo`.
+        let firma = ["fn history(&self, ti: usize)", " -> Vec<lucy_core::turns::Turn>"].concat();
+        let cuerpo = fuente.split(&firma).nth(1).expect("desaparecio `history`");
+        let i = cuerpo.find("Role::Exec").expect("history ya no pinta la salida del comando");
+        let arm = &cuerpo[i..(i + 220).min(cuerpo.len())];
+        assert!(arm.contains("{out}"), "el turno de salida ya no lleva el volcado: {arm}");
+        assert!(arm.contains("Turn::user"), "la salida dejo de ser un turno del operador");
+    }
+}
