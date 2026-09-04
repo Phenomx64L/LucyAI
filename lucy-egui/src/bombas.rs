@@ -596,9 +596,40 @@ impl App {
         } else {
             "Resúmela y dime qué significa. No propongas ejecutarlo otra vez."
         };
+        // ── «ESTO YA HABÍA FALLADO AQUÍ», QUE ES LO QUE DISPARA EL REPLANTEO ──
+        //
+        // La señal existía entera y no salía de la pantalla. `audit::record`
+        // escribe `exit_code` en cada fila, hay índice por comando y por equipo,
+        // y `fallos_recientes` la consulta con su ventana de catorce días — pero
+        // su único llamante en los dos crates era el panel del workspace.
+        //
+        // Con el automático encendido no hay nadie leyendo ese panel, y ése es
+        // justo el modo donde importa: al modelo se le devolvía la salida con el
+        // mismo remate tanto si el comando fue bien como si fue mal, así que un
+        // paso fallido no disparaba un replanteo — disparaba otra vuelta
+        // idéntica hasta que el tope de puntos la cortaba.
+        //
+        // SOLO CUANDO HA FALLADO, y solo si ya venía fallando. En un comando que
+        // acaba de ir bien el dato no cambia nada de lo que Lucy debería hacer, y
+        // una línea más en cada turno es contexto que se paga.
+        let historial = if ok {
+            String::new()
+        } else {
+            match lucy_core::audit::fallos_recientes(&cmd, &destino, lucy_core::audit::DIAS_FALLOS)
+            {
+                // Uno es el que acaba de pasar. A partir de dos hay un patrón.
+                Ok(n) if n >= 2 => format!(
+                    "\n\nAVISO: este comando exacto ya ha fallado {n} veces en este equipo en \
+                     los últimos {} días. Repetirlo tal cual va a volver a fallar. Prueba otra \
+                     cosa, o di qué falta para que funcione.",
+                    lucy_core::audit::DIAS_FALLOS
+                ),
+                _ => String::new(),
+            }
+        };
         self.send_raw(ti, format!(
             "He ejecutado el comando que propusiste y esta es su salida literal. \
-             {cola}\n\n$ {cmd}\n\n{body}"
+             {cola}{historial}\n\n$ {cmd}\n\n{body}"
         ));
         // Y el carril queda libre para quien lo esperaba. Esta pestaña no —
         // acaba de abrir turno y su propio cierre la reintenta—; las otras

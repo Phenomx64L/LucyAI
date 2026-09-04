@@ -559,6 +559,9 @@ struct PromptInput {
     profile: String,
     weak: bool,
     auto: bool,
+    /// Lo que le queda a la cadena automatica: (puntos, coste de un cambio).
+    /// `None` fuera del automatico, donde no hay cadena que presupuestar.
+    presupuesto: Option<(u32, u32)>,
 }
 
 impl PromptInput {
@@ -598,6 +601,7 @@ impl PromptInput {
             // los turnos donde a nadie se le habría ocurrido buscarlo.
             insights: &self.insights,
             tono: self.tono,
+            presupuesto: self.presupuesto,
             // EL MISMO QUE LA INTERFAZ. Se lee del global —que es atómico, y
             // esto corre en el hilo del turno— en vez de viajar dentro de
             // `PromptInput`: es un ajuste, no un dato del turno, y llevarlo en la
@@ -10718,6 +10722,15 @@ impl App {
             // prompt entero y contesta en prosa sin emitir ninguna etiqueta.
             weak: lucy_core::prompt::model_is_weak(&self.chat_model),
             auto: self.tabs[self.tab].auto,
+            // LO QUE LE QUEDA, Y SOLO EN AUTOMATICO. Fuera de el cada comando lo
+            // aprueba una persona y no hay cadena que presupuestar.
+            //
+            // Por la pestana ACTIVA, igual que `auto` justo encima: los dos datos
+            // son de la misma cadena y separarlos daria un presupuesto de una
+            // conversacion con el modo de otra, que es peor que no darlo.
+            presupuesto: self.tabs[self.tab].auto.then(|| {
+                (self.max_loops.saturating_sub(self.tabs[self.tab].loops), COSTE_CAMBIO)
+            }),
         }
     }
 
