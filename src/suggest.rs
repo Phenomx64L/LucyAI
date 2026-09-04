@@ -503,6 +503,11 @@ fn nube(ctx: &str, modelo: &str) -> Result<(Vec<Chip>, u32, u32, String), String
         match rx.recv_timeout(limite) {
             Ok(ChatEvent::Token(t)) => texto.push_str(&t),
             Ok(ChatEvent::Usage(i, o)) => (ent, sal) = (i, o),
+            // Un corte aquí no se dice: `parse` ya tira la última línea si vino
+            // a medias, y lo que se pedía era una lista de atajos — con cinco de
+            // seis se sigue pudiendo pintar la pantalla. Avisar de que una
+            // sugerencia que nadie pidió salió corta sería ruido.
+            Ok(ChatEvent::Corte(_)) => {}
             Ok(ChatEvent::Done) => break,
             Ok(ChatEvent::Error(e)) => return Err(e),
             // Se acabó el plazo o se cayó el hilo. Con lo que haya llegado

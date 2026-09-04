@@ -513,6 +513,20 @@ fn stream(
         }
     }
 
+    // ── LA RESPUESTA LLEGÓ, PERO NO ENTERA ──────────────────────────────────
+    //
+    // El motivo se calculaba desde siempre y solo se miraba cuando no había
+    // llegado NADA. Con media respuesta y un corte en el tope de salida, el
+    // motivo se tiraba: en pantalla quedaba un texto que se acaba a media frase y
+    // nada que dijera por qué.
+    //
+    // Se manda antes que `Done` a propósito: quien lo recibe tiene que poder
+    // marcar ESE mensaje, y después de `Done` la pestaña ya lo ha cerrado.
+    if tokens > 0 {
+        if let Some(r) = &motivo {
+            let _ = tx.send(ChatEvent::Corte(r.clone()));
+        }
+    }
     if tokens == 0 && !stop.load(Ordering::Relaxed) {
         return Err(match motivo {
             Some(r) => format!(
@@ -1060,5 +1074,46 @@ mod uso_con_cache {
         // un prefijo por debajo del mínimo cacheable— cuenta como siempre.
         let trama = json!({"usage": {"input_tokens": 2075, "output_tokens": 140}});
         assert_eq!(usage(Provider::Anthropic, &trama), Some((2075, 140)));
+    }
+}
+
+#[cfg(test)]
+mod respuesta_cortada {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn un_final_normal_no_es_un_corte() {
+        // `stop` y `end_turn` son el final de siempre y no explican nada. Si se
+        // colaran, CADA respuesta acabaria con un aviso pegado.
+        assert_eq!(stop_reason(Provider::Anthropic, &json!({"delta":{"stop_reason":"end_turn"}})), None);
+        assert_eq!(stop_reason(Provider::OpenAi, &json!({"choices":[{"finish_reason":"stop"}]})), None);
+        assert_eq!(stop_reason(Provider::Gemini, &json!({"candidates":[{"finishReason":"STOP"}]})), None);
+    }
+
+    #[test]
+    fn los_cuatro_finales_que_si_hay_que_decir() {
+        // No es solo el tope de salida: un filtro de contenido deja tambien un
+        // texto que NO es lo que el modelo iba a decir, y callarlo deja al
+        // operador creyendo que Lucy contesto eso.
+        for (p, v, que) in [
+            (Provider::Anthropic, json!({"delta":{"stop_reason":"max_tokens"}}), "tope de salida"),
+            (Provider::OpenAi, json!({"choices":[{"finish_reason":"length"}]}), "longitud"),
+            (Provider::OpenAi, json!({"choices":[{"finish_reason":"content_filter"}]}), "filtro"),
+            (Provider::Gemini, json!({"candidates":[{"finishReason":"SAFETY"}]}), "seguridad"),
+        ] {
+            assert!(stop_reason(p, &v).is_some(), "{que}: se traga el motivo del corte");
+        }
+    }
+
+    #[test]
+    fn el_motivo_viaja_entero_para_poder_enseñarlo() {
+        // Se pinta pegado al mensaje, asi que tiene que decir algo. Un booleano
+        // —«se corto»— dejaria al operador sin saber si fue el tope o un filtro,
+        // que piden cosas distintas: uno se reintenta, el otro no.
+        assert_eq!(
+            stop_reason(Provider::Anthropic, &json!({"delta":{"stop_reason":"max_tokens"}})),
+            Some("max_tokens".into())
+        );
     }
 }
