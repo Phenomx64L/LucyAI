@@ -78,6 +78,48 @@ pub fn sin_marca(p: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
+/// Lo que le queda de presupuesto a una cadena automática, en palabras.
+///
+/// ── UN NIVEL MÁS ABAJO ESTO YA ESTABA RESUELTO ──────────────────────────────
+///
+/// `forks::corre` le inyecta al sub-agente «Te quedan 2 lecturas» / «Es la
+/// ÚLTIMA» en cada vuelta, con un comentario largo explicando que decir
+/// `MAX_VUELTAS - vuelta` contaba una lectura de más y que **un presupuesto que
+/// miente es peor que no darlo**: se lo gasta creyendo que le sobra.
+///
+/// Arriba, en el bucle que sí ejecuta comandos, lo único que se le decía era
+/// «hay un tope de pasos, así que no explores de más» — sin el número, sin lo
+/// gastado, y sin que supiera que mirar cuesta uno y cambiar cuesta tres. Así el
+/// modelo no puede priorizar: gasta el margen en cuatro consultas exploratorias
+/// y se queda sin puntos para el comando que arregla la cosa.
+///
+/// Aparte y pura por la misma razón que su hermana de `forks`: el conteo es lo
+/// que hay que poder probar, y es justo donde se equivocó la primera vez.
+pub fn aviso_de_presupuesto(restan: u32, coste_cambio: u32) -> String {
+    if restan == 0 {
+        return "Se te ha acabado el presupuesto de esta orden: no vas a poder ejecutar \
+                nada más. Responde con lo que ya sabes."
+            .to_string();
+    }
+    if restan < coste_cambio {
+        // El caso que más importa acertar. Con dos puntos y un cambio a tres, un
+        // «te quedan 2» invita a intentar el cambio — y la guarda lo va a
+        // rechazar. Decirle para qué alcanza es lo que evita el paso perdido.
+        return format!(
+            "Te {} de ejecución en esta orden: alcanza para MIRAR, no para cambiar nada \
+             (cambiar cuesta {coste_cambio}). Si lo que falta es un cambio, dilo y para.",
+            if restan == 1 { "queda 1 punto".to_string() } else { format!("quedan {restan} puntos") }
+        );
+    }
+    format!(
+        "Te quedan {restan} puntos de ejecución en esta orden. Mirar cuesta 1 y cambiar \
+         algo cuesta {coste_cambio}, así que da para {} consultas o {} cambios. Gasta \
+         primero en lo que te acerque a la respuesta.",
+        restan,
+        restan / coste_cambio
+    )
+}
+
 /// Todo lo que una sección necesita para decidir si viene al caso.
 ///
 /// Referencias, sin reservar memoria: se construye en cada turno y llega a
@@ -89,6 +131,13 @@ pub struct Ctx<'a> {
     pub user_profile: &'a str,
     /// Directorio de trabajo, para resolver rutas relativas.
     pub working_dir: &'a str,
+    /// Lo que le queda de presupuesto a la cadena automática: (puntos, coste de
+    /// un cambio). `None` fuera del modo automático, donde no hay cadena.
+    ///
+    /// VA EN EL `Ctx` Y NO EN UNA CONSTANTE porque cambia en cada turno: es
+    /// exactamente el tipo de dato que tiene que quedar DESPUÉS de la marca de
+    /// caché. La sección que lo pinta es inestable a propósito.
+    pub presupuesto: Option<(u32, u32)>,
     /// El equipo, medido hace segundos.
     pub machine: Option<&'a crate::system::SysSnapshot>,
     /// Servicios automáticos que están caídos.
@@ -158,6 +207,7 @@ impl Default for Ctx<'_> {
             user_name: "",
             user_profile: "",
             working_dir: "",
+            presupuesto: None,
             machine: None,
             services: &[],
             log: &[],
@@ -549,8 +599,8 @@ impl Section for Actions {
                 "\nEl operador ha encendido el modo AUTOMÁTICO: tus comandos se ejecutan \
                  sin que nadie los apruebe, y su salida literal te vuelve en el turno \
                  siguiente. Encadena los pasos que hagan falta hasta poder responder, uno \
-                 por turno, y para en cuanto tengas la respuesta. Hay un tope de pasos, \
-                 así que no explores de más. Algunos comandos —elevación, formas raras— \
+                 por turno, y para en cuanto tengas la respuesta. Algunos comandos \
+                 —elevación, formas raras— \
                  seguirán parándose para que los apruebe una persona: si eso pasa, dilo y \
                  espera, no busques otra forma de darlos.",
             );
@@ -708,6 +758,42 @@ impl Section for Skills {
     }
     fn render(&self, c: &Ctx) -> String {
         c.skills.trim_end().to_string()
+    }
+}
+
+/// Lo que le queda de presupuesto a la cadena automática.
+///
+/// ── POR QUÉ ES UNA SECCIÓN PROPIA Y NO UNA LÍNEA EN `Actions` ───────────────
+///
+/// Porque `Actions` es ESTABLE, y ahí es donde vivía la frase vaga que esto
+/// sustituye —«hay un tope de pasos, así que no explores de más»—. Un número que
+/// cambia en cada turno metido en una sección estable cae del lado cacheado de
+/// la marca, y entonces el prefijo deja de repetirse: cada turno escribiría una
+/// entrada de caché nueva y ninguna se leería. La cifra que se quería dar habría
+/// costado el ahorro entero.
+///
+/// Así que va aparte, inestable, y con prioridad por encima de 40 para caer
+/// después del corte. El test `ninguna_seccion_estable_cae_por_debajo_de_una_que
+/// _cambia` vigila que nadie invierta eso.
+struct Presupuesto;
+impl Section for Presupuesto {
+    fn name(&self) -> &'static str {
+        "Presupuesto"
+    }
+    fn relevant(&self, c: &Ctx) -> bool {
+        c.presupuesto.is_some()
+    }
+    fn priority(&self) -> u32 {
+        45
+    }
+    fn stable(&self) -> bool {
+        false
+    }
+    fn render(&self, c: &Ctx) -> String {
+        match c.presupuesto {
+            Some((restan, coste)) => aviso_de_presupuesto(restan, coste),
+            None => String::new(),
+        }
     }
 }
 
@@ -892,6 +978,7 @@ fn secciones() -> Vec<Box<dyn Section>> {
         Box::new(Estilo),
         Box::new(Preset),
         Box::new(Skills),
+        Box::new(Presupuesto),
         Box::new(HostRouting),
         Box::new(Memories),
         Box::new(Machine),
@@ -1640,5 +1727,76 @@ mod tests {
         assert!(p.contains("equipo equivocado"));
         // El shell del equipo de destino, que no tiene por qué ser PowerShell.
         assert!(p.contains("bash"), "no le dice que un Linux lleva bash");
+    }
+}
+
+#[cfg(test)]
+mod presupuesto_del_bucle {
+    use super::*;
+
+    const CAMBIO: u32 = 3;
+
+    #[test]
+    fn con_menos_de_un_cambio_se_dice_para_que_alcanza() {
+        // EL CASO QUE MAS IMPORTA ACERTAR, y el que hundio a la version de
+        // `forks`: un «te quedan 2» con el cambio a tres invita a intentar el
+        // cambio, y la guarda lo rechaza. El paso se pierde y el modelo no sabe
+        // por que. Decirle PARA QUE alcanza es lo que lo evita.
+        for restan in [1, 2] {
+            let t = aviso_de_presupuesto(restan, CAMBIO);
+            assert!(t.contains("MIRAR"), "no dice para que alcanza: {t}");
+            assert!(t.contains("no para cambiar"), "no dice para que NO alcanza: {t}");
+        }
+        assert!(aviso_de_presupuesto(1, CAMBIO).contains("queda 1 punto"), "singular");
+        assert!(aviso_de_presupuesto(2, CAMBIO).contains("quedan 2 puntos"), "plural");
+    }
+
+    #[test]
+    fn con_presupuesto_de_sobra_se_dan_las_dos_conversiones() {
+        // El numero pelado no le sirve al modelo para priorizar: nueve puntos son
+        // nueve consultas o tres cambios, y esa es la decision que tiene delante.
+        let t = aviso_de_presupuesto(9, CAMBIO);
+        assert!(t.contains("9 puntos"), "{t}");
+        assert!(t.contains("9 consultas"), "no traduce a consultas: {t}");
+        assert!(t.contains("3 cambios"), "no traduce a cambios: {t}");
+    }
+
+    #[test]
+    fn a_cero_se_le_dice_que_pare_y_responda() {
+        let t = aviso_de_presupuesto(0, CAMBIO);
+        assert!(t.contains("acabado"), "{t}");
+        assert!(t.contains("Responde"), "no le dice que haga con lo que tiene: {t}");
+    }
+
+    #[test]
+    fn el_presupuesto_cae_del_lado_que_cambia_de_la_marca() {
+        // LA TRAMPA QUE ESTO CIERRA. Si esta seccion fuera estable, un numero que
+        // cambia en cada turno caeria del lado CACHEADO del corte: cada turno
+        // escribiria una entrada nueva de cache y ninguna se leeria jamas. La
+        // cifra habria costado el ahorro entero.
+        let secs = secciones();
+        let p = secs
+            .iter()
+            .find(|s| s.name() == "Presupuesto")
+            .expect("la seccion se quito del registro");
+        assert!(!p.stable(), "el presupuesto cambia en cada turno: no puede ser estable");
+        let primera_inestable = {
+            let mut v: Vec<_> = secs.iter().filter(|s| !s.stable()).map(|s| s.priority()).collect();
+            v.sort_unstable();
+            v[0]
+        };
+        assert!(
+            p.priority() >= primera_inestable,
+            "queda por encima del corte y se cachearia"
+        );
+    }
+
+    #[test]
+    fn fuera_del_automatico_no_se_menciona() {
+        // Sin cadena no hay presupuesto, y una linea que dice «te quedan N
+        // puntos» cuando cada comando lo aprueba una persona es ruido que ademas
+        // sugiere un limite que no existe.
+        let p = build(&Ctx { presupuesto: None, ..Default::default() });
+        assert!(!p.contains("puntos de ejecución"), "habla de presupuesto sin cadena");
     }
 }
