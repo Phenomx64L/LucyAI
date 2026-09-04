@@ -719,7 +719,7 @@ impl App {
             // rechazarlo: se escribe así arrastrando el control, y negarse a
             // guardar deja un formulario que no explica qué le pasa.
             self.umbrales = u.sane();
-            let _ = lucy_core::thresholds::guarda("local", &self.umbrales);
+            let _ = lucy_core::thresholds::guarda(lucy_core::thresholds::LOCAL, &self.umbrales);
         }
     }
 

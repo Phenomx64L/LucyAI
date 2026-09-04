@@ -6067,7 +6067,7 @@ impl App {
             procs_last: Instant::now() - Duration::from_secs(60),
             svc_last: Instant::now() - Duration::from_secs(60),
             svc_stamp: String::from("—"),
-            umbrales: lucy_core::thresholds::de("local"),
+            umbrales: lucy_core::thresholds::de(lucy_core::thresholds::LOCAL),
             salud: Salud::nueva(Instant::now()),
             alertas_abiertas: false,
             hist: lucy_core::history::Resumen::default(),
