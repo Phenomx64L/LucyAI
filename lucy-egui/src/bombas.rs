@@ -338,6 +338,13 @@ impl App {
                 // enseña podía ir veinte llamadas por detrás de la factura.
                 self.tabs[i].tokens_in += r.tokens_in;
                 self.tabs[i].tokens_out += r.tokens_out;
+                // Y SU COSTE, cobrado con el modelo que corrio la tarea. Ver
+                // `Tab::coste`: sumar solo los tokens dejaba el gasto del
+                // sub-agente a merced de lo que hubiera en el selector despues.
+                self.tabs[i].coste = suma_coste(
+                    self.tabs[i].coste,
+                    lucy_core::pricing::cost(&self.chat_model, r.tokens_in, r.tokens_out),
+                );
                 // APUNTADO APARTE COMO «fork». El coste de un sub-agente es la
                 // parte de la factura que nadie ve pasar, y sumarlo al del chat
                 // en el mismo cubo dejaría sin contestar «¿me salen a cuenta los

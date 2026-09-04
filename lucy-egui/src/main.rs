@@ -826,10 +826,20 @@ fn campo(ui: &mut egui::Ui, etiqueta: &str, valor: &mut String, pista: &str) {
     ui.add_space(6.0);
 }
 
-/// La franja de confirmación de un comando destructivo. `true` = ejecutar.
+/// Suma un cobro al total de una pestaña, arrastrando el «no se sabe».
 ///
-/// Devuelve el veredicto en vez de ejecutar ella: así el mismo trozo sirve para
-/// el equipo local y para uno remoto, que corren por caminos distintos.
+/// UNA VEZ QUE UNA LLAMADA NO TIENE PRECIO, EL TOTAL YA NO SE PUEDE SABER, y esa
+/// es toda la funcion. La tentacion es `unwrap_or(0.0)`: no falla, compila, y
+/// convierte «no se cuanto costo esto» en «costo cero» — que es la mentira mas
+/// facil de contar en un contador de gasto, porque se parece muchisimo a estar
+/// bien. Con `None` el indicador dice «coste n/d», que es la verdad.
+fn suma_coste(actual: Option<f64>, cobro: Option<f64>) -> Option<f64> {
+    match (actual, cobro) {
+        (Some(a), Some(b)) => Some(a + b),
+        _ => None,
+    }
+}
+
 /// La franja de confirmación de un comando destructivo, y la dueña del pendiente.
 ///
 /// SE LLEVA EL ESTADO DENTRO, Y ÉSE ES EL ARREGLO. Antes devolvía solo un `bool`
@@ -1664,6 +1674,18 @@ struct ChatTab {
     /// Tokens cobrados en esta pestaña, para el contador de coste.
     tokens_in: u32,
     tokens_out: u32,
+    /// Lo que ha costado esta pestaña, COBRADO AL LLEGAR.
+    ///
+    /// Y no recalculado luego a partir de los tokens: `gasto_sesion` tarifaba
+    /// todo lo acumulado con el modelo seleccionado AHORA, así que pasar de Opus
+    /// a Haiku dividía por cinco el gasto ya hecho — retroactivamente y en
+    /// silencio— y el tope de la sesión dejaba de saltar. El modelo correcto solo
+    /// se conoce en el instante en que llegan los tokens, que es donde se cobra.
+    ///
+    /// `None` = alguna llamada fue de un modelo sin precio en el catálogo, así
+    /// que el total de la pestaña ya no se puede saber. Se dice, en vez de
+    /// enseñar un número corto que parecería completo.
+    coste: Option<f64>,
     /// Transcripción en vuelo: el canal por el que llegará el texto.
     tr_rx: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
     /// Grabación de voz en curso, si la hay. Vive en la pestaña porque el
@@ -1761,6 +1783,7 @@ impl ChatTab {
             tr_rx: None,
             tokens_in: 0,
             tokens_out: 0,
+            coste: Some(0.0),
             auto: false,
             loops: 0,
             tool_loops: 0,
@@ -6267,6 +6290,11 @@ impl App {
                         lucy_core::chat::ChatEvent::Usage(i, o) => {
                             t.tokens_in += i;
                             t.tokens_out += o;
+                            // COBRADO AQUI, con el modelo que hizo la llamada.
+                            // Ver el campo: recalcularlo despues con el modelo
+                            // seleccionado en ese momento retarifaba el pasado.
+                            t.coste =
+                                suma_coste(t.coste, lucy_core::pricing::cost(&modelo, i, o));
                             // Y AL DISCO, que es donde faltaba. Estos dos
                             // contadores viven en el struct de la pestaña: al
                             // cerrar el programa desaparecían, y con ellos la
@@ -7196,11 +7224,10 @@ impl eframe::App for App {
                         // junto a él: cuánto llevas gastado con cuál.
                         ui.add_space(10.0);
                         let t = &self.tabs[self.tab];
-                        match lucy_core::pricing::cost(
-                            &self.chat_model,
-                            t.tokens_in,
-                            t.tokens_out,
-                        ) {
+                        // LO COBRADO, no lo que costaria hoy: este indicador
+                        // cambiaba de cifra al cambiar de modelo en el selector,
+                        // sobre un gasto que ya estaba hecho.
+                        match t.coste {
                             Some(c) => ui.label(
                                 egui::RichText::new(lucy_core::pricing::fmt_usd(c))
                                     .color(if c > 0.0 { theme::txt3() } else { theme::faint() })
@@ -10580,11 +10607,8 @@ impl App {
     /// preferible a inventarle un precio, que daría una cifra falsa con aspecto
     /// de medida; la interfaz ya dice «coste n/d» cuando pasa.
     fn gasto_sesion(&self) -> f64 {
-        let chat: f64 = self
-            .tabs
-            .iter()
-            .filter_map(|t| lucy_core::pricing::cost(&self.chat_model, t.tokens_in, t.tokens_out))
-            .sum();
+        // LO QUE SE COBRO, no lo que costaria hoy. Ver `Tab::coste`.
+        let chat: f64 = self.tabs.iter().filter_map(|t| t.coste).sum();
         // Y lo de poner nombres, que va tarifado con el modelo que los puso y no
         // con el del chat. Suele ser cero —titula Ollama— pero cuando no lo es,
         // es gasto de verdad y el tope de la sesión tiene que verlo.
@@ -17111,5 +17135,47 @@ mod presupuesto {
         assert!(boton < BOTON_MANT_MIN, "el botón no cedió: {boton}");
         assert!(boton > 100.0, "cedió demasiado y ya no se puede pulsar: {boton}");
         assert!(texto > boton, "el texto tiene que llevarse la mayor parte: {texto}");
+    }
+}
+
+#[cfg(test)]
+mod cobro_por_pestana {
+    use super::*;
+
+    #[test]
+    fn una_llamada_sin_precio_deja_el_total_en_no_se_sabe() {
+        // LA TENTACION QUE ESTO CIERRA es `unwrap_or(0.0)`: no falla, compila, y
+        // convierte «no se cuanto costo esto» en «costo cero» — que en un
+        // contador de gasto es la mentira mas facil de contar, porque se parece
+        // muchisimo a estar bien.
+        assert_eq!(suma_coste(Some(1.5), Some(0.5)), Some(2.0));
+        assert_eq!(suma_coste(Some(1.5), None), None, "un cobro sin precio no vale cero");
+        // Y no se recupera: con un tramo desconocido en medio, el total de la
+        // pestaña ya no se puede saber por mucho que las siguientes si tengan
+        // precio.
+        assert_eq!(suma_coste(None, Some(9.0)), None, "el «no se sabe» se recupero solo");
+    }
+
+    #[test]
+    fn el_tope_de_sesion_no_mira_el_modelo_seleccionado() {
+        // EL FALLO. `gasto_sesion` tarifaba los tokens acumulados de cada pestaña
+        // con `self.chat_model` — el de AHORA. Pasar de Opus a Haiku en el
+        // selector dividia por cinco el gasto YA HECHO, retroactivamente y sin
+        // que nada fallara, y el tope de la sesion dejaba de saltar.
+        //
+        // Se mira el fuente porque lo que hay que fijar es de donde sale el
+        // numero, y eso no se observa sumando: con un solo modelo en juego el
+        // resultado es el mismo con el fallo y sin el.
+        let fuente = include_str!("main.rs");
+        let cuerpo = fuente
+            .split("fn gasto_sesion")
+            .nth(1)
+            .expect("desaparecio el calculo del gasto de sesion");
+        let cuerpo = &cuerpo[..cuerpo.len().min(600)];
+        assert!(
+            !cuerpo.contains("chat_model"),
+            "el gasto de la sesion se retarifa con el modelo del selector: {cuerpo}"
+        );
+        assert!(cuerpo.contains("t.coste"), "no suma lo que se cobro al llegar");
     }
 }
