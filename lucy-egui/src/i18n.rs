@@ -1351,6 +1351,7 @@ pub const FRASES: &[Frase] = &[
         "On commence",
         "Wir fangen an",
     ),
+    f!("Encendido hace {t}", "Uptime {t}", "Ligado há {t}", "Allumé depuis {t}", "Läuft seit {t}"),
     f!("Enviar", "Send", "Enviar", "Envoyer", "Senden"),
     f!("Equilibrado", "Balanced", "Equilibrado", "Équilibré", "Ausgewogen"),
     f!(

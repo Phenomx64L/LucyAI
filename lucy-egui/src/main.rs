@@ -256,15 +256,30 @@ enum MemTab {
 impl View {
     /// El nombre que ve el operador, en su idioma.
     ///
-    /// NexShell, Log Viewer y Terminal IA no están en la tabla de traducción a
-    /// propósito: son partes de Lucy CON NOMBRE, no descripciones. `tr` devuelve
-    /// el español, que es justo lo que se quiere.
+    /// NexShell y Terminal IA no están en la tabla de traducción a propósito: son
+    /// partes de Lucy CON NOMBRE, no descripciones. `tr` devuelve el español, que
+    /// es justo lo que se quiere.
+    ///
+    /// EL VISOR DE LOGS ESTABA EN ESA LISTA Y NO LE CORRESPONDÍA. La regla dice
+    /// «nombre propio», pero «Log Viewer» no es un nombre acuñado como NexShell:
+    /// es una descripción en inglés, y la prueba es que `titulo()` —tres líneas
+    /// más abajo— llama a esa misma pantalla «Visor de logs» y esa cadena SÍ está
+    /// traducida a los cinco idiomas.
+    ///
+    /// O sea que era la única de las ocho entradas del menú que no pasaba por la
+    /// tabla, y el resultado se veía: en alemán la barra lateral decía «Log
+    /// Viewer» y el encabezado de esa misma pantalla, «Log-Ansicht». Ahora las dos
+    /// usan la misma clave.
+    ///
+    /// «Dashboard» y «Compliance» se quedan como están y no es un descuido: las
+    /// dos están en la tabla, y su traducción al español es la palabra en inglés
+    /// porque es la que se usa. En portugués, francés y alemán sí cambian.
     fn label(self) -> &'static str {
         i18n::tr(match self {
             View::Dashboard => "Dashboard",
             View::TerminalIa => "Terminal IA",
             View::NexShell => "NexShell",
-            View::LogViewer => "Log Viewer",
+            View::LogViewer => "Visor de logs",
             View::Inventario => "Inventario",
             View::Compliance => "Compliance",
             View::Memoria => "Memoria",
@@ -12528,7 +12543,16 @@ impl App {
                                 title: "Sistema",
                                 text: s.host.clone(),
                                 sub: s.os.clone(),
-                                sub2: format!("Uptime {}", fmt_uptime(s.uptime_secs)),
+                                // `trf` Y NO `format!`. Con `format!` la cadena se
+                                // arma sin pasar por la tabla, así que «Uptime»
+                                // salía en inglés con la interfaz en cualquiera
+                                // de los cinco idiomas — y sin fallar, que es lo
+                                // que hace que sobreviva. Es la trampa que la
+                                // cabecera de `i18n` describe.
+                                sub2: i18n::trf(
+                                    "Encendido {t}",
+                                    &[("t", &fmt_uptime(s.uptime_secs))],
+                                ),
                                 ..Default::default()
                             },
                         );
