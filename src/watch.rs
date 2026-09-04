@@ -647,7 +647,22 @@ pub fn olvida_la_sesion() {
 /// escribe en el carril de trace, que es donde se investiga un «me avisa
 /// demasiado» sin tener que adivinar.
 pub fn pasada(s: &SysSnapshot, servicios: Option<&[DownService]>, ahora: i64) -> Vec<Decision> {
-    let u = crate::thresholds::de("");
+    // «local» Y NO LA CADENA VACÍA, QUE ERA LO QUE HABÍA.
+    //
+    // `thresholds::de` es un `WHERE host_id = ?1` con caída a los valores de
+    // fábrica cuando no hay fila. La cadena vacía no es una clave especial: es
+    // una que NADIE ESCRIBE NUNCA. El único escritor de la tabla guarda bajo
+    // «local», que es la misma clave con la que el Dashboard lee.
+    //
+    // O sea que el operador bajaba el corte del disco al 70 %, la pantalla le
+    // hacía caso —esa sí lee «local»— y las notificaciones seguían saltando en el
+    // 85 de fábrica. Sin fallar y sin avisar: `de` devuelve unos umbrales
+    // perfectamente válidos, solo que no los suyos.
+    //
+    // Y es justo lo que este módulo vino a arreglar: la cabecera de `thresholds`
+    // dice que existe porque había TRES ESCALAS para el mismo dato. Con esto
+    // volvían a ser dos, la de la pantalla y la del vigilante.
+    let u = crate::thresholds::de(crate::thresholds::LOCAL);
     manda(observa_local(s, servicios, &u), ahora)
 }
 
