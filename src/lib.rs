@@ -180,33 +180,18 @@ static POOL: OnceCell<DbPool> = OnceCell::new();
 
 /// Una memoria de largo plazo — misma forma que la fila `agent_memories`.
 ///
-/// LA definición, no una de dos: `src-tauri` la reexporta desde aquí. Existía
-/// duplicada campo por campo, y una struct copiada es una struct que acaba
-/// difiriendo en una columna que alguien añadió a un lado.
+/// LA definición, no una de dos. Existía duplicada campo por campo con la de la
+/// app Tauri, y una struct copiada es una struct que acaba difiriendo en una
+/// columna que alguien añadió a un lado. Aquella app ya no está; la razón por la
+/// que esto vive aquí y no en el shell sigue en pie de todos modos: es la forma
+/// de una fila de la base, y quien la define es quien la lee.
 ///
-/// El derive de ts-rs va tras la feature `ts` porque exportar TypeScript es un
-/// problema de la app Tauri (sus tipos cruzan el puente IPC). El shell nativo
-/// llama funciones Rust directamente y no debe compilar ts-rs por compartir un
-/// tipo.
-///
-/// LA RUTA SE ARRASTRÓ AL SACAR EL CRATE DE `lucy-svelte`. Era `../src/lib/types/`
-/// con un comentario que decía que «resuelve al mismo sitio desde cualquiera de
-/// los dos crates» — cierto mientras este crate vivía DENTRO del repositorio de
-/// la V1. Fuera, el `..` ya no llega al frontend, y el fichero generado se puso a
-/// aterrizar aquí dentro, en un `src/lib/types/` que no pinta nada en un crate de
-/// Rust. Llegó a versionarse.
-///
-/// Y NO SE PUEDE APUNTAR AL OTRO REPOSITORIO: ts-rs se niega a escribir fuera de
-/// su propio crate y descarta los `..` que lo intenten, en silencio. Poner
-/// `../lucy-svelte/src/lib/types/` no da error — crea `lucy-core/lucy-svelte/…`,
-/// que es una carpeta con el nombre del otro proyecto dentro de éste. Probado.
-///
-/// Así que va a `bindings/`, que está ignorado por git. Hoy no lo consume nadie:
-/// el frontend de la V1 no importa este tipo en ninguna parte —se comprobó— y el
-/// shell nativo llama las funciones de Rust directamente. La maquinaria se queda
-/// por si la V1 vuelve a necesitarla, escribiendo donde no molesta.
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-#[cfg_attr(feature = "ts", ts(export, export_to = "bindings/"))]
+/// LLEVABA ENCIMA LA EXPORTACIÓN A TYPESCRIPT, y ya no. Dos `cfg_attr` tras una
+/// feature `ts` generaban los `.ts` que cruzaban el puente IPC de Tauri. Con la
+/// V1 fuera del árbol no hay puente, no hay quien importe esos tipos, y la
+/// feature no la activaba nadie — así que era una dependencia opcional
+/// arrastrada para un consumidor que no existe. Si algún día vuelve a hacer
+/// falta, son tres líneas y `ts-rs` en el manifiesto.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentMemory {
     pub id: i64,
@@ -217,25 +202,6 @@ pub struct AgentMemory {
     pub files: String,      // JSON array
     pub importance: i64,    // 1-3
     pub created_at: i64,    // unix epoch segundos
-}
-
-/// Adopta un pool YA construido en vez de abrir uno propio.
-///
-/// Es lo que usa la app Tauri. Sin esto, enlazar este crate desde `src-tauri`
-/// significaría **dos** pools r2d2 sobre el mismo fichero SQLite: el doble de
-/// conexiones, dos juegos de PRAGMA que pueden discrepar, y contención de
-/// escritura entre dos mitades del mismo proceso. Un pool, dos consumidores.
-///
-/// El shell nativo sigue usando `init(path)`, que sí construye el suyo — ahí no
-/// hay ninguno que adoptar.
-///
-/// Idempotente: si ya hay pool, no hace nada y devuelve `Ok`. Eso importa
-/// porque el arranque de Tauri puede reentrar.
-pub fn init_with_pool(pool: DbPool) -> Result<(), String> {
-    if POOL.get().is_some() {
-        return Ok(());
-    }
-    POOL.set(pool).map_err(|_| "lucy-core: pool ya inicializado".to_string())
 }
 
 /// Abre el pool compartido sobre una lucy.db EXISTENTE (la app Tauri crea el

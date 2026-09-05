@@ -482,18 +482,28 @@ mod tests {
 
     #[test]
     fn una_miniatura_cabe_en_su_cuadro_y_no_se_deforma() {
-        // Contra un PNG de verdad: el icono del propio proyecto, que es cuadrado
-        // de 256. Si esto se cae, o el crate `image` perdio el formato o la
-        // ruta cambio — las dos cosas hay que saberlas.
-        let icono = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../lucy-svelte/icon.png");
-        if !icono.exists() {
-            // Sin el repositorio unificado al lado no hay contra que medir.
-            return;
-        }
-        let m = miniatura(&icono, LADO_MINIATURA).expect("no decodifico el PNG");
+        // EL PNG SE FABRICA AQUI. Antes se medía contra el icono del repositorio
+        // de la V1 —`../lucy-svelte/icon.png`— con un `if !existe { return }`
+        // delante. Fuera de aquel arbol el fichero no esta, asi que el test
+        // salia verde sin decodificar nada: ocupaba el sitio del que si miraria.
+        //
+        // Y se fabrica APAISADO, 320x200, que mide mas que el icono cuadrado que
+        // habia: en un cuadrado «no se deforma» y «llena el cuadro» dan el mismo
+        // numero por los dos lados y no distinguen un escalado bueno de uno que
+        // estire. Con 8:5 el resultado correcto es 160x100 y solo hay una forma
+        // de acertarlo.
+        let p = std::env::temp_dir().join("lucy_test_miniatura.png");
+        let fuente = image::RgbaImage::from_fn(320, 200, |x, y| {
+            image::Rgba([(x % 256) as u8, (y % 256) as u8, 128, 255])
+        });
+        fuente.save(&p).expect("no pude escribir el PNG de prueba");
+
+        let m = miniatura(&p, LADO_MINIATURA).expect("no decodifico el PNG");
+        let _ = std::fs::remove_file(&p);
+
         assert!(m.ancho <= LADO_MINIATURA && m.alto <= LADO_MINIATURA, "{}x{}", m.ancho, m.alto);
         assert!(m.ancho.max(m.alto) == LADO_MINIATURA, "no lleno el cuadro por el lado largo");
+        assert_eq!((m.ancho, m.alto), (160, 100), "se deformo: 8:5 tiene que salir 8:5");
         assert_eq!(
             m.rgba.len(),
             (m.ancho * m.alto * 4) as usize,
