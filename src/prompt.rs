@@ -542,6 +542,10 @@ impl Section for Actions {
              un procedimiento o una configuración concreta: si hay un manual de eso, dice \
              más y mejor que lo que tú recuerdes, y citarlo es la diferencia entre una \
              respuesta y una respuesta comprobable.\n\
+             · <TOOL>recall:qué buscar</TOOL> — lo que ya sabes de otras veces. Lo que \
+             venía al caso de la pregunta inicial ya lo tienes más arriba, sin pedirlo; \
+             ésta es para cuando te haga falta algo del pasado A MITAD de una \
+             investigación, que es donde el recuerdo automático ya no llega.\n\
              Y dos para cambiar ficheros, que NO escriben solas: preparan el cambio en \
              el panel de Artefactos con su diff. De ahí sale al disco por una de dos \
              puertas: la aprueba el operador, o —si tiene el automático encendido— la \
