@@ -9924,6 +9924,39 @@ impl App {
             .find(|t| t.kind == TagKind::FileContent)
             .map(|t| t.content.clone());
 
+        // ── LUCY RETIRA SUS PROPIOS PASOS, Y ESTO VA ANTES DEL BUCLE ─────────
+        //
+        // Un turno puede dejar varios `<EXECUTE>` en cola, y si el primero falla,
+        // los demás corrían igual. Cancelarlos todos de oficio sería agresivo
+        // —`Get-Service A` y `Get-Disk` no tienen nada que ver— y no cancelar
+        // ninguno deja al automático siguiendo un plan que la realidad acaba de
+        // desmentir. El arnés no puede acertar siempre; el modelo sí, porque los
+        // escribió él.
+        //
+        // ANTES DEL BUCLE Y NO DENTRO, y ésa es la única decisión de peso aquí.
+        // Procesada en su turno, una respuesta que ponga el `<CANCEL>` DESPUÉS de
+        // sus `<EXECUTE>` se llevaría por delante los pasos que acaba de escribir
+        // — el modelo se dispararía en el pie por el orden en que redactó, que es
+        // exactamente la clase de trampa que no debe existir. Aquí retira lo que
+        // estaba pendiente ANTES de este turno, y lo nuevo nace después.
+        if let Some(t) = etiquetas.iter().find(|t| t.kind == TagKind::Cancel) {
+            let motivo = t.content.trim();
+            let motivo = if motivo.is_empty() {
+                i18n::tr("Retirado por Lucy").to_string()
+            } else {
+                i18n::trf("Retirado por Lucy: {motivo}", &[("motivo", motivo)])
+            };
+            let n = self.tabs[ti].caducar_pendientes(&motivo);
+            if n > 0 {
+                self.tabs[ti].ws.trace_push(TraceEntry {
+                    phase: "info".into(),
+                    label: i18n::tr("Pasos retirados").into(),
+                    detail: motivo,
+                    ..Default::default()
+                });
+            }
+        }
+
         for t in etiquetas {
             match t.kind {
                 TagKind::Thought => self.tabs[ti].ws.trace_push(TraceEntry {
@@ -17304,5 +17337,52 @@ mod salida_remota_al_modelo {
         let r = App::nx_salida_para_el_modelo(salida).expect("una salida normal se retuvo");
         assert!(r.contains("No se encuentra"), "se perdio el error: {r}");
         assert!(!r.contains("Sup3rSecreto"), "la contraseña viaja al proveedor: {r}");
+    }
+}
+
+#[cfg(test)]
+mod retirada_de_pasos {
+    #[test]
+    fn la_retirada_se_procesa_antes_de_crear_los_pasos_nuevos() {
+        // LA DECISION DE PESO DE ESTA PIEZA, y la unica que puede salir mal.
+        //
+        // Si `<CANCEL>` se atendiera dentro del bucle que recorre las etiquetas,
+        // una respuesta que lo escribiera DESPUES de sus `<EXECUTE>` se llevaria
+        // por delante los pasos que acaba de proponer: el modelo se dispararia en
+        // el pie por el ORDEN en que redacto, que es la clase de trampa que no
+        // debe existir en una etiqueta que se le ofrece.
+        //
+        // Se mira el fuente porque lo que hay que fijar es la POSICION del
+        // manejo, y eso no se observa ejecutando: las dos versiones funcionan
+        // mientras el modelo ponga la etiqueta primero.
+        let fuente = include_str!("main.rs");
+        let cuerpo = fuente
+            .split("fn absorb_tags")
+            .nth(1)
+            .expect("desaparecio `absorb_tags`");
+        let retirada = cuerpo
+            .find("TagKind::Cancel")
+            .expect("ya no se atiende la retirada de pasos");
+        let bucle = cuerpo.find("for t in etiquetas {").expect("desaparecio el bucle");
+        assert!(
+            retirada < bucle,
+            "la retirada se atiende DENTRO del bucle: un <CANCEL> escrito detras \
+             de los <EXECUTE> se llevaria los pasos del propio turno"
+        );
+    }
+
+    #[test]
+    fn se_le_dice_al_modelo_cuando_usarla_y_cuando_no() {
+        // Una etiqueta de cancelar anunciada a secas invita a usarla ante
+        // cualquier fallo, y dos consultas independientes no se invalidan entre
+        // ellas. El prompt tiene que traer las dos mitades.
+        let p = lucy_core::prompt::build(&lucy_core::prompt::Ctx {
+            auto: true,
+            can_execute: true,
+            ..Default::default()
+        });
+        assert!(p.contains("<CANCEL>"), "no se le ofrece la etiqueta");
+        assert!(p.contains("INDEPENDIENTES"), "no se le dice cuando NO retirar");
+        assert!(p.contains("ANTES de este turno"), "no se le dice a que alcanza");
     }
 }

@@ -2503,6 +2503,7 @@ pub const FRASES: &[Frase] = &[
         "Étapes que Lucy a enchaînées seule pour cette demande. Arrivée au plafond, elle s'arrête et l'opérateur reprend les approbations.",
         "Schritte, die Lucy in diesem Befehl allein verkettet hat. Am Limit schaltet sie ab, und der Operator gibt weiter frei.",
     ),
+    f!("Pasos retirados", "Steps withdrawn", "Passos retirados", "Étapes retirées", "Schritte zurückgezogen"),
     f!("Patrones", "Patterns", "Padrões", "Motifs", "Muster"),
     f!(
         "Pausar la actualización",
@@ -2790,6 +2791,8 @@ pub const FRASES: &[Frase] = &[
         "Résume les erreurs les plus récentes du journal d'événements système (dernières 24 h).",
         "Fasse die neuesten Fehler aus dem Systemereignisprotokoll zusammen (letzte 24 h).",
     ),
+    f!("Retirado por Lucy", "Withdrawn by Lucy", "Retirado por Lucy", "Retiré par Lucy", "Von Lucy zurückgezogen"),
+    f!("Retirado por Lucy: {motivo}", "Withdrawn by Lucy: {motivo}", "Retirado por Lucy: {motivo}", "Retiré par Lucy : {motivo}", "Von Lucy zurückgezogen: {motivo}"),
     f!(
         "Revisa la salud del sistema (CPU, RAM, disco, servicios) y dame un resumen del estado.",
         "Check system health (CPU, RAM, disk, services) and give me a summary of the state.",
