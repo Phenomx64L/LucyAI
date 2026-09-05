@@ -742,9 +742,10 @@ fn load_system_fonts(ctx: &egui::Context) {
             fonts.families.entry(fam).or_default().push("segoe_symbol".into());
         }
     } else {
-        eprintln!(
-            "[lucy] no se pudo leer C:\\Windows\\Fonts\\seguisym.ttf — \
-             los iconos del rail se verán como cuadros vacíos."
+        crate::bitacora(
+            "WARNING",
+            "no se pudo leer C:\\Windows\\Fonts\\seguisym.ttf — \
+             los iconos del rail se verán como cuadros vacíos.",
         );
     }
 

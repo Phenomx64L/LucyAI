@@ -3759,13 +3759,6 @@ pub const FRASES: &[Frase] = &[
         "in dieser Datenbank ist noch nichts erfasst",
     ),
     f!(
-        "todavía vive en src-tauri, junto al transporte WinRM y a",
-        "still lives in src-tauri, alongside the WinRM transport and",
-        "ainda vive em src-tauri, junto ao transporte WinRM e aos",
-        "vit encore dans src-tauri, avec le transport WinRM et",
-        "lebt noch in src-tauri, neben dem WinRM-Transport und",
-    ),
-    f!(
         "todo el tráfico a Ollama local",
         "all traffic to local Ollama",
         "todo o tráfego para o Ollama local",
@@ -5113,9 +5106,9 @@ mod tests {
     #[test]
     fn los_textos_que_vienen_del_core_estan_traducidos() {
         // EL PUNTO CIEGO QUE NO CERRABA NINGÚN OTRO TEST. `lucy-core` no sabe de
-        // idiomas —y no debe: es el dominio, y la app Tauri comparte el mismo
-        // crate— así que sus `label()` se traducen envolviéndolos en el punto de
-        // uso. Eso funciona, pero nada avisaba de que una variante NUEVA en el
+        // idiomas —y no debe: es el dominio, y la tabla de frases es de la
+        // interfaz— así que sus `label()` se traducen envolviéndolos en el punto
+        // de uso. Eso funciona, pero nada avisaba de que una variante NUEVA en el
         // core llegara a la pantalla sin traducción: se descubría en una
         // captura, que es como se han descubierto casi todos los de esta tanda.
         //

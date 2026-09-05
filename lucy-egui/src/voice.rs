@@ -116,7 +116,7 @@ impl Recording {
                         b.extend_from_slice(data);
                     }
                 },
-                |e| eprintln!("[lucy] error del micrófono: {e}"),
+                |e| crate::bitacora("ERROR", &format!("error del micrófono: {e}")),
                 None,
             )
             .map_err(|e| format!("No se pudo abrir el micrófono: {e}"))?;

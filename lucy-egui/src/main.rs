@@ -102,9 +102,16 @@ fn main() -> eframe::Result {
     // fuera la función que lee las memorias.
     if let Some(p) = db_path() {
         if let Err(e) = lucy_core::schema::init_or_create(&p) {
-            eprintln!("lucy: no se pudo preparar la base ({p:?}): {e}");
+            bitacora("ERROR", &format!("no se pudo preparar la base ({p:?}): {e}"));
         }
     }
+    // La primera línea de la sesión. Sirve de dos cosas: separa un arranque del
+    // anterior al leer el fichero, y es la prueba de que el log SIGUE VIVO —que
+    // es justo lo que dejó de ser cuando se fue quien lo escribía.
+    bitacora(
+        "INFO",
+        &format!("arranca el shell nativo v{}", env!("CARGO_PKG_VERSION")),
+    );
     // Y el directorio de trabajo a memoria, para que el primer turno no pague la
     // consulta y para que lo que se cachee sea lo que hay de verdad.
     lucy_core::workdir::carga();
@@ -209,7 +216,7 @@ fn main() -> eframe::Result {
             // es el icono del aviso.
             #[cfg(windows)]
             if let Err(e) = lucy_core::notify::registra_identidad() {
-                eprintln!("[lucy] los avisos saldrán sin icono: {e}");
+                bitacora("WARNING", &format!("los avisos saldrán sin icono: {e}"));
             }
             Ok(Box::new(App::new(cc.storage)))
         }),
@@ -2082,21 +2089,45 @@ const SUGGESTIONS: [(icons::Icon, &str, &str); 4] = [
     ),
 ];
 
-/// `%APPDATA%\Lucy\logs\lucy_app.log` — el MISMO fichero que escribe
-/// `write_app_log` en el backend. Ojo: no cuelga de `com.lucy.dev` como la DB,
-/// sino de `Lucy\logs` — `get_logs_dir()` lo tiene fijo así.
+/// `%APPDATA%\Lucy\logs\lucy_app.log`. Ojo: no cuelga de `com.lucy.dev` como la
+/// DB, sino de `Lucy\logs` — así lo fijó la V1 y así lo lee la vista de Logs.
 fn log_path() -> Option<PathBuf> {
     dirs::config_dir().map(|d| d.join("Lucy").join("logs").join("lucy_app.log"))
 }
 
-/// `%APPDATA%\com.lucy.dev\lucy.db` — la MISMA DB que usa la app Tauri.
+/// Apunta una línea en el log de la aplicación. Y por la consola, si la hay.
+///
+/// ── QUIÉN ESCRIBÍA ESTO ANTES ───────────────────────────────────────────────
+///
+/// Nadie, desde que salió la V1. `write_app_log` vivía en el backend Tauri, y al
+/// irse dejó la vista de Logs y la sección del prompt leyendo un fichero que ya
+/// no crecía: en esta máquina llevaba quince días congelado. No vacío —vacío se
+/// habría notado— sino con dos mil seiscientas líneas viejas que el prompt
+/// seguía anunciándole al modelo como «las últimas líneas del log».
+///
+/// Y LOS `eprintln!` NO VALÍAN DE NADA. La ventana arranca con
+/// `with_decorations(false)` desde el Explorador, sin consola detrás: los cinco
+/// sitios que informaban de que el micrófono falló, de que no hay icono para los
+/// avisos o de que faltan las fuentes de símbolos escribían a un descriptor que
+/// nadie lee. Se sigue escribiendo por ahí —quien lo arranca desde una terminal
+/// para depurar sí lo ve— pero ahora además queda.
+pub(crate) fn bitacora(nivel: &str, mensaje: &str) {
+    eprintln!("[lucy] {mensaje}");
+    if let Some(p) = log_path() {
+        lucy_core::logs::apunta_en(&p, nivel, mensaje);
+    }
+}
+
+/// `%APPDATA%\com.lucy.dev\lucy.db` — la ruta que fijó la V1, y por eso se
+/// respeta: ahí está la base de todo el que ya venía usando Lucy. Cambiarla
+/// ahora que la aplicación es solo ésta dejaría atrás la memoria de cada uno.
 fn db_path() -> Option<PathBuf> {
     dirs::config_dir().map(|d| d.join("com.lucy.dev").join("lucy.db"))
 }
 
-/// Inicializa el pool del CORAZÓN sin-Tauri sobre tu DB real y llama
-/// `lucy_core::get_recent_memories` — la MISMA lógica que el backend Tauri,
-/// pero en un crate compartido SIN motor de navegador. Sin IPC, sin duplicar.
+/// Inicializa el pool del CORAZÓN sobre tu DB real y llama a
+/// `lucy_core::get_recent_memories` — la lógica que se sacó del backend Tauri a
+/// un crate propio, SIN motor de navegador. Sin IPC, sin duplicar.
 ///
 /// AHORA LA CREA SI NO ESTÁ. Antes esto devolvía «DB no encontrada» y ahí se
 /// acababa: el shell nativo necesitaba que la app Tauri se hubiera ejecutado
@@ -6602,7 +6633,7 @@ impl App {
                 match r {
                     Ok(h) if h.hay_algo() => self.hw = Some(h),
                     Ok(_) => {}
-                    Err(e) => eprintln!("[lucy] sin datos del equipo: {e}"),
+                    Err(e) => bitacora("WARNING", &format!("sin datos del equipo: {e}")),
                 }
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {}
@@ -11261,9 +11292,13 @@ impl App {
     /// Log Viewer — la cola de `lucy_app.log`, con filtro por nivel.
     ///
     /// La ruta se construye aquí, fija: `%APPDATA%\Lucy\logs\lucy_app.log`, la
-    /// misma que escribe `write_app_log`. Por eso esta vista NO necesita la
-    /// guarda de rutas sensibles que sí lleva el comando Tauri — allí la ruta la
-    /// puede pedir un modelo, aquí la pone el programa.
+    /// misma que escribe `bitacora`. Por eso esta vista NO necesita la guarda de
+    /// rutas sensibles que llevaba el comando equivalente de la V1 — allí la
+    /// ruta la podía pedir un modelo, aquí la pone el programa.
+    ///
+    /// Y AHORA HAY QUIEN ESCRIBA. Esta vista se pasó un tiempo enseñando un
+    /// fichero congelado, porque quien lo llenaba era el backend que se fue. Ver
+    /// `bitacora`.
     fn log_viewer(&mut self, ui: &mut egui::Ui) {
         self.lv_cabecera(ui);
         self.lv_barra(ui);
@@ -11526,8 +11561,10 @@ impl App {
             self.sem_result = None;
             return;
         }
-        // 'memory' es el entity_type que escriben los dos frontends — la app
-        // Tauri en upsert_embedding y el backfill.
+        // 'memory' es el entity_type con el que quedaron escritas las filas: lo
+        // ponía `upsert_embedding` de la V1 y lo puso su backfill. Buscar con
+        // otra etiqueta no daría error — daría cero resultados sobre una tabla
+        // llena.
         self.sem_result = Some(lucy_core::vectors::search(q, "memory", 8, 0.25));
     }
     /// Refresca las métricas respetando cada cadencia. `force` las salta todas
