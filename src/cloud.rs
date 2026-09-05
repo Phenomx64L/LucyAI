@@ -357,6 +357,117 @@ fn sistema_json(p: Provider, system: &str) -> serde_json::Value {
     }
 }
 
+/// Cuántos intentos, contando el primero.
+///
+/// Tres. Con dos, un pico de un segundo se lleva el turno por delante; con más,
+/// una nube caída de verdad tiene al operador esperando medio minuto delante de
+/// una pantalla que no dice nada.
+const INTENTOS: u32 = 3;
+
+/// Lo máximo que se espera entre intentos, pase lo que diga el proveedor.
+///
+/// Un `retry-after` de diez minutos es una respuesta legítima —y significa
+/// «vuelve luego», no «quédate ahí»—. Sin este techo, Lucy se queda colgada el
+/// tiempo que al proveedor le parezca.
+const ESPERA_MAX_SECS: u64 = 20;
+
+/// Si merece la pena volver a intentarlo.
+///
+/// SOLO LO QUE ES DE PASO. Un 400 es la petición mal formada y un 401 es la clave:
+/// reintentarlos es esperar a que cambie algo que no va a cambiar, y encima
+/// retrasa el error que el operador necesita leer. Los que sí:
+///
+/// ```text
+///   408  el proveedor se cansó de esperar
+///   429  demasiadas peticiones — normalmente con `retry-after`
+///   500  502  503  504  529   la otra punta está mal o saturada
+/// ```
+fn transitorio(codigo: u16) -> bool {
+    matches!(codigo, 408 | 429 | 500 | 502 | 503 | 504 | 529)
+}
+
+/// Manda la petición, reintentando lo que es de paso.
+///
+/// ── POR QUÉ EXISTE ──────────────────────────────────────────────────────────
+///
+/// No había ninguno. Un 429 —que es el proveedor diciendo literalmente «espera un
+/// momento y vuelve»— mataba el turno, apagaba la cadena automática, y dejaba al
+/// operador con «HTTP 429» delante. La cabecera de este módulo lo dice: los
+/// reintentos con backoff se dejaron fuera del primer porte a propósito. Esta es
+/// la parte que faltaba.
+///
+/// SOLO ANTES DEL PRIMER BYTE. Es una petición en streaming: una vez que el flujo
+/// ha empezado a devolver texto, repetirla duplicaría lo que el operador ya está
+/// leyendo. Aquí se reintenta el envío, y lo que falle a mitad de flujo sigue
+/// siendo un error, como antes.
+///
+/// SE RESPETA `retry-after` cuando viene, porque el proveedor sabe mejor que
+/// nosotros cuándo va a poder atender. Y cuando no viene, la espera se dobla:
+/// un segundo, dos, cuatro.
+/// `Ok(None)` = el operador pulso Detener mientras se esperaba. No es un error
+/// y no debe enseñarse como tal: es exactamente lo que pidio.
+fn con_reintentos(
+    p: Provider,
+    req: ureq::Request,
+    cuerpo: &str,
+    stop: &AtomicBool,
+) -> Result<Option<ureq::Response>, String> {
+    let mut espera = std::time::Duration::from_secs(1);
+    for intento in 1..=INTENTOS {
+        match req.clone().send_string(cuerpo) {
+            Ok(r) => return Ok(Some(r)),
+            Err(ureq::Error::Status(code, r)) => {
+                // El cuerpo del error del proveedor es lo único que dice qué
+                // campo sobra o falta; tragárselo deja al operador con un número.
+                let sugerida = r
+                    .header("retry-after")
+                    .and_then(|s| s.trim().parse::<u64>().ok())
+                    .map(std::time::Duration::from_secs);
+                let detail = r.into_string().unwrap_or_default();
+                let ultimo = intento == INTENTOS;
+                if ultimo || !transitorio(code) {
+                    let cuantos = if intento > 1 {
+                        format!(" (tras {intento} intentos)")
+                    } else {
+                        String::new()
+                    };
+                    return Err(format!(
+                        "{} respondió HTTP {code}{cuantos}: {}",
+                        p.label(),
+                        truncate(&detail, 400)
+                    ));
+                }
+                let cuanto = sugerida.unwrap_or(espera).min(
+                    std::time::Duration::from_secs(ESPERA_MAX_SECS),
+                );
+                // A CACHOS, MIRANDO EL BOTÓN DE PARAR. Un `sleep` de veinte
+                // segundos deja el «Detener» sin efecto justo cuando más ganas
+                // hay de pulsarlo: el operador ve una pantalla quieta y no sabe
+                // que hay alguien esperando por él.
+                let fin = std::time::Instant::now() + cuanto;
+                while std::time::Instant::now() < fin {
+                    if stop.load(Ordering::Relaxed) {
+                        return Ok(None);
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+                espera *= 2;
+            }
+            // Un fallo de red no trae estado. Se reintenta igual —un cable que
+            // se mueve o una wifi que salta son lo más transitorio que hay— pero
+            // sin `retry-after` que respetar.
+            Err(otro) => {
+                if intento == INTENTOS {
+                    return Err(format!("No se pudo llamar a {}: {otro}", p.label()));
+                }
+                std::thread::sleep(espera.min(std::time::Duration::from_secs(ESPERA_MAX_SECS)));
+                espera *= 2;
+            }
+        }
+    }
+    Err(format!("No se pudo llamar a {}", p.label()))
+}
+
 fn stream(
     p: Provider,
     model: &str,
@@ -452,22 +563,16 @@ fn stream(
         }
     };
 
-    let resp = req
-        .set("content-type", "application/json")
-        // `send_string` y no `send_json`: ureq entra aquí sin su característica
-        // `json`, igual que en el resto de la caja. Serializar a mano cuesta una
-        // línea; añadir la característica arrastra otra copia de serde al
-        // binario para lo mismo.
-        .send_string(&body.to_string())
-        .map_err(|e| match e {
-            // El cuerpo del error del proveedor es lo único que dice qué campo
-            // sobra o falta; tragárselo deja al operador con un número.
-            ureq::Error::Status(code, r) => {
-                let detail = r.into_string().unwrap_or_default();
-                format!("{} respondió HTTP {code}: {}", p.label(), truncate(&detail, 400))
-            }
-            other => format!("No se pudo llamar a {}: {other}", p.label()),
-        })?;
+    let req = req.set("content-type", "application/json");
+    // `send_string` y no `send_json`: ureq entra aquí sin su característica
+    // `json`, igual que en el resto de la caja. Serializar a mano cuesta una
+    // línea; añadir la característica arrastra otra copia de serde al binario
+    // para lo mismo.
+    let cuerpo = body.to_string();
+    let Some(resp) = con_reintentos(p, req, &cuerpo, stop)? else {
+        // Se pulso Detener mientras se esperaba a reintentar.
+        return Ok(());
+    };
 
     let reader = BufReader::new(resp.into_reader());
     // Un turno que no produce NADA tiene que decir por qué. Sin esto, un
@@ -1115,5 +1220,45 @@ mod respuesta_cortada {
             stop_reason(Provider::Anthropic, &json!({"delta":{"stop_reason":"max_tokens"}})),
             Some("max_tokens".into())
         );
+    }
+}
+
+#[cfg(test)]
+// Las aserciones sobre `ESPERA_MAX_SECS` e `INTENTOS` comparan CONSTANTES entre
+// si. Clippy las ve evaluables en compilacion y avisa; no son aserciones muertas
+// sino guardas de invariante: fijan una relacion de diseño para que subir un
+// numero rompa el test en vez de dejar la pantalla muerta veinte minutos.
+#[allow(clippy::assertions_on_constants)]
+mod reintentos {
+    use super::*;
+
+    #[test]
+    fn se_reintenta_lo_que_es_de_paso() {
+        // Un 429 es el proveedor diciendo literalmente «espera un momento y
+        // vuelve». Antes mataba el turno y apagaba la cadena automatica.
+        for c in [408, 429, 500, 502, 503, 504, 529] {
+            assert!(transitorio(c), "{c} no se reintenta y deberia");
+        }
+    }
+
+    #[test]
+    fn no_se_reintenta_lo_que_no_va_a_cambiar() {
+        // Reintentar un 400 es esperar a que cambie algo que no va a cambiar, y
+        // encima retrasa el error que el operador necesita leer — que en el 400 y
+        // el 401 dice exactamente que hay que arreglar.
+        for c in [400, 401, 403, 404, 413, 422] {
+            assert!(!transitorio(c), "{c} se reintenta y no deberia");
+        }
+    }
+
+    #[test]
+    fn la_espera_tiene_techo_aunque_el_proveedor_pida_mas() {
+        // Un `retry-after` de diez minutos es una respuesta legitima, y significa
+        // «vuelve luego» — no «quedate ahi». Sin techo, Lucy se queda colgada el
+        // tiempo que al proveedor le parezca, con el operador delante.
+        assert!(ESPERA_MAX_SECS <= 30, "una espera asi deja la pantalla muerta");
+        // Y con tres intentos y doblado, el peor caso sin `retry-after` son
+        // 1 + 2 = 3 segundos de espera: un pico se absorbe sin que se note.
+        assert_eq!(INTENTOS, 3);
     }
 }
