@@ -102,14 +102,20 @@ impl App {
                 Ok(r) => {
                     self.reembeber_rx = None;
                     self.upkeep_msg = match r {
-                        Ok(0) => i18n::tr("No había ningún trozo sin vector.").into(),
+                        Ok(0) => i18n::tr("No había nada sin vector.").into(),
                         Ok(n) => i18n::trf(
-                            "{n} trozos vuelven a ser buscables por significado.",
+                            "{n} filas vuelven a ser buscables por significado.",
                             &[("n", &n.to_string())],
                         ),
                         Err(e) => e,
                     };
-                    self.sin_vector = lucy_core::upkeep::sin_vector();
+                    // LAS DOS CUENTAS, no la de la clase que se acaba de
+                    // rehacer. Son dos consultas baratas que corren una vez al
+                    // terminar un trabajo manual, y refrescar solo una deja la
+                    // otra fila con una cifra vieja en pantalla — que es peor
+                    // que la consulta que ahorra.
+                    self.sin_vector = lucy_core::upkeep::sin_vector(upkeep::Clase::Trozo);
+                    self.sin_vector_mem = lucy_core::upkeep::sin_vector(upkeep::Clase::Memoria);
                     self.recuento = None;
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {}

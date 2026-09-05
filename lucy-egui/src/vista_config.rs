@@ -1130,16 +1130,18 @@ impl App {
         if self.recuento.is_none() {
             if let Some(p) = db_path() {
                 self.recuento = Some(lucy_core::upkeep::recuento(&p));
-                self.sin_vector = lucy_core::upkeep::sin_vector();
+                self.sin_vector = lucy_core::upkeep::sin_vector(upkeep::Clase::Trozo);
+                self.sin_vector_mem = lucy_core::upkeep::sin_vector(upkeep::Clase::Memoria);
             }
         }
         let r = self.recuento.clone().unwrap_or_default();
         let armada = self.purga_armada;
         let reembebiendo = self.reembeber_rx.is_some();
         let sin_vec = self.sin_vector;
+        let sin_vec_mem = self.sin_vector_mem;
         let mut copiar = false;
         let mut recargar = false;
-        let mut reembeber = false;
+        let mut reembeber: Option<upkeep::Clase> = None;
         let mut purgar: Option<lucy_core::upkeep::Purga> = None;
         panel(
             ui,
@@ -1172,33 +1174,51 @@ impl App {
                         );
                     });
                 }
-                // Trozos sin vector: la vista de Documentos ya lo decía y no
-                // ofrecía arreglarlo. Solo aparece cuando los hay.
-                if sin_vec > 0 {
-                    fila(
-                        ui,
+                // Sin vector: solo se encuentran por palabras. Cada fila aparece
+                // únicamente cuando hay algo que arreglar — una fila fija que
+                // dice «0» todos los días es ruido que se deja de leer, y el día
+                // que ponga «6» tampoco se leerá.
+                //
+                // Y SON DOS FILAS, no una suma. Rehacer los vectores de 797
+                // trozos de PDF y de 6 memorias son dos trabajos de duración muy
+                // distinta, y quien pulsa tiene derecho a saber en cuál se está
+                // metiendo. Sumarlos daría un botón que a veces tarda un segundo
+                // y a veces varios minutos, sin nada que lo anticipe.
+                for (clase, n, etiqueta, explica) in [
+                    (
+                        upkeep::Clase::Memoria,
+                        sin_vec_mem,
+                        "Memorias sin vector",
+                        "solo se encuentran por palabras — pasó si Ollama estaba caído al guardarlas",
+                    ),
+                    (
+                        upkeep::Clase::Trozo,
+                        sin_vec,
                         "Trozos sin vector",
-                        Some("solo se encuentran por palabras — pasó si Ollama estaba caído al ingerir"),
-                        false,
-                        |ui| {
-                            if ui
-                                .add_enabled(
-                                    !reembebiendo,
-                                    egui::Button::new(i18n::tr(if reembebiendo {
-                                        "Rehaciendo…"
-                                    } else {
-                                        "Rehacer"
-                                    }))
-                                    .small(),
-                                )
-                                .clicked()
-                            {
-                                reembeber = true;
-                            }
-                            ui.add_space(6.0);
-                            insignia(ui, &sin_vec.to_string(), false);
-                        },
-                    );
+                        "solo se encuentran por palabras — pasó si Ollama estaba caído al ingerir",
+                    ),
+                ] {
+                    if n == 0 {
+                        continue;
+                    }
+                    fila(ui, etiqueta, Some(explica), false, |ui| {
+                        if ui
+                            .add_enabled(
+                                !reembebiendo,
+                                egui::Button::new(i18n::tr(if reembebiendo {
+                                    "Rehaciendo…"
+                                } else {
+                                    "Rehacer"
+                                }))
+                                .small(),
+                            )
+                            .clicked()
+                        {
+                            reembeber = Some(clase);
+                        }
+                        ui.add_space(6.0);
+                        insignia(ui, &n.to_string(), false);
+                    });
                 }
                 fila(ui, "Copia de seguridad", Some("consistente, aunque Lucy esté escribiendo"), false, |ui| {
                     copiar = ui.small_button(i18n::tr("Guardar copia…")).clicked();
@@ -1274,11 +1294,11 @@ impl App {
         if recargar {
             self.recuento = None;
         }
-        if reembeber {
+        if let Some(clase) = reembeber {
             let (tx, rx) = std::sync::mpsc::channel();
             let stop = self.mant_stop.clone();
             std::thread::spawn(move || {
-                let _ = tx.send(lucy_core::upkeep::reembeber(&stop));
+                let _ = tx.send(lucy_core::upkeep::reembeber(clase, &stop));
             });
             self.reembeber_rx = Some(rx);
             self.upkeep_msg = i18n::tr("Rehaciendo los vectores que faltaban…").into();
@@ -1310,7 +1330,8 @@ impl App {
                     Err(e) => e,
                 };
                 self.recuento = None;
-                self.sin_vector = lucy_core::upkeep::sin_vector();
+                self.sin_vector = lucy_core::upkeep::sin_vector(upkeep::Clase::Trozo);
+                self.sin_vector_mem = lucy_core::upkeep::sin_vector(upkeep::Clase::Memoria);
                 self.mems = load_memories();
             } else {
                 self.purga_armada = Some(p);

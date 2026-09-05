@@ -2064,6 +2064,13 @@ pub const FRASES: &[Frase] = &[
         "Mémoires automatiques",
         "Automatische Erinnerungen",
     ),
+    f!(
+        "Memorias sin vector",
+        "Memories without a vector",
+        "Memórias sem vetor",
+        "Mémoires sans vecteur",
+        "Erinnerungen ohne Vektor",
+    ),
     f!("Minimizar", "Minimize", "Minimizar", "Réduire", "Minimieren"),
     f!("Modelo activo", "Active model", "Modelo ativo", "Modèle actif", "Aktives Modell"),
     f!(
@@ -2217,11 +2224,11 @@ pub const FRASES: &[Frase] = &[
         "Kein Modell passt",
     ),
     f!(
-        "No había ningún trozo sin vector.",
-        "There were no chunks without a vector.",
-        "Não havia nenhum fragmento sem vetor.",
-        "Aucun fragment n'était sans vecteur.",
-        "Es gab kein Fragment ohne Vektor.",
+        "No había nada sin vector.",
+        "Nothing was missing a vector.",
+        "Não havia nada sem vetor.",
+        "Rien n'était sans vecteur.",
+        "Es fehlte nirgends ein Vektor.",
     ),
     f!(
         "No hay ficheros de log en {dir}.",
@@ -3731,6 +3738,13 @@ pub const FRASES: &[Frase] = &[
         "ohne ihn erinnert sich Lucy nur über Wörter und findet deutlich weniger",
     ),
     f!(
+        "solo se encuentran por palabras — pasó si Ollama estaba caído al guardarlas",
+        "only found by keyword — happens when Ollama was down as they were saved",
+        "só se encontram por palavras — aconteceu se o Ollama estava em baixo ao guardá-las",
+        "on ne les trouve que par mots-clés — arrive si Ollama était hors service à l'enregistrement",
+        "nur über Stichwörter zu finden — passiert, wenn Ollama beim Speichern aus war",
+    ),
+    f!(
         "solo se encuentran por palabras — pasó si Ollama estaba caído al ingerir",
         "only found by words — happened if Ollama was down at ingest",
         "só se encontram por palavras — aconteceu se o Ollama estava em baixo ao ingerir",
@@ -3956,6 +3970,13 @@ pub const FRASES: &[Frase] = &[
         "{n} fichiers dans {dir} — le plus récent en premier",
         "{n} Dateien in {dir} — die neueste zuerst",
     ),
+    f!(
+        "{n} filas vuelven a ser buscables por significado.",
+        "{n} rows are searchable by meaning again.",
+        "{n} linhas voltam a ser pesquisáveis por significado.",
+        "{n} lignes sont à nouveau recherchables par sens.",
+        "{n} Zeilen sind wieder nach Bedeutung durchsuchbar.",
+    ),
     f!("{n} h", "{n} h", "{n} h", "{n} h", "{n} Std."),
     f!(
         "{n} hilos · {f} núcleos",
@@ -4005,13 +4026,6 @@ pub const FRASES: &[Frase] = &[
         "{n} nach Ähnlichkeit",
     ),
     f!("{n} trozos", "{n} chunks", "{n} fragmentos", "{n} fragments", "{n} Fragmente"),
-    f!(
-        "{n} trozos vuelven a ser buscables por significado.",
-        "{n} chunks are searchable by meaning again.",
-        "{n} fragmentos voltam a ser pesquisáveis por significado.",
-        "{n} fragments sont à nouveau recherchables par sens.",
-        "{n} Fragmente sind wieder nach Bedeutung durchsuchbar.",
-    ),
     f!("{n} volúmenes", "{n} volumes", "{n} volumes", "{n} volumes", "{n} Laufwerke"),
     f!(
         "{n} zócalos",
@@ -4395,25 +4409,75 @@ mod tests {
         assert_eq!(Lang::de_clave(""), None);
     }
 
-    /// El fuente de la pantalla, para poder contar lo que hay sin traducir.
+    /// TODOS los fuentes de la pantalla, para poder contar lo que hay sin
+    /// traducir.
     ///
     /// LEER EL PROPIO CÓDIGO EN UN TEST parece raro y es lo único que funciona:
     /// la alternativa es acordarse de cuánto quedaba, y acordarse es justo lo
     /// que falla entre una sesión y la siguiente. Solo se compila en los tests.
-    const FUENTE_ENTERA: &str = include_str!("main.rs");
+    ///
+    /// ── POR QUÉ ES UNA LISTA Y NO UN FICHERO ────────────────────────────────
+    ///
+    /// Era `include_str!("main.rs")` y nada más, y eso era CIERTO mientras la
+    /// pantalla entera viviera en `main.rs`. Al partir aquel fichero en nueve
+    /// módulos —`vista_config`, `bombas`, `vista_memoria`…— la interfaz se fue
+    /// con ellos y este guardia se quedó mirando lo que quedaba. No falló: siguió
+    /// pasando en verde sobre una fracción cada vez menor de la aplicación.
+    ///
+    /// Un guardia que se encoge solo es peor que uno que no existe, porque el
+    /// verde sigue ahí. Se descubrió metiendo dos frases nuevas en `bombas.rs` y
+    /// viendo que `toda_frase_envuelta_en_tr_tiene_traduccion` no se inmutaba.
+    ///
+    /// `i18n.rs` NO ESTÁ en la lista: es la tabla, no la pantalla.
+    const FUENTES: &[&str] = &[
+        include_str!("main.rs"),
+        include_str!("avatar.rs"),
+        include_str!("bombas.rs"),
+        include_str!("drain.rs"),
+        include_str!("icons.rs"),
+        include_str!("marco.rs"),
+        include_str!("prompt.rs"),
+        include_str!("theme.rs"),
+        include_str!("voice.rs"),
+        include_str!("whisper.rs"),
+        include_str!("vista_compliance.rs"),
+        include_str!("vista_config.rs"),
+        include_str!("vista_inventario.rs"),
+        include_str!("vista_logviewer.rs"),
+        include_str!("vista_memoria.rs"),
+        include_str!("vista_nexshell.rs"),
+        include_str!("vista_paleta.rs"),
+        include_str!("vista_workspace.rs"),
+    ];
 
-    /// El fuente SIN los módulos de test.
+    /// Los fuentes SIN los módulos de test, pegados.
     ///
     /// Los tests montan filas y paneles de mentira —«Etiqueta», «WIN-AD»,
     /// «Gemini 3.1 Pro — Esfuerzo Alto»— y contarlos como interfaz sin traducir
     /// inflaría la deuda con texto que nadie ve. Peor: haría que traducir de
     /// verdad no bajara el número, y un contador que no se mueve al trabajar se
     /// deja de mirar.
+    ///
+    /// EL CORTE ES POR FICHERO. Pegar primero y cortar después dejaría fuera todo
+    /// lo que va detrás del primer `#[cfg(test)]` que aparezca — o sea, la
+    /// interfaz de diecisiete módulos por culpa de los tests del primero.
     fn fuente() -> &'static str {
-        match FUENTE_ENTERA.find("#[cfg(test)]") {
-            Some(i) => &FUENTE_ENTERA[..i],
-            None => FUENTE_ENTERA,
-        }
+        static PEGADO: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        PEGADO
+            .get_or_init(|| {
+                FUENTES
+                    .iter()
+                    .map(|s| match s.find("#[cfg(test)]") {
+                        Some(i) => &s[..i],
+                        None => *s,
+                    })
+                    .collect::<Vec<_>>()
+                    // Con un salto entre medias: sin él, la última línea de un
+                    // fichero y la primera del siguiente se pegarían en una, y el
+                    // rascador leería un literal que no existe en ninguno.
+                    .join("\n")
+            })
+            .as_str()
     }
 
     /// El primer literal que aparece después de cada `marca`.
@@ -4899,6 +4963,14 @@ mod tests {
         // Que el tope suba por algo que no se puede nombrar es peor que si se
         // pudiera, y por eso queda escrito aquí: quien vuelva a tocar esto sabe
         // que hay una plantilla sin identificar dentro de la cuenta.
+        //
+        // Y SIGUE SIENDO 27 MIRANDO DIECIOCHO FICHEROS. Hasta ahora `fuente()`
+        // leía solo `main.rs`, así que desde que la pantalla se partió en
+        // módulos este número describía una fracción de la aplicación que iba
+        // menguando. Ampliado a todos, la cuenta no se movió: lo que se había
+        // ido con los módulos eran plantillas de las de abajo, ya contadas aquí.
+        // O sea que el listado de arriba resultó ser exacto — pero por suerte,
+        // no porque nadie lo estuviera comprobando.
         const TOPE: usize = 27;
         assert!(
             faltan.len() <= TOPE,

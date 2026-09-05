@@ -40,6 +40,7 @@ mod vista_workspace;
 
 use eframe::egui;
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
+use lucy_core::upkeep;
 use lucy_core::AgentMemory;
 use proto_core::Pty;
 use std::path::PathBuf;
@@ -5465,6 +5466,14 @@ struct App {
     recuento: Option<lucy_core::upkeep::Recuento>,
     /// Cuántos trozos de documento están sin vector.
     sin_vector: usize,
+    /// Cuántas MEMORIAS están sin vector.
+    ///
+    /// Aparte del de arriba porque son dos arreglos distintos y dos botones. El
+    /// de trozos existía desde el principio; el de memorias no había, y era el
+    /// que más falta hacía: un documento sin vector se puede volver a ingerir,
+    /// una memoria no — es lo que Lucy aprendió, y no hay de dónde sacarlo otra
+    /// vez.
+    sin_vector_mem: usize,
     /// Una purga ARMADA: el primer clic arma, el segundo borra.
     purga_armada: Option<lucy_core::upkeep::Purga>,
     /// Lo último que dijo un cuidado de la base.
@@ -6163,6 +6172,7 @@ impl App {
             gasto_hist: None,
             recuento: None,
             sin_vector: 0,
+            sin_vector_mem: 0,
             purga_armada: None,
             upkeep_msg: String::new(),
             reembeber_rx: None,
@@ -12775,8 +12785,16 @@ impl App {
                                 // de los cinco idiomas — y sin fallar, que es lo
                                 // que hace que sobreviva. Es la trampa que la
                                 // cabecera de `i18n` describe.
+                                // «Encendido HACE {t}», que es la clave que hay
+                                // en la tabla. Decía «Encendido {t}» y la tabla
+                                // no la tenía, así que `trf` devolvía el español
+                                // — la misma trampa que este comentario dice
+                                // evitar, dos líneas más arriba, por una palabra
+                                // de diferencia. La traducción llevaba escrita en
+                                // los cinco idiomas desde el principio, sin que
+                                // nadie la pidiera.
                                 sub2: i18n::trf(
-                                    "Encendido {t}",
+                                    "Encendido hace {t}",
                                     &[("t", &fmt_uptime(s.uptime_secs))],
                                 ),
                                 ..Default::default()
