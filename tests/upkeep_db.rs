@@ -124,19 +124,47 @@ fn los_cuidados_de_la_base() {
     assert_eq!(quedan, vec![fijada], "se llevó una fijada: {quedan:?}");
     let _ = (auto1, auto2);
 
-    // ── 5. Los trozos sin vector se cuentan y se pueden rehacer ─────────────
+    // ── 5. Lo que está sin vector se cuenta y se puede rehacer ──────────────
     //
-    // El caso real: una ingesta que empezó con Ollama caído deja el documento
-    // buscable solo por palabras, y hasta ahora la única salida era borrarlo y
-    // volver a ingerirlo.
-    assert_eq!(upkeep::sin_vector(), 0, "de partida están todos");
+    // El caso real: algo que se guardó con Ollama caído queda buscable solo por
+    // palabras. Para un documento la salida era borrarlo y volver a ingerirlo;
+    // para una memoria no había salida.
+    use upkeep::Clase;
+    assert_eq!(upkeep::sin_vector(Clase::Trozo), 0, "de partida están todos");
+    assert_eq!(upkeep::sin_vector(Clase::Memoria), 0, "de partida están todas");
     lucy_core::with_db(|c| {
         c.execute("DELETE FROM embeddings WHERE entity_type = 'pdf_chunk'", [])
             .map_err(|e| e.to_string())?;
         Ok(())
     })
     .expect("quitar vectores");
-    assert_eq!(upkeep::sin_vector(), 2, "no vio los trozos huérfanos");
+    assert_eq!(upkeep::sin_vector(Clase::Trozo), 2, "no vio los trozos huérfanos");
+
+    // LAS DOS CLASES NO SE PISAN, y ése es el riesgo de haberlas parametrizado:
+    // viven en la MISMA tabla `agent_memories` y solo las separa el
+    // `session_id`. Un filtro mal escrito no daría error — daría un botón que
+    // ofrece rehacer los vectores de las memorias y se pone a rehacer los de los
+    // PDF, o al revés.
+    //
+    // Aquí acaban de quedarse huérfanos los DOS trozos, y las memorias tienen su
+    // vector. Si el filtro de memoria se colara al lado de los pdf, esto diría 2.
+    assert_eq!(
+        upkeep::sin_vector(Clase::Memoria),
+        0,
+        "el contador de memorias se llevó por delante los trozos"
+    );
+
+    // Y ahora al revés: se quitan los de las memorias y el de trozos no se mueve.
+    lucy_core::with_db(|c| {
+        c.execute("DELETE FROM embeddings WHERE entity_type = 'memory'", [])
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    })
+    .expect("quitar vectores de memoria");
+    // Queda UNA memoria viva a estas alturas: la fijada. La retirada se la llevó
+    // la purga del paso 3 y las dos automáticas la del paso 4.
+    assert_eq!(upkeep::sin_vector(Clase::Memoria), 1, "no vio las memorias huérfanas");
+    assert_eq!(upkeep::sin_vector(Clase::Trozo), 2, "las clases se contaminaron");
 
     // ── 6. Purgar documentos se lleva las tres cosas ────────────────────────
     let n = upkeep::purga(Purga::Documentos).expect("purga");
@@ -144,7 +172,7 @@ fn los_cuidados_de_la_base() {
     let r = upkeep::recuento(&ruta);
     assert_eq!(r.trozos, 0);
     assert_eq!(r.documentos, 0);
-    assert_eq!(upkeep::sin_vector(), 0);
+    assert_eq!(upkeep::sin_vector(Clase::Trozo), 0);
 
     let _ = std::fs::remove_file(&destino);
 }
