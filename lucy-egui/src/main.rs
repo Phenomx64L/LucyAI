@@ -11520,15 +11520,24 @@ impl App {
             // —«¿esto es nuevo?»— se hace en escala de días, y al segundo serían
             // 2,6 millones de filas al mes por equipo.
             //
-            // SOLO DEL EQUIPO LOCAL, porque es lo único que se mide aquí. Un
-            // remoto se sondea por WinRM y ese bloque todavía vive en la app
-            // Tauri; guardar sus métricas bajo este `host_id` mezclaría dos
-            // máquinas en la misma serie, y la tendencia saldría de la media de
-            // dos cosas que no tienen nada que ver.
+            // SOLO DEL EQUIPO LOCAL, porque `s` es la foto de ESTA máquina.
+            // Guardar sus métricas bajo el id de otra mezclaría dos equipos en la
+            // misma serie, y la tendencia saldría de la media de dos cosas que no
+            // tienen nada que ver.
+            //
+            // PERO NO «SOLO CUANDO SE MIRA EL LOCAL», que es lo que ponía. La
+            // condición era `self.selected_host == "local"`, y eso confunde QUÉ SE
+            // MIDE con QUÉ SE ESTÁ ENSEÑANDO: bastaba cambiar el desplegable a un
+            // servidor para que la serie de esta máquina dejara de escribirse
+            // mientras tanto. El equipo local no deja de existir porque el
+            // operador esté mirando otra cosa, y el hueco no se ve — el gráfico
+            // vuelve a pintarse en cuanto se vuelve, con los minutos de en medio
+            // que faltan y nada que lo diga.
+            //
+            // Los remotos ya no dependen de esto: los muestrea la ronda del
+            // vigilante, que corre cada cinco minutos mire el operador donde mire.
             let ahora = ahora_epoch();
-            if self.selected_host == "local"
-                && ahora - self.hist_guardado >= lucy_core::history::CADA_SECS
-            {
+            if ahora - self.hist_guardado >= lucy_core::history::CADA_SECS {
                 self.hist_guardado = ahora;
                 let m = lucy_core::history::Muestra {
                     ts: ahora,
