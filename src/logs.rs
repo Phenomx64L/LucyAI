@@ -98,6 +98,67 @@ pub fn tail(path: &Path, lines: usize) -> Result<Vec<String>, String> {
     Ok(collected)
 }
 
+/// A partir de aquí el fichero se recorta por la mitad. 2 MB son unas veinte mil
+/// líneas: mucho más de lo que cabe mirar y mucho menos de lo que estorba.
+pub const TOPE_BYTES: u64 = 2 * 1024 * 1024;
+
+/// Añade una línea al log de la aplicación, en el formato que `Level::of` lee.
+///
+/// ── POR QUÉ EXISTE ESTO ─────────────────────────────────────────────────────
+///
+/// El visor de logs y la sección del prompt leían `lucy_app.log`, y lo escribía
+/// `write_app_log` del backend Tauri. Al salir la V1 del árbol se quedó un
+/// LECTOR VIVO CON EL ESCRITOR MUERTO: el fichero de esta máquina llevaba quince
+/// días sin una línea nueva. No estaba vacío —eso se habría visto—, estaba
+/// congelado, y la sección del prompt seguía anunciándolo al modelo como «las
+/// últimas líneas del log». Un fósil presentado como noticia es peor que un
+/// hueco: el hueco se nota.
+///
+/// NO CONSTRUYE LA RUTA, y eso es a propósito. Este módulo tiene el mecanismo;
+/// la política de qué rutas valen es del que llama, como se explica arriba para
+/// `tail`. El shell nativo pasa su ruta fija.
+///
+/// NO DEVUELVE ERROR. Un log que hace fallar a quien lo usa deja de ser un log y
+/// pasa a ser otra cosa que puede romperse: si el disco está lleno o el fichero
+/// está abierto por otro, lo correcto es no apuntar nada y seguir. El sitio
+/// donde se notaría —el visor— ya sabe enseñar un log que no crece.
+pub fn apunta_en(path: &Path, nivel: &str, mensaje: &str) {
+    use std::io::Write;
+
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    recorta_si_crecio(path);
+
+    // Una sola línea: los saltos de dentro del mensaje partirían el registro en
+    // varios, y los de sobra saldrían sin marca ni nivel — el visor los pintaría
+    // como INFO sueltos y el filtro por nivel dejaría de encontrarlos.
+    let limpio = mensaje.replace(['\n', '\r'], " ");
+    let linea = format!("[{}] [{}] {limpio}\n", crate::system::marca_local(), nivel.to_uppercase());
+
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = f.write_all(linea.as_bytes());
+    }
+}
+
+/// Si el log pasó del tope, se queda con la mitad de atrás.
+///
+/// SE CORTA POR UN SALTO DE LÍNEA, no por el byte que toque: partir a media
+/// línea deja arriba un trozo sin marca de hora que `Level::of` lee como INFO y
+/// el visor enseña como si fuera un registro entero. Y por eso tampoco se corta
+/// a medio carácter UTF-8 — se busca el `\n` desde el punto medio hacia delante.
+fn recorta_si_crecio(path: &Path) {
+    let Ok(meta) = std::fs::metadata(path) else { return };
+    if meta.len() <= TOPE_BYTES {
+        return;
+    }
+    let Ok(bytes) = std::fs::read(path) else { return };
+    let medio = bytes.len() / 2;
+    let corte = bytes[medio..].iter().position(|b| *b == b'\n').map(|i| medio + i + 1);
+    let Some(corte) = corte else { return };
+    let _ = std::fs::write(path, &bytes[corte..]);
+}
+
 /// Nivel de una línea de `lucy_app.log`, para filtrar y colorear.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Level {
@@ -615,5 +676,80 @@ mod tests {
         assert_eq!(Level::of("[2026-01-01] [ERROR] algo"), Level::Error);
         assert_eq!(Level::of("[2026-01-01] [INFO] algo"), Level::Info);
         assert_eq!(Level::of("una línea sin nivel"), Level::Info);
+    }
+
+    /// Un fichero de trabajo propio de cada test, borrado antes de empezar.
+    fn hoja(nombre: &str) -> std::path::PathBuf {
+        let p = std::env::temp_dir().join(format!("lucy_test_log_{nombre}.log"));
+        let _ = std::fs::remove_file(&p);
+        p
+    }
+
+    #[test]
+    fn lo_que_se_apunta_lo_lee_el_mismo_visor_que_lo_va_a_enseñar() {
+        // ESTE ES EL PUNTO. El escritor y el lector son dos mitades que tienen
+        // que encajar en un formato; comprobar solo que el fichero crece diría
+        // que sí aunque `Level::of` no reconociera ni una línea, y el visor
+        // saldría entero en gris con el contador de errores a cero.
+        //
+        // Así que se escribe con `apunta_en` y se lee con `tail` + `Level::of`,
+        // que es exactamente lo que hace la vista de Logs.
+        let p = hoja("ida_y_vuelta");
+        apunta_en(&p, "info", "arrancó el shell");
+        apunta_en(&p, "warning", "no encontré la clave de xAI");
+        apunta_en(&p, "error", "el comando salió con 1");
+
+        let l = tail(&p, 10).expect("no pude leer lo que acabo de escribir");
+        assert_eq!(l.len(), 3, "{l:?}");
+        assert_eq!(Level::of(&l[0]), Level::Info);
+        assert_eq!(Level::of(&l[1]), Level::Warn, "«warning» tiene que colorear");
+        assert_eq!(Level::of(&l[2]), Level::Error);
+        assert!(l[2].ends_with("el comando salió con 1"), "{}", l[2]);
+        // La marca de hora, delante y con la forma que espera quien la cruza con
+        // otro log: `[YYYY-MM-DD HH:MM:SS]`.
+        assert!(l[0].starts_with('['), "{}", l[0]);
+        let marca = &l[0][1..l[0].find(']').unwrap_or(1)];
+        assert_eq!(marca.len(), 19, "marca rara: «{marca}»");
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn un_mensaje_de_varias_lineas_sigue_siendo_un_solo_registro() {
+        // El caso real: el `stderr` de PowerShell, que llega con saltos dentro.
+        // Sin aplanar, las líneas de la segunda en adelante entran sin marca ni
+        // nivel — el visor las cuenta como registros INFO y el filtro de errores
+        // deja de encontrar justo el fallo que se estaba apuntando.
+        let p = hoja("una_sola");
+        apunta_en(&p, "ERROR", "falló:\nlínea dos\r\nlínea tres");
+        let l = tail(&p, 10).unwrap();
+        assert_eq!(l.len(), 1, "se partió en {} registros: {l:?}", l.len());
+        assert_eq!(Level::of(&l[0]), Level::Error);
+        assert!(l[0].contains("línea tres"), "se perdió el final: {}", l[0]);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn al_pasarse_del_tope_se_recorta_por_un_salto_de_linea() {
+        // Se comprueba lo que de verdad se puede romper: que ninguna línea
+        // sobreviva partida. Un trozo sin marca de hora arriba del fichero se
+        // lee como un registro entero de nivel INFO, y encima puede cortar un
+        // carácter UTF-8 por la mitad.
+        let p = hoja("recorte");
+        // Se siembra por encima del tope de una vez — apuntar dos millones de
+        // líneas de una en una tardaría más que todo el resto de la batería.
+        let una = "[2026-01-01 00:00:00] [INFO] línea de relleno con acentos áéíóú\n";
+        let veces = (TOPE_BYTES as usize / una.len()) + 200;
+        std::fs::write(&p, una.repeat(veces)).unwrap();
+        assert!(std::fs::metadata(&p).unwrap().len() > TOPE_BYTES);
+
+        apunta_en(&p, "INFO", "la de después del recorte");
+
+        let n = std::fs::metadata(&p).unwrap().len();
+        assert!(n < TOPE_BYTES, "no recortó: {n} bytes");
+        assert!(n > TOPE_BYTES / 4, "recortó de más: {n} bytes");
+        let texto = std::fs::read_to_string(&p).expect("cortó un carácter UTF-8 por la mitad");
+        assert!(texto.starts_with('['), "la primera línea quedó partida: {:?}", &texto[..40]);
+        assert!(texto.ends_with("la de después del recorte\n"), "se perdió la nueva");
+        let _ = std::fs::remove_file(&p);
     }
 }
