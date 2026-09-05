@@ -2287,6 +2287,13 @@ pub const FRASES: &[Frase] = &[
         "Wird nicht gesendet: {motivo}",
     ),
     f!(
+        "No se manda esa salida al modelo: {motivo}. Revísala tú aquí.",
+        "That output is not sent to the model: {motivo}. Review it here yourself.",
+        "Essa saída não se envia ao modelo: {motivo}. Revê-la tu aqui.",
+        "Cette sortie n'est pas envoyée au modèle : {motivo}. Examine-la toi-même ici.",
+        "Diese Ausgabe geht nicht an das Modell: {motivo}. Sieh sie dir hier selbst an.",
+    ),
+    f!(
         "No se pudieron leer: {e}",
         "Couldn't be read: {e}",
         "Não foi possível ler: {e}",

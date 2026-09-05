@@ -809,6 +809,11 @@ impl App {
         if self.nx_diag_rx.is_some() {
             return;
         }
+        let salida = match Self::nx_salida_para_el_modelo(salida) {
+            Ok(s) => s,
+            Err(motivo) => return self.nx_aviso_retenido(id, &motivo),
+        };
+        let salida = salida.as_str();
         let (shell, so) = match self.nx_estado.get(id) {
             Some(Conexion::Ok { os, .. }) if !os.is_empty() => {
                 (if os.contains("Windows") { "PowerShell" } else { "bash" }, os.clone())
@@ -887,10 +892,58 @@ impl App {
     ///
     /// Se distingue por lo que trae: `causa` es el resumen, y `prueba` viene
     /// vacía porque de un comando que funcionó no hay nada que proponer.
+    /// Lo que se le puede enseñar al modelo de la salida de un servidor.
+    ///
+    /// ── LA PUERTA QUE ESTE CAMINO NO TENÍA ──────────────────────────────────
+    ///
+    /// La salida de un comando del AGENTE pasa por `guard::scan(Role::Tool)`
+    /// antes de tocar nada, y por `scrub` antes de viajar. La de NexShell no: se
+    /// metía tal cual en el prompt de diagnóstico y salía hacia el proveedor de
+    /// nube. Dos agujeros por el mismo sitio:
+    ///
+    ///   · INYECCIÓN. Lo que devuelve un servidor es contenido de terceros —un
+    ///     log que escribe cualquiera, un banner, el mensaje de error de un
+    ///     servicio— y ahí caben instrucciones para el modelo. El camino del
+    ///     agente lo bloquea desde hace tiempo; éste lo entregaba entero.
+    ///   · SECRETOS. Una cadena de conexión en la salida de un comando fallido
+    ///     es de lo más normal que hay, y viajaba sin depurar.
+    ///
+    /// Se devuelve `Err` con el motivo en vez de mandar una versión recortada: si
+    /// el guardrail retiene algo y luego se le pasa «para que lo analice», se ha
+    /// entregado exactamente lo que se acababa de retener.
+    pub(crate) fn nx_salida_para_el_modelo(salida: &str) -> Result<String, String> {
+        let g = lucy_core::guard::scan(salida, lucy_core::guard::Role::Tool);
+        if g.decision == lucy_core::guard::Decision::Block {
+            return Err(g.reason);
+        }
+        Ok(lucy_core::memories::scrub(salida))
+    }
+
+    /// Le dice al operador que no se manda la salida, y por qué.
+    ///
+    /// EN LA PROPIA TERMINAL y no en un diálogo: es donde está mirando, y la
+    /// alternativa —callarse— deja un «Leyendo el error» que no termina nunca.
+    fn nx_aviso_retenido(&mut self, id: &str, motivo: &str) {
+        self.nx_fase = None;
+        let host = self.remote_hosts.iter().find(|h| h.id == id).cloned();
+        self.nx_aviso(
+            host.as_ref(),
+            &i18n::trf(
+                "No se manda esa salida al modelo: {motivo}. Revísala tú aquí.",
+                &[("motivo", motivo)],
+            ),
+        );
+    }
+
     pub(crate) fn nx_resume(&mut self, id: &str, cmd: &str, salida: &str) {
         if self.nx_diag_rx.is_some() {
             return;
         }
+        let salida = match Self::nx_salida_para_el_modelo(salida) {
+            Ok(s) => s,
+            Err(motivo) => return self.nx_aviso_retenido(id, &motivo),
+        };
+        let salida = salida.as_str();
         let so = match self.nx_estado.get(id) {
             Some(Conexion::Ok { os, .. }) if !os.is_empty() => os.clone(),
             _ => "Windows".to_string(),
