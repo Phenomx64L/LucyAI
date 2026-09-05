@@ -623,6 +623,30 @@ impl Section for Actions {
                  salida: todavía no ha corrido.",
             );
         }
+        // ── RETIRAR LO QUE YA NO TIENE SENTIDO ──────────────────────────────
+        //
+        // Se anuncia en los tres modos porque en los tres hay cola: en el
+        // automático la corre el bucle sin preguntar, y en los otros dos el
+        // operador está a un clic de aprobar un paso que Lucy ya sabe que no va
+        // a funcionar. Ahorrarle ese clic es tan valioso como no ejecutarlo.
+        //
+        // Y se le dice CUÁNDO, no solo que existe: sin el ejemplo del caso
+        // encadenado, una etiqueta de cancelar invita a usarla ante cualquier
+        // fallo — y dos consultas independientes no se invalidan entre ellas.
+        if c.can_execute || c.auto {
+            s.push_str(
+                "\nSi dejaste varios pasos en cola y uno FALLA, mira si los que quedan \
+                 siguen teniendo sentido. Los que dependían del que falló, no: \
+                 retíralos con <CANCEL>por qué</CANCEL> en vez de dejar que corran. \
+                 Ejemplo: propusiste `Install-Module X`, `Import-Module X` y usar X; si \
+                 la instalación falla, los otros dos van a fallar también.\n\
+                 Los pasos INDEPENDIENTES no se retiran: que `Get-Service` falle no \
+                 invalida un `Get-Disk` que no tenía nada que ver. Y `<CANCEL>` solo \
+                 alcanza a lo que quedó pendiente ANTES de este turno — los pasos que \
+                 propongas ahora no se tocan, así que puedes retirar y proponer en la \
+                 misma respuesta.",
+            );
+        }
         s
     }
 }
