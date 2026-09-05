@@ -556,9 +556,28 @@ fn stream(
                     })
                 }),
             );
+            let mut body =
+                serde_json::json!({ "model": model, "stream": true, "messages": msgs });
+            // ── HAY QUE PEDIR EL RECUENTO, O NO VIENE ────────────────────────
+            //
+            // En el protocolo de OpenAI, una respuesta EN STREAMING no lleva
+            // `usage` a menos que se pida con `stream_options`. Sin esta línea,
+            // `usage()` buscaba un objeto que el proveedor nunca manda: OpenAI,
+            // xAI, DeepSeek y NVIDIA —veinticuatro modelos del catálogo—
+            // declaraban cero tokens y cero coste, siempre.
+            //
+            // Y de ese contador cuelga el tope de gasto de la sesión, así que
+            // para esos veinticuatro no saltaba nunca. Un tope que solo funciona
+            // con un tercio del catálogo es peor que no tenerlo: da la impresión
+            // de estar puesto.
+            //
+            // No se le manda a Ollama, que va por su propio camino y no cobra.
+            if !matches!(p, Provider::Ollama) {
+                body["stream_options"] = serde_json::json!({ "include_usage": true });
+            }
             (
                 ureq::post(p.openai_endpoint()).set("Authorization", &format!("Bearer {key}")),
-                serde_json::json!({ "model": model, "stream": true, "messages": msgs }),
+                body,
             )
         }
     };
@@ -1260,5 +1279,36 @@ mod reintentos {
         // Y con tres intentos y doblado, el peor caso sin `retry-after` son
         // 1 + 2 = 3 segundos de espera: un pico se absorbe sin que se note.
         assert_eq!(INTENTOS, 3);
+    }
+}
+
+#[cfg(test)]
+mod recuento_de_los_compatibles {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn la_trama_de_uso_se_lee_cuando_llega() {
+        // Es la que manda el proveedor en la ULTIMA trama, y solo si se pidio con
+        // `stream_options`. Sin pedirla, `usage` buscaba un objeto que nunca
+        // existia: veinticuatro modelos del catalogo declaraban cero tokens y
+        // cero coste, siempre — y el tope de gasto de la sesion no saltaba nunca
+        // para ellos.
+        for p in [Provider::OpenAi, Provider::Xai, Provider::DeepSeek, Provider::Nvidia] {
+            assert_eq!(
+                usage(p, &json!({"usage": {"prompt_tokens": 120, "completion_tokens": 45}})),
+                Some((120, 45)),
+                "{} no lee su recuento",
+                p.label()
+            );
+        }
+    }
+
+    #[test]
+    fn una_trama_de_texto_no_inventa_un_recuento() {
+        // La razon de que `usage` devuelva `Option`: la mayoria de las tramas de
+        // un flujo son texto y no traen uso. Un cero por defecto seria
+        // indistinguible de «salio gratis».
+        assert_eq!(usage(Provider::OpenAi, &json!({"choices":[{"delta":{"content":"x"}}]})), None);
     }
 }
