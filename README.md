@@ -3,16 +3,19 @@
 El corazón de Lucy sin Tauri y sin navegador. Es la mitad que ejecuta, mide,
 recuerda y decide; la que dibuja va aparte.
 
-Lo consumen los dos frentes, y ninguno es su dueño:
+Hoy lo consume una sola cara:
 
 | Consumidor | Qué es | Ruta |
 | --- | --- | --- |
-| `lucy-egui` | El shell nativo. La cara actual de Lucy. | `../lucy-native-proto/lucy-egui` |
-| `src-tauri` | La V1, SvelteKit + WebView2. En retirada. | `../lucy-svelte/src-tauri` |
+| `lucy-egui` | El shell nativo. La cara de Lucy. | `../lucy-native-proto/lucy-egui` |
+
+Hubo una segunda —`src-tauri`, la V1 en SvelteKit sobre WebView2— y ya no está.
+El crate sigue sin saber dibujar y sin depender de ningún motor de navegador, que
+era el punto: se puede cambiar la cara sin tocar el motor. Lo demostró irse una.
 
 ## Por qué vive solo
 
-Vivía dentro de `lucy-svelte/`, que es el repositorio de la V1. Eso hacía que
+Vivía dentro de `lucy-svelte/`, que entonces era el repositorio de la V1. Eso hacía que
 el crate que se describe como «el corazón SIN Tauri» necesitara la mitad Tauri
 para existir: cuatro `include_str!` subían dos niveles y se metían en el otro
 proyecto, así que no compilaba sin él. No era una dependencia que se echara de
@@ -21,16 +24,32 @@ menos en ejecución — era un error del compilador.
 Y mientras el núcleo colgara de la V1, retirar la V1 significaba retirar el
 núcleo. Está fuera para que se pueda apagar una cara sin apagar el motor.
 
-## Los guardianes que miran a la V1
+## Los guardianes que miraban a la V1, y por qué ya no están
 
-Hay cuatro tests que leen ficheros de `../lucy-svelte` para vigilar que las dos
-mitades no deriven: el esquema de la base, el catálogo de modelos, la tabla de
-precios y la delegación del deduplicador de memorias.
+Hubo cuatro tests que leían ficheros de `../lucy-svelte` para vigilar que las dos
+mitades no derivaran: el esquema de la base, el catálogo de modelos, la tabla de
+precios y la delegación del deduplicador. Eran buenos mientras hubo dos copias de
+cada cosa.
 
-**Se saltan solos si la V1 no está al lado.** Eso es deliberado: el crate tiene
-que compilar y pasar sus pruebas por su cuenta. Pero significa que en una
-máquina sin la V1 esos cuatro no vigilan nada, y no lo dicen. Quien vaya a
-tocar algo compartido, que los corra con los dos repositorios presentes.
+Todos empezaban igual:
+
+```rust
+let Ok(app) = std::fs::read_to_string(ruta_en_lucy_svelte) else { return };
+```
+
+Y aquí decía que ese `return` era «deliberado, porque el crate tiene que pasar
+sus pruebas por su cuenta». Cierto — y con la V1 fuera del árbol pasó a ser la
+primera línea que se ejecuta. Cuatro tests declarando verde sin comprobar nada,
+ocupando el sitio de los que sí mirarían, que es la única forma en que un test
+hace daño. Están fuera.
+
+**Uno se sustituyó en vez de borrarse.** El de precios vigilaba que la tabla de
+Rust no se separara de la de JavaScript; ya no hay dos tablas, pero la otra mitad
+del mismo fallo sigue en pie: el menú de modelos y la tabla de precios son dos
+listas en dos ficheros. Un modelo que se pueda elegir y no tenga fila de precio
+hace que `cost()` devuelva `None` y esa conversación sume cero — se equivoca en
+silencio, para un solo modelo. Eso lo vigila ahora
+`pricing::tests::todo_modelo_que_se_ofrece_tiene_precio`, sin salir del crate.
 
 ## Probarlo
 

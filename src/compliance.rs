@@ -121,7 +121,7 @@ struct EsperaJson {
 /// interfaz significaba que quien reorganizara el frontend podía moverla sin
 /// enterarse de que estaba rompiendo el motor de cumplimiento.
 ///
-/// El frontend de la V1 las sigue leyendo, ahora desde aquí.
+/// Se trajeron aquí para eso, y la V1 pasó a leerlas desde aquí antes de irse.
 const CIS_WINDOWS: &str = include_str!("../assets/compliance/cis-windows.json");
 const CIS_LINUX: &str = include_str!("../assets/compliance/cis-linux.json");
 
