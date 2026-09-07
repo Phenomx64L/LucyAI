@@ -58,6 +58,13 @@ fn los_cuidados_de_la_base() {
     let vieja = mete("Lo que decíamos antes", r#"["auto"]"#, "s1");
     mete("manual — parte 1/2", r#"["documento"]"#, "pdf:7");
     mete("manual — parte 2/2", r#"["documento"]"#, "pdf:7");
+    // LA FICHA DEL DOCUMENTO, que es la tercera clase de fila y la que faltaba
+    // aquí. Una ingesta escribe `pdf:{id}` por cada trozo Y UNA `pdf-doc:{id}`
+    // con el resumen. Sin ella sembrada, un filtro que dijera solo
+    // `NOT LIKE 'pdf:%'` pasaba este test sin problema — y en la base real se
+    // llevaba las cuatro fichas al saco de las memorias. Fue exactamente lo que
+    // pasó. Ver `Clase::filtro`.
+    let ficha = mete("Documento ingerido: manual.pdf", r#"["documento"]"#, "pdf-doc:7");
     lucy_core::memories::set_pinned(fijada, true).expect("fijar");
     lucy_core::with_db(|c| {
         c.execute(
@@ -76,9 +83,10 @@ fn los_cuidados_de_la_base() {
     assert_eq!(r.trozos, 2);
     assert_eq!(r.retiradas, 1);
     assert_eq!(r.fijadas, 1);
-    assert_eq!(r.memorias, 3, "vivas y sin contar trozos: {r:?}");
+    assert_eq!(r.memorias, 3, "vivas, sin trozos y sin la ficha: {r:?}");
     assert!(r.bytes > 0, "el tamaño del fichero no se leyó");
-    assert_eq!(r.vectores, 6);
+    assert_eq!(r.vectores, 7);
+    let _ = ficha;
 
     // ── 2. La copia ABRE, que es lo único que importa de una copia ──────────
     //
@@ -93,7 +101,7 @@ fn los_cuidados_de_la_base() {
     let n: i64 = copia
         .query_row("SELECT COUNT(*) FROM agent_memories", [], |r| r.get(0))
         .expect("la copia no tiene la tabla");
-    assert_eq!(n, 6, "la copia no trae las mismas filas");
+    assert_eq!(n, 7, "la copia no trae las mismas filas");
     drop(copia);
 
     // ── 3. Purgar las retiradas se lleva también su vector ──────────────────
@@ -167,12 +175,19 @@ fn los_cuidados_de_la_base() {
     assert_eq!(upkeep::sin_vector(Clase::Trozo), 2, "las clases se contaminaron");
 
     // ── 6. Purgar documentos se lleva las tres cosas ────────────────────────
+    //
+    // TRES filas, no dos: los dos trozos Y la ficha. Es la comprobación de que
+    // la purga sí conoce las dos clases de fila que escribe una ingesta —
+    // dejarse la ficha convertiría «documentos: 0» en una cifra que convive con
+    // cuatro «Documento ingerido: …» sueltos en la pestaña de Memoria.
     let n = upkeep::purga(Purga::Documentos).expect("purga");
-    assert_eq!(n, 2);
+    assert_eq!(n, 3, "se dejó la ficha del documento");
     let r = upkeep::recuento(&ruta);
     assert_eq!(r.trozos, 0);
     assert_eq!(r.documentos, 0);
+    assert_eq!(r.memorias, 1, "la ficha seguía contando como memoria: {r:?}");
     assert_eq!(upkeep::sin_vector(Clase::Trozo), 0);
+    assert_eq!(upkeep::sin_vector(Clase::Memoria), 1, "solo queda la fijada");
 
     let _ = std::fs::remove_file(&destino);
 }

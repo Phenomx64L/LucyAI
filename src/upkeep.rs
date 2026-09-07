@@ -244,14 +244,30 @@ impl Clase {
 
     /// El `WHERE` que separa una clase de la otra.
     ///
-    /// `session_id IS NULL` cuenta como memoria: las de antes de que existiera
-    /// la columna lo tienen a nulo, y `NOT LIKE` sobre un nulo da NULL —o sea
-    /// que se caen del filtro y no las arregla nadie. Es justo la clase de fila
-    /// vieja que más falta hace embeber.
+    /// LAS DOS MITADES DEL CRITERIO, y la segunda faltaba.
+    ///
+    /// Una ingesta escribe DOS clases de fila: `pdf:{id}` por cada trozo, y UNA
+    /// `pdf-doc:{id}` con la ficha del documento. Este filtro solo excluía la
+    /// primera, así que las cuatro fichas de esta base entraban como memorias y
+    /// el botón ofrecía embeberlas — con `entity_type = 'memory'`, o sea
+    /// compitiendo en el recuerdo semántico con lo que Lucy aprendió de verdad.
+    ///
+    /// Y estaba EN DESACUERDO CON `recuento`, ciento ochenta líneas más arriba
+    /// en este mismo fichero, que sí lleva las dos. El panel decía «97 memorias»
+    /// y el botón contaba sobre 101. Dos criterios sobre la misma tabla es como
+    /// se llega a que una fila cuente en un sitio y no en el de al lado.
+    ///
+    /// `session_id IS NULL` cuenta como memoria: `NOT LIKE` sobre un nulo da
+    /// NULL, no verdadero, así que sin esto las filas anteriores a que existiera
+    /// la columna se caen del filtro y no las arregla nadie. Son justo las más
+    /// viejas, las que más falta hace embeber.
     fn filtro(self) -> &'static str {
         match self {
             Clase::Trozo => "am.session_id LIKE 'pdf:%'",
-            Clase::Memoria => "(am.session_id IS NULL OR am.session_id NOT LIKE 'pdf:%')",
+            Clase::Memoria => {
+                "(am.session_id IS NULL
+                  OR (am.session_id NOT LIKE 'pdf:%' AND am.session_id NOT LIKE 'pdf-doc:%'))"
+            }
         }
     }
 
