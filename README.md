@@ -118,7 +118,12 @@ cargo test --manifest-path lucy-core/Cargo.toml
 cargo test --manifest-path lucy-native-proto/lucy-egui/Cargo.toml
 ```
 
-574 assertions in the core and 201 in the shell, all green.
+709 tests in the core and 230 in the shell, plus 10 marked `#[ignore]` that
+print a measurement instead of asserting one.
+
+Note that there is no `Cargo.toml` at the root of this repository — `main` is an
+assembly of two crates that each keep their own — so every command here carries
+`--manifest-path`. See [CONTRIBUTING.md](CONTRIBUTING.md) for the rest.
 
 ## Where V1 went
 

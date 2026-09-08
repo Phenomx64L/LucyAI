@@ -1,18 +1,33 @@
-# Code Owners for Lucy AI
+# Code owners for Lucy
+#
+# The five entries here before this rewrite all pointed into `src-tauri/` —
+# ai.rs, memory.rs, rdp_agent.rs, incident.rs and lib.rs — which left the tree
+# with v1 in September 2026. GitHub does not warn about a CODEOWNERS path that
+# matches nothing; it just quietly requests no review. The paths below are the
+# ones those rules were reaching for, in the crate they live in now.
 
-# By default, Phenomx64L owns all aspects of the core routing, memory, and rules architecture.
-# Any modifications to these files require review and protect the intellectual property boundaries.
+# What decides whether a command is safe to run, and what it costs to be wrong.
+lucy-core/src/guard.rs        @Phenomx64L
+lucy-core/src/destructive.rs  @Phenomx64L
 
-# Core architecture and Business Rules (SysAdmin AI)
-src-tauri/src/commands/ai.rs @Phenomx64L
-src-tauri/src/commands/memory.rs @Phenomx64L
-src-tauri/src/commands/rdp_agent.rs @Phenomx64L
-src-tauri/src/commands/incident.rs @Phenomx64L
-src-tauri/src/lib.rs @Phenomx64L
+# What Lucy remembers, and what it forgets.
+lucy-core/src/memories.rs     @Phenomx64L
+lucy-core/src/memory.rs       @Phenomx64L
+lucy-core/src/consolidate.rs  @Phenomx64L
 
-# Documentation and Branding
-README.md @Phenomx64L
-CONTRIBUTORS.md @Phenomx64L
+# What reaches the model, and what it costs.
+lucy-core/src/prompt.rs       @Phenomx64L
+lucy-core/src/cloud.rs        @Phenomx64L
+lucy-core/src/tags.rs         @Phenomx64L
+
+# The shape of the database. A migration is the one change that cannot be
+# reverted by reverting the commit.
+lucy-core/src/schema.rs       @Phenomx64L
+
+# Documentation and branding
+README.md                     @Phenomx64L
+CONTRIBUTING.md               @Phenomx64L
+CONTRIBUTORS.md               @Phenomx64L
 
 # Default fallback for review
-* @Phenomx64L
+*                             @Phenomx64L
