@@ -134,8 +134,18 @@ mod tests {
         // forma del catalogo, o el sufijo, o el nombre del grupo local— el test
         // de arriba pasaria siempre recorriendo cero elementos. Un test que se
         // apaga solo es peor que no tenerlo.
+        //
+        // 40 Y NO 20, QUE ERA LO QUE PONIA. Hoy son 47, asi que un suelo de 20
+        // solo cazaba el desastre —un rascador que devuelve cero— y dejaba pasar
+        // el fallo realista: que se caiga un grupo entero del catalogo. NVIDIA
+        // son diez modelos; sin ellos quedan 37, y con el suelo viejo esto seguia
+        // en verde. Un margen de siete deja sitio para retirar un par de modelos
+        // sin tocar el test.
+        //
+        // Y NO SE FIJA EN 47 EXACTO a proposito: un suelo que hay que subir cada
+        // vez que se añade un modelo es un suelo que alguien acaba borrando.
         let n = los_de_pago().len();
-        assert!(n >= 20, "el catalogo solo dio {n} modelos de pago: ya no lo esta leyendo");
+        assert!(n >= 40, "el catalogo solo dio {n} modelos de pago: ya no lo esta leyendo");
     }
 
     #[test]
