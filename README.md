@@ -28,15 +28,22 @@ the machine.
 
 ## Why this version exists
 
-**19.6 MB against 213 MB.** That's the whole migration in one line.
+**A 6.6 MB installer, where v1 shipped 213 MB.** That's the whole migration in
+one line.
 
 V1 was Tauri 2 + SvelteKit on top of WebView2. It worked, and it dragged an
 entire browser engine along to paint a grid of cards and a process table. This
 version paints the same thing with [`egui`](https://github.com/emilk/egui) in a
 single executable that links no browser at all.
 
-The old installer weighed 213 MB. This one weighs 19.6 MB, and the difference is
-exactly the engine that is no longer there.
+| | v1 (Tauri) | v2.1 (native) |
+| --- | --- | --- |
+| Installer | 213 MB | **6.6 MB** (NSIS) · 7.3 MB (each MSI) |
+| What lands on disk | a bundle | **one 21 MB executable** |
+
+Nothing is copied alongside it: the icon and the avatar are embedded with
+`include_bytes!`, the fonts come from Windows, and Whisper is only needed to
+dictate. The difference is exactly the engine that is no longer there.
 
 ## Layout
 
@@ -130,7 +137,7 @@ assembly of two crates that each keep their own — so every command here carrie
 All of it is still in this repository. Nothing was removed from history:
 
 - The **`v1-svelte-final`** tag points at its last complete tree.
-- The 48 `v1.x` tags mark every published release.
+- The 124 `v1.x` tags mark every published release.
 - `git show v1-svelte-final:src-tauri/src/main.rs` still works.
 
 What was taken out of `main` was the code and its build scaffolding — not its
