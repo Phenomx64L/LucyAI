@@ -60,7 +60,7 @@ que ya está tomada. Se quedan como registro.
 ## La propiedad que decidió todo esto
 
 El punto de salir del WebView no era el peso, aunque el instalador pasara de
-213 MB a 19,6. Era **correr donde no hay ni Edge ni GPU**: una sesión RDP contra
+213 MB a 6,6. Era **correr donde no hay ni Edge ni GPU**: una sesión RDP contra
 una máquina bloqueada, que es donde vive media administración de sistemas. Ahí
 GPUI se descalificó por exigir DX11 y rechazar adaptadores por software.
 
