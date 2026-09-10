@@ -7,6 +7,347 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [2.1.0] — 2026-09-09
+
+**Lucy deja de llevar un navegador dentro.** La V1 era Tauri 2 + SvelteKit sobre
+WebView2 y su instalador pesaba 213 MB; éste pesa 6,6 y lo que aterriza en el
+disco es un solo ejecutable de 21 MB. Toda la diferencia es el motor que ya no se
+enlaza.
+
+Y ésa es solo la mitad. Dentro de esta versión entra también una auditoría del
+núcleo entero contra lo que hace hoy a un agente de frontera —35 huecos hallados,
+diecinueve cerrados— y el desacople final de la V1, que dejó de estar en el árbol.
+
+### Feat — un solo ejecutable, sin nada al lado
+
+El icono y el avatar van incrustados con `include_bytes!`, las fuentes salen de
+Windows y Whisper solo hace falta para dictar. No hay nada que copiar junto al
+binario.
+
+- **NSIS (`.exe`, 6,6 MB)** con selector de idioma de verdad, seis entradas.
+- **MSI (7,3 MB × 5)**, uno por idioma. Un MSI lleva el suyo horneado en la
+  cabecera del paquete; cinco ficheros es además lo que quieren los despliegues
+  por directiva de grupo, donde un diálogo que pregunta estorba porque no hay
+  nadie delante.
+- El idioma elegido en el instalador llega a Lucy: los dos escriben en
+  `HKCU\Software\Lucy\Language` y el shell lo lee al arrancar **si** el operador
+  no ha elegido ya uno dentro de la aplicación.
+
+**Y dos cosas que solo se ven DESPUÉS de instalar**, que es lo peor que le puede
+pasar a un instalador. El `.exe` salía sin icono: el `main` pasaba un `IconData` a
+la ventana, pero el icono del FICHERO es otra cosa —un recurso Win32 que incrusta
+el enlazador—, así que Windows enseñaba el rectángulo azul de «programa sin icono»
+en el Explorador, en los dos accesos directos y en «Aplicaciones instaladas»: la
+aplicación funcionaba perfectamente y parecía rota. Y `lucy.nsi` no llevaba BOM,
+así que con `Unicode true` NSIS lo leía como ANSI y «Iván Eduardo Luna» quedaba
+registrado como «IvÃ¡n Eduardo Luna». Nada de eso falla al compilar, y por eso
+`build-all.ps1` comprueba el BOM antes de llamar a `makensis`.
+
+**La versión sale de un solo sitio.** Estaba escrita a mano en tres —el
+`Cargo.toml` del shell, `lucy.nsi` y `build-msi.ps1`— y subir dos y olvidar la
+tercera no da error de compilación: da un instalador que anuncia una versión y
+registra otra. Ahora se lee de `Cargo.toml`, y solo de la sección `[package]`,
+parando en la siguiente — más abajo del mismo fichero hay `eframe = { version =
+"0.29" }` y un patrón suelto se traería la versión de una dependencia sin decir
+nada.
+
+Y ésta sale como **2.1.0** y no como otro 2.0.1 por una razón mecánica: el
+`MajorUpgrade` del MSI compara números para decidir si un paquete sustituye al
+instalado, y dos iguales no son una actualización — el operador instala y sigue con
+la versión vieja, sin error. Ya pasó una vez en este proyecto.
+
+**La ventana ya no es un rectángulo exacto.** La cabecera de Lucy ES la barra de
+título, así que Windows 11 no tenía marco propio sobre el que redondear las
+esquinas ni dibujar la sombra — y sin sombra, en tema oscuro, la ventana se funde
+con lo que tenga detrás. Tres atributos de `dwmapi` puestos una vez al crear la
+ventana, sin arrastrar el crate `windows`, que son cientos de megas de metadatos
+para escribir seis líneas de declaración. En un Windows que no sea el 11 la
+llamada devuelve error y se descarta.
+
+**El FPS en reposo marca ~1, y eso es lo correcto.** El repintado va a velocidad
+completa mientras hay algo que animar y baja a 1 Hz cuando no lo hay. Un
+`request_repaint()` incondicional demostraba la propiedad anti-congelamiento pero
+fijaba un núcleo al máximo con la ventana quieta: Lucy vive abierta todo el día, y
+«nativa» no puede significar «gasta más parada que el WebView trabajando».
+
+### Feat — lo que Lucy sabe hacer y antes no
+
+**Puede preguntarle a su propia memoria a mitad de una investigación.** Memoria
+había, y buena; lo que no había era forma de que el MODELO la consultara — el
+recuerdo entraba solo en el turno que escribe el operador. En una cadena
+automática eso significa memoria en el primer paso y ninguna en los demás. Ahora
+escribe `<TOOL>recall:credenciales de WIN-AD</TOOL>`, que entra en el catálogo de
+solo lectura junto a `readfile` y `pdf_search`, sin aprobación porque no tiene
+efectos ni red. Guardar y retirar quedan fuera a propósito: escribir en la memoria
+durable sin que nadie lo apruebe es una decisión del operador.
+
+**Puede retirar los pasos que ella misma dejó pendientes.** Un turno puede dejar
+varios `<EXECUTE>` en cola, y si el primero fallaba los demás corrían igual.
+Cancelarlos de oficio pierde dos consultas útiles porque una tercera falló; no
+cancelar ninguno deja al automático siguiendo un plan que la realidad acaba de
+desmentir. Las dos eligen mal la mitad de las veces porque el arnés no sabe si los
+pasos eran encadenados — el modelo sí, los acaba de escribir él. Se le da
+`<CANCEL>`, con el motivo dentro, y se atiende **antes** del bucle de etiquetas
+para que una respuesta que la escriba después de sus `<EXECUTE>` no se lleve por
+delante lo que acaba de proponer.
+
+**Sabe cuánto presupuesto le queda.** `forks::corre` ya le inyectaba «te quedan 2
+lecturas» al sub-agente, mientras que al bucle que sí ejecuta comandos solo se le
+decía «hay un tope de pasos, así que no explores de más»: sin el número, sin lo
+gastado, y sin saber que mirar cuesta 1 y cambiar cuesta 3. Ahora la cifra va en
+su propia sección **inestable** del prompt — en la estable habría caído del lado
+cacheado y cada turno habría escrito una entrada de caché nueva que nadie lee,
+costando el ahorro entero.
+
+**Y se le dice cuándo un comando ya falló ahí.** La señal estaba completa
+—`exit_code` por fila, índice por comando y equipo, ventana de catorce días— y su
+único llamante era un panel que nadie mira con el automático encendido, que es
+justo el modo donde importa.
+
+**Lucy explicando una etiqueta ejecutaba la etiqueta que estaba explicando.** El
+operador pidió un skill de Sysinternals; Lucy contestó explicando qué son, escribió
+el nombre entre comillas invertidas —«los skills (`<LEARN>`) son muy útiles…»— y
+más abajo emitió una etiqueta de verdad. El escáner casó la PRIMERA apertura con
+el cierre de la segunda: el párrafo se cortaba en seco y se creaba un skill con la
+prosa como nombre. Lo que va entre comillas invertidas ya no es una orden, en las
+dos funciones que recorren el texto — la que decide lo que se ejecuta y la que
+decide lo que se pinta.
+
+### Fix — el contador de gasto medía mal por tres sitios
+
+**Veinticuatro modelos declaraban cero tokens, siempre.** En el protocolo de
+OpenAI una respuesta en streaming no lleva `usage` a menos que se pida con
+`stream_options: {include_usage: true}`, y el cuerpo iba sin ella. OpenAI, xAI,
+DeepSeek y NVIDIA no apuntaban ni un token. Como el tope de gasto se calcula sobre
+lo cobrado, **para esos veinticuatro no saltaba nunca**: un tope que solo funciona
+con un tercio del catálogo es peor que no tenerlo, porque quien lo configuró cree
+que tiene una red debajo.
+
+**El día empezaba en Greenwich.** El corte era `datetime('now','start of day')` y
+el `now` de SQLite es UTC: en un operador a UTC−6 el día empezaba a las 18:00 del
+anterior, así que la cifra arrastraba la noche pasada hasta media tarde y entonces
+se ponía a cero.
+
+**Y la sesión se retarifaba sola.** `gasto_sesion` tarifaba los tokens ya
+acumulados con el modelo de AHORA, así que pasar de Opus a Haiku dividía por cinco
+el gasto ya hecho, retroactivamente. Ahora se cobra en el instante en que llegan
+los tokens, y el total es `Option<f64>`: una llamada sin precio deja la cifra en
+«no se sabe» en vez de convertirla en cero, que en un contador de gasto es la
+mentira más fácil de contar porque se parece muchísimo a estar bien.
+
+**Tres de los cuatro cubos estaban a cero**, y no por falta de actividad:
+`titles`, `suggest` e `insights` leían `message.content` de Ollama y descartaban
+`prompt_eval_count` y `eval_count`. En dinero da igual —Ollama no cobra—, pero en
+una pantalla de coste «no cuesta» y «no se está midiendo» no pueden leerse igual.
+
+**La caché de prompt no cortaba nada.** `prompt.rs` estaba organizado entero
+alrededor de la idea —`stable()` en el trait, el orden por prioridad, un test que
+fija que ninguna sección estable caiga por debajo de una volátil— y nadie leía la
+marca: `cache_control` no aparecía en ninguna línea de los dos crates. Medido
+antes de tocar nada: **8.088 caracteres estables contra 213 volátiles**, el 97 %
+del prompt de sistema repetido idéntico y pagado entero cada turno. Y el
+comentario HTML de la marca se le entregaba al modelo en medio de sus
+instrucciones, en los cuatro proveedores, incluidos los tres que no tienen caché.
+
+Un aviso que decide si esto sirve: **el mínimo cacheable depende del modelo** —512
+tokens en los nuevos, 4.096 en Opus 4.6 y Haiku 4.5— y por debajo de ese suelo la
+caché no falla, simplemente no ocurre.
+
+**Un 429 mataba el turno** en vez de esperar los dos segundos que el proveedor
+pedía. Ahora se reintentan 408, 429 y los 5xx, y se devuelven ya los que no van a
+cambiar (400, 401, 403…), cuyo texto es justo el que hay que leer. Tres intentos,
+techo de 20 segundos, y la espera a cachos de cien milisegundos para que
+«Detener» siga teniendo efecto justo cuando más ganas hay de pulsarlo. No se cae
+al modelo local por su cuenta: cambia el coste, la calidad y el carácter de la
+respuesta.
+
+**Una respuesta cortada se leía como una respuesta terminada.** El motivo del
+final se calculaba en cada trama y solo se miraba cuando no había llegado texto,
+así que media respuesta cortada en el tope dejaba en pantalla un texto que se
+acaba a media frase y nada que dijera por qué. Por ahí pasan también
+`content_filter`, `SAFETY` y `refusal`. Viaja el motivo entero y no un booleano,
+porque el tope se reintenta y un filtro no.
+
+### Fix — «funcionó» significaba que PowerShell había terminado
+
+El veredicto de un comando era `status.success()` a secas, y en PowerShell un
+error **no terminante** —el modo por defecto de casi todos los cmdlets— se
+escribe, se ve, y el proceso sale con cero. Medido: `Get-Item 'C:\no-existe';
+Get-Date` sale 0. El paso iba a «hecho», la auditoría guardaba `exit_code` 0, el
+visor lo pintaba INFO, y al modelo se le devolvía la salida con el remate de éxito
+— así que proponía el paso siguiente sobre algo que no había pasado. Y dejaba
+ciego al recuento de fallos, que cuenta por `exit_code`.
+
+Mirar `stderr` a secas tampoco vale, y está medido caso a caso: un programa nativo
+que va bien escribe 21 caracteres en `stderr` con `$Error` a 0; un error silenciado
+a propósito sube `$Error` sin escribir nada; un error mostrado da 439 y 1. **Solo
+las dos cosas juntas** significan que hubo un error y se vio.
+
+El propio arreglo rompía el caso que ya funcionaba: con el epílogo como última
+instrucción, un `cmd /c exit 3` pasaba a salir con 0. Lo cazó la prueba que lanza
+PowerShell de verdad con los cinco casos de la tabla; las seis del analizador
+pasaban verdes.
+
+### Fix — la auditoría decía quién escribió el comando, y mentía
+
+Cada camino llevaba el origen **cableado en su sumidero**, y cada camino se
+alcanza desde los dos sitios: en local todo se apuntaba `"ai"`, también lo que
+tecleaba el operador; en remoto todo `"manual"`, también lo que redactaba el
+modelo. La métrica que se rompía no es la que parece — `supervision()` suma los dos
+en el mismo cubo, así que intercambiarlos no la mueve; la afectada era
+`aceptacion()`, que cuenta lo marcado `"ai"` como «lo que Lucy propuso».
+
+Al trazar los cinco caminos apareció un tercero: `nx_run` solo escribía en el PTY,
+así que **un comando destructivo confirmado no se auditaba en absoluto**. Los
+únicos que exigen que alguien diga que sí eran justo los que no dejaban rastro.
+
+**El comando y su salida iban crudos al disco.** La copia que va al chat pasa por
+`scrub`; la que va a `audit_trail`, no. Y no es lo mismo: una fila de auditoría no
+se va al cerrar la pestaña — se queda en la base, viaja en la copia de seguridad, y
+es el fichero que alguien abre para revisar qué se hizo en las máquinas.
+
+**La franja de confirmación soltaba el comando antes de que la tocaras.** Los dos
+sitios que la dibujan borraban el pendiente *fuera* del `if`. Y como egui no
+repinta en continuo, la franja ámbar se quedaba perfectamente visible: la leías con
+calma, pulsabas «Ejecutar», y ese clic es justamente lo que provoca el repintado
+siguiente — la franja ya no se dibujaba y el clic caía en el vacío.
+
+**La salida de un servidor llegaba al modelo sin pasar por la puerta.** Lo que
+devuelve un equipo remoto es contenido de terceros —un log que escribe cualquiera
+que use el sitio, el banner de un servicio— y el prompt le pide al modelo justamente
+que lo lea y proponga un comando.
+
+**Y la salida de cada comando viajaba dos veces**, una de ellas sin depurar: la del
+registro pasa por `scrub` y la que iba pegada al prompt iba cruda, así que una
+cadena de conexión con contraseña llegaba al proveedor igualmente, en el mismo turno
+en que el depurado decía haberla quitado.
+
+**Mover un umbral cambiaba la pantalla y no cambiaba el aviso.** El panel guardaba
+bajo la clave `"local"`, el Dashboard leía `"local"` y el vigilante leía la cadena
+vacía. Como la lectura cae a los valores de fábrica cuando no encuentra fila, leer
+con una clave que nadie escribe no falla: devuelve umbrales válidos que no son los
+tuyos. Bajabas el corte del disco al 70 %, la tarjeta se ponía ámbar, y la
+notificación seguía saltando en el 85.
+
+### Fix — la memoria
+
+**Una chincheta apagaba la búsqueda por palabras.** El respaldo léxico de `recall`
+se guardaba con `lineas.is_empty()`, y las memorias fijadas se meten en `lineas`
+veinte líneas más arriba: bastaba **una** para que el respaldo no corriera nunca.
+Con el embebedor caído, Lucy se quedaba con las chinchetas y contestaba como si no
+recordara nada del asunto — sin fallar, devolviendo un bloque con contenido.
+
+**Las métricas de los servidores se medían cada cinco minutos y se tiraban.** El
+vigilante sondeaba cada equipo, decidía si avisar, y las olvidaba;
+`history::guarda` acepta cualquier equipo desde siempre y su único llamante le
+pasaba `"local"` fijo. Y había un segundo fallo en la misma línea: la condición
+miraba `selected_host`, que confunde qué se **mide** con qué se **enseña**, así que
+cambiar el desplegable a un servidor dejaba de escribir la serie local mientras
+tanto — y el hueco no se ve, porque al volver el gráfico se pinta con normalidad.
+
+**Dos tablas crecían sin techo.** `audit::prune` y `notify::prune` estaban
+escritas, probadas y documentadas, sin un solo llamante. Ahora la poda es un
+trabajo de mantenimiento —hereda el vencimiento, el historial y una fila visible en
+el panel—: un año de auditoría, tres meses de avisos **ya vistos**, y los que nadie
+ha leído no se tocan por viejos que sean.
+
+**Y las memorias sin vector se pueden rehacer.** Guardar una memoria la embebe
+best-effort: sin Ollama queda solo léxica. Correcto mientras sea temporal, y no lo
+era — nada reintentaba. Medido en una base real: 6 memorias de 101 sin vector, y 0
+trozos de 797. El lado que tenía botón estaba al día; el que no lo tenía pesa más,
+porque un PDF se puede volver a ingerir y una memoria no.
+
+**La pestaña de Memoria decía «50 de 50» habiendo 52.** Usaba la consulta del
+prompt, que se recorta a cincuenta pase lo que pase — no es un recorte visible, es
+una cifra que afirma ser el total.
+
+### Fix — la interfaz
+
+**Trece sitios donde el texto se salía al estrechar la ventana.** El mecanismo es
+uno solo: un `Label` dentro de un `horizontal` hereda «no partas», crece, y hace
+crecer el ancho de contenido del `ScrollArea`, que se queda crecido al fotograma
+siguiente — **un solo desborde envenena la vista entera**. Medido con un arnés que
+resuelve la geometría de egui sin ventana ni GPU: el título de un cristal pedía
+1.300 px pasara lo que pasara, la cabecera de la pestaña 790 fijos, y las baldosas
+de Inventario miden 118 donde «Programas instalados» pide 134 y su alemán 139.
+
+**La respuesta de Lucy salía cortada a media palabra**, y estrechar el carril no la
+hacía volver a fluir. La causa apareció en la terminal: un `CollapsingHeader` con
+un comando de PowerShell entero en el título inflaba el ancho del `ScrollArea`, y
+al fotograma siguiente todos los mensajes se maquetaban más anchos que el panel. La
+respuesta salía cortada por culpa de la línea del comando de dos mensajes más
+arriba.
+
+**Cambiar de acento dejaba cuatro colores en la paleta anterior**, y pasaba en cada
+arranque. Todo lo que consulta el acento al dibujar sigue la paleta al instante,
+pero cuatro valores se copian dentro de los `Visuals` de egui y se quedan ahí. Con
+la paleta en violeta, la pestaña activa de Memoria salía verde.
+
+**El hover del rail no existía en tema claro** — el rail se rellena con `bg2` y su
+hover pintaba `bg3`, que en tema claro son `#FFFFFF` exacto. Era el único de los
+once hover de la aplicación que no se veía, en el elemento que más se usa. Y la
+píldora de lo activo se pintaba en `índice × 46` sin contar los 8 de separación: en
+Memory el desvío era una fila entera y marcaba Compliance.
+
+**La conversación se maquetaba entera en cada fotograma**, y ordenar la tabla de
+inventario costaba cuatro veces más de lo necesario (266 µs → 64).
+
+### Fix — cinco idiomas que a veces salían en español
+
+**Doce frases** salían en español con el inglés puesto, una de ellas por veintiséis
+espacios de diferencia. **Ocho explicaciones** traducidas a los cinco idiomas que
+no invocaba nadie, todas en estados vacíos. Y la barra lateral decía «Log Viewer»
+mientras esa misma pantalla decía «Log-Ansicht».
+
+**El guardia que vigila todo eso llevaba nueve módulos sin mirar.** `fuente()` era
+`include_str!("main.rs")` — cierto mientras la pantalla entera viviera en
+`main.rs`, y al partirla en nueve módulos la interfaz se fue con ellos y el guardia
+se quedó mirando lo que quedaba. No falló: siguió pasando en verde sobre una
+fracción cada vez menor de la aplicación. Lo primero que vio al ampliarlo: la
+tarjeta de Sistema pedía `trf("Encendido {t}")` y la tabla tiene `"Encendido hace
+{t}"`, traducida a los cinco idiomas desde el principio. Una palabra de diferencia,
+y el KPI salía en español con la interfaz en alemán.
+
+### Chore — la V1 sale del árbol, y el núcleo a su propio repositorio
+
+`lucy-core` vivía dentro de `lucy-svelte`, que es el repositorio de la V1: el crate
+que se describe como «el corazón SIN Tauri» necesitaba la mitad Tauri para
+compilar. Mientras colgara de ella, retirar la V1 significaba retirar el núcleo.
+
+Lo que quedó al soltarla fueron sobre todo **guardias que habían dejado de
+guardar**:
+
+- **Cuatro tests declaraban verde sin comprobar nada.** Leían ficheros de
+  `src-tauri` o del frontend y empezaban por
+  `let Ok(app) = read_to_string(…) else { return }` — sin el otro árbol al lado,
+  ese `return` es la primera línea que se ejecuta. Uno se sustituyó en vez de
+  borrarse: el menú de modelos y la tabla de precios siguen siendo dos listas en
+  dos ficheros, y un modelo elegible sin fila de precio hace que esa conversación
+  sume cero.
+- **El visor de logs enseñaba un fichero congelado.** `lucy_app.log` lo escribía el
+  backend Tauri; al irse quedó un lector vivo con el escritor muerto — 224 KB y
+  2.649 líneas sin crecer en quince días. Y `prompt.rs` metía esa cola en el
+  contexto rotulada «las últimas líneas del log», así que a cada turno se le
+  afirmaba al modelo que un fósil era lo que acababa de pasar. Ahora escribe el
+  propio shell, y recoge de paso los cinco `eprintln!` que informaban del
+  micrófono, de las fuentes que faltan o de la base que no abre — a una consola
+  que no existe, porque la ventana arranca sin decoraciones desde el Explorador.
+- **La feature `ts`** exportaba tipos de TypeScript para un puente IPC que ya no
+  existe, e `init_with_pool` adoptaba el pool de r2d2 de Tauri sin un solo llamante.
+
+La historia no se perdió: `v1-svelte-final` apunta a su último árbol completo y los
+124 tags `v1.x` marcan cada versión publicada. Lo que salió de `main` fue el código
+y su andamiaje de compilación, no su registro.
+
+**Y la cara pública se puso al día.** `CONTRIBUTING.md` pedía Node 18, el CLI de
+Tauri y `npm run tauri dev`, describía un árbol con `src/routes/` y `src-tauri/`, y
+—lo más serio— le decía a quien contribuyera que su código quedaba bajo **MIT**
+cuando el fichero `LICENSE` son 674 líneas de GPLv3. `CODEOWNERS` gobernaba cinco
+ficheros de `src-tauri` que no existen, y GitHub no avisa de eso: simplemente no
+pide revisión.
+
+---
+
 ## [2.0.1] — 2026-08-20
 
 Primera versión oficial 2.x, y la primera empaquetada con la interfaz en cinco
