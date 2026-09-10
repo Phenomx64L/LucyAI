@@ -58,6 +58,13 @@ fn los_cuidados_de_la_base() {
     let vieja = mete("Lo que decíamos antes", r#"["auto"]"#, "s1");
     mete("manual — parte 1/2", r#"["documento"]"#, "pdf:7");
     mete("manual — parte 2/2", r#"["documento"]"#, "pdf:7");
+    // LA FICHA DEL DOCUMENTO, que es la tercera clase de fila y la que faltaba
+    // aquí. Una ingesta escribe `pdf:{id}` por cada trozo Y UNA `pdf-doc:{id}`
+    // con el resumen. Sin ella sembrada, un filtro que dijera solo
+    // `NOT LIKE 'pdf:%'` pasaba este test sin problema — y en la base real se
+    // llevaba las cuatro fichas al saco de las memorias. Fue exactamente lo que
+    // pasó. Ver `Clase::filtro`.
+    let ficha = mete("Documento ingerido: manual.pdf", r#"["documento"]"#, "pdf-doc:7");
     lucy_core::memories::set_pinned(fijada, true).expect("fijar");
     lucy_core::with_db(|c| {
         c.execute(
@@ -76,9 +83,10 @@ fn los_cuidados_de_la_base() {
     assert_eq!(r.trozos, 2);
     assert_eq!(r.retiradas, 1);
     assert_eq!(r.fijadas, 1);
-    assert_eq!(r.memorias, 3, "vivas y sin contar trozos: {r:?}");
+    assert_eq!(r.memorias, 3, "vivas, sin trozos y sin la ficha: {r:?}");
     assert!(r.bytes > 0, "el tamaño del fichero no se leyó");
-    assert_eq!(r.vectores, 6);
+    assert_eq!(r.vectores, 7);
+    let _ = ficha;
 
     // ── 2. La copia ABRE, que es lo único que importa de una copia ──────────
     //
@@ -93,7 +101,7 @@ fn los_cuidados_de_la_base() {
     let n: i64 = copia
         .query_row("SELECT COUNT(*) FROM agent_memories", [], |r| r.get(0))
         .expect("la copia no tiene la tabla");
-    assert_eq!(n, 6, "la copia no trae las mismas filas");
+    assert_eq!(n, 7, "la copia no trae las mismas filas");
     drop(copia);
 
     // ── 3. Purgar las retiradas se lleva también su vector ──────────────────
@@ -124,27 +132,62 @@ fn los_cuidados_de_la_base() {
     assert_eq!(quedan, vec![fijada], "se llevó una fijada: {quedan:?}");
     let _ = (auto1, auto2);
 
-    // ── 5. Los trozos sin vector se cuentan y se pueden rehacer ─────────────
+    // ── 5. Lo que está sin vector se cuenta y se puede rehacer ──────────────
     //
-    // El caso real: una ingesta que empezó con Ollama caído deja el documento
-    // buscable solo por palabras, y hasta ahora la única salida era borrarlo y
-    // volver a ingerirlo.
-    assert_eq!(upkeep::sin_vector(), 0, "de partida están todos");
+    // El caso real: algo que se guardó con Ollama caído queda buscable solo por
+    // palabras. Para un documento la salida era borrarlo y volver a ingerirlo;
+    // para una memoria no había salida.
+    use upkeep::Clase;
+    assert_eq!(upkeep::sin_vector(Clase::Trozo), 0, "de partida están todos");
+    assert_eq!(upkeep::sin_vector(Clase::Memoria), 0, "de partida están todas");
     lucy_core::with_db(|c| {
         c.execute("DELETE FROM embeddings WHERE entity_type = 'pdf_chunk'", [])
             .map_err(|e| e.to_string())?;
         Ok(())
     })
     .expect("quitar vectores");
-    assert_eq!(upkeep::sin_vector(), 2, "no vio los trozos huérfanos");
+    assert_eq!(upkeep::sin_vector(Clase::Trozo), 2, "no vio los trozos huérfanos");
+
+    // LAS DOS CLASES NO SE PISAN, y ése es el riesgo de haberlas parametrizado:
+    // viven en la MISMA tabla `agent_memories` y solo las separa el
+    // `session_id`. Un filtro mal escrito no daría error — daría un botón que
+    // ofrece rehacer los vectores de las memorias y se pone a rehacer los de los
+    // PDF, o al revés.
+    //
+    // Aquí acaban de quedarse huérfanos los DOS trozos, y las memorias tienen su
+    // vector. Si el filtro de memoria se colara al lado de los pdf, esto diría 2.
+    assert_eq!(
+        upkeep::sin_vector(Clase::Memoria),
+        0,
+        "el contador de memorias se llevó por delante los trozos"
+    );
+
+    // Y ahora al revés: se quitan los de las memorias y el de trozos no se mueve.
+    lucy_core::with_db(|c| {
+        c.execute("DELETE FROM embeddings WHERE entity_type = 'memory'", [])
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    })
+    .expect("quitar vectores de memoria");
+    // Queda UNA memoria viva a estas alturas: la fijada. La retirada se la llevó
+    // la purga del paso 3 y las dos automáticas la del paso 4.
+    assert_eq!(upkeep::sin_vector(Clase::Memoria), 1, "no vio las memorias huérfanas");
+    assert_eq!(upkeep::sin_vector(Clase::Trozo), 2, "las clases se contaminaron");
 
     // ── 6. Purgar documentos se lleva las tres cosas ────────────────────────
+    //
+    // TRES filas, no dos: los dos trozos Y la ficha. Es la comprobación de que
+    // la purga sí conoce las dos clases de fila que escribe una ingesta —
+    // dejarse la ficha convertiría «documentos: 0» en una cifra que convive con
+    // cuatro «Documento ingerido: …» sueltos en la pestaña de Memoria.
     let n = upkeep::purga(Purga::Documentos).expect("purga");
-    assert_eq!(n, 2);
+    assert_eq!(n, 3, "se dejó la ficha del documento");
     let r = upkeep::recuento(&ruta);
     assert_eq!(r.trozos, 0);
     assert_eq!(r.documentos, 0);
-    assert_eq!(upkeep::sin_vector(), 0);
+    assert_eq!(r.memorias, 1, "la ficha seguía contando como memoria: {r:?}");
+    assert_eq!(upkeep::sin_vector(Clase::Trozo), 0);
+    assert_eq!(upkeep::sin_vector(Clase::Memoria), 1, "solo queda la fijada");
 
     let _ = std::fs::remove_file(&destino);
 }

@@ -573,6 +573,10 @@ pub fn run(name: &str, args: &str) -> Option<ToolResult> {
         // páginas ingerido y una herramienta que Lucy no sabe que existe son lo
         // mismo que no haberlo ingerido — y no da error, da silencio.
         "pdf_search" => pdf_search(args),
+        // Lo que Lucy ya sabe, cuando ELLA lo pide. El recuerdo automatico
+        // solo corre en el turno que escribe el operador; en una cadena
+        // automatica esto es lo unico que le da acceso a su memoria.
+        "recall" => recall(args),
         // Un nombre en `DE_LECTURA` sin brazo aquí. `None` y no `unreachable!`:
         // un pánico dentro del bucle de un agente se lleva la aplicación por
         // delante, y esto lo caza un test antes de llegar a nadie.
@@ -594,7 +598,66 @@ pub fn run(name: &str, args: &str) -> Option<ToolResult> {
 /// procesar el documento. Con el manual ingerido y la búsqueda funcionando.
 ///
 /// Un catálogo escrito dos veces se desincroniza por el lado que nadie mira.
-pub const DE_LECTURA: &[&str] = &["readfile", "listdir", "readlines", "pdf_search"];
+pub const DE_LECTURA: &[&str] =
+    &["readfile", "listdir", "readlines", "pdf_search", "recall"];
+
+/// Cuántas memorias se traen de una consulta hecha a mano.
+///
+/// Más que el recuerdo automático de un turno normal, y a propósito: aquí el
+/// modelo ha decidido gastar una vuelta en preguntar, así que la respuesta tiene
+/// que valer la pena. En el turno normal el bloque compite con todo lo demás del
+/// prompt; aquí es lo único que se pidió.
+const RECALL_TOOL_PRESUPUESTO: usize = 8;
+
+/// Busca en lo que Lucy ya sabe.
+///
+/// ── POR QUÉ HACÍA FALTA, Y NO ES QUE NO HUBIERA MEMORIA ─────────────────────
+///
+/// Memoria hay, y buena: `memories::recall` busca por significado con umbrales
+/// medidos, mete las fijadas antes que nada, rebaja el listón a lo confirmado y
+/// tiene respaldo por palabras si el embebedor se cae. Lo que no había era forma
+/// de que el MODELO la consultara.
+///
+/// El recuerdo entra solo, en el turno que escribe el operador, sobre lo que
+/// acaba de preguntar. En una cadena automática eso significa que Lucy tiene
+/// memoria en el primer paso y NINGUNA en los demás: descubre a mitad de una
+/// investigación que necesita saber algo del equipo, y no tiene cómo preguntarlo.
+///
+/// ── POR QUÉ SOLO LEE ────────────────────────────────────────────────────────
+///
+/// `run` cumple lo que no tiene efectos ni red, y buscar en memoria es
+/// exactamente eso. Guardar y retirar son otra cosa: escribir en la memoria
+/// durable sin que nadie lo apruebe es una decisión de producto, no una
+/// herramienta más, y va por el camino de `writefile` —proponer— o por ninguno.
+/// Eso lo decide el operador.
+fn recall(args: &str) -> ToolResult {
+    let q = args.trim();
+    // El rótulo es para el carril de Trace, así que se corta: una consulta larga
+    // empujaría fuera de la fila lo que hay a su lado.
+    let label = format!("recall {}", q.chars().take(60).collect::<String>());
+    if q.is_empty() {
+        return ToolResult::err(
+            label,
+            "Dime qué buscar. Por ejemplo: <TOOL>recall:credenciales de WIN-AD</TOOL>",
+        );
+    }
+    let r = crate::memories::recall(q, RECALL_TOOL_PRESUPUESTO);
+    if r.bloque.trim().is_empty() {
+        // QUE NO HAYA NADA ES UNA RESPUESTA, y hay que decirla así. Un error seco
+        // hace que el modelo lo reintente con otras palabras contra un corpus que
+        // a lo mejor está vacío, y cada intento cuesta una vuelta.
+        return ToolResult::err(
+            label,
+            "No hay nada guardado sobre eso. No lo vuelvas a preguntar con otras \
+             palabras: si hace falta, averígualo y sigue.",
+        );
+    }
+    ToolResult {
+        label,
+        body: r.bloque,
+        ok: true,
+    }
+}
 
 /// Busca en los documentos ingeridos.
 fn pdf_search(args: &str) -> ToolResult {
@@ -727,6 +790,17 @@ pub const AVAILABLE: &[(&str, &str)] = &[
         "pdf_search",
         "<TOOL>pdf_search:qué buscar</TOOL> — busca en los manuales y guías que el \
          operador ha ingerido",
+    ),
+    (
+        "recall",
+        // SE DICE CUÁNDO USARLA, no solo que existe. Lo que ya viene recordado
+        // llega en el prompt sin pedirlo, así que una herramienta de memoria
+        // anunciada a secas invita a preguntar lo que ya se tiene delante — una
+        // vuelta gastada en releer. Lo que la hace útil es el otro caso: a mitad
+        // de una cadena, donde el recuerdo automático ya no corre.
+        "<TOOL>recall:qué buscar</TOOL> — lo que ya sabes de otras veces. Úsala \
+         cuando te haga falta algo del pasado A MITAD de una investigación: lo que \
+         venía al caso de la pregunta inicial ya lo tienes arriba",
     ),
     (
         "fork_task",
@@ -1386,5 +1460,43 @@ mod tests {
             std::path::PathBuf::from(r"C:\a\c")
         );
         assert_eq!(normaliza(std::path::Path::new(r"C:\a\.\b")), std::path::PathBuf::from(r"C:\a\b"));
+    }
+}
+
+#[cfg(test)]
+mod memoria_a_peticion {
+    use super::*;
+
+    #[test]
+    fn recall_la_cumple_el_despachador() {
+        // EL PATRON QUE ESTO EVITA, y esta casa ya lo sufrio con `readlines`:
+        // escrita, probada, anunciada en el prompt y SIN despachar. `run`
+        // contestaba `None`, y el callejon que la herramienta venia a abrir
+        // seguia cerrado — con el propio prompt diciendole al modelo que la use.
+        assert!(DE_LECTURA.contains(&"recall"), "no esta en el catalogo de lectura");
+        assert!(
+            run("recall", "cualquier cosa").is_some(),
+            "el despachador no la conoce: el modelo la pedira y no pasara nada"
+        );
+    }
+
+    #[test]
+    fn una_consulta_vacia_dice_como_se_usa() {
+        // Un error seco hace que el modelo la reintente con otros argumentos. Se
+        // le da la forma buena y se acaba en una vuelta.
+        let r = run("recall", "   ").expect("despachada");
+        assert!(!r.ok);
+        assert!(r.body.contains("<TOOL>recall:"), "no le enseña la forma: {}", r.body);
+    }
+
+    #[test]
+    fn se_anuncia_en_el_catalogo_que_lee_el_prompt() {
+        // `AVAILABLE` es lo que el prompt promete. Una herramienta que `run`
+        // cumple y el prompt no nombra es una capacidad que el modelo no sabe
+        // que tiene — el mismo desperdicio que la de al lado, por el otro lado.
+        assert!(
+            AVAILABLE.iter().any(|(n, _)| *n == "recall"),
+            "no se le ofrece al modelo"
+        );
     }
 }

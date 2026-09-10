@@ -20,6 +20,8 @@
 pub const CONSOLIDAR: &str = "consolidate";
 /// Buscar patrones entre memorias.
 pub const INSIGHTS: &str = "insights";
+/// Quitar de la auditoría y del buzón de avisos lo que ya pasó de plazo.
+pub const PODA: &str = "prune";
 
 /// Cada cuánto se consolida.
 ///
@@ -36,6 +38,37 @@ pub const CADA_CONSOLIDAR: i64 = 48 * 3_600;
 /// me pasó» en «esto pasa siempre». Con un plazo largo, la confianza de un patrón
 /// real tardaría meses en subir.
 pub const CADA_INSIGHTS: i64 = 24 * 3_600;
+
+/// Cada cuánto se poda.
+///
+/// UN DÍA, y la frecuencia alta es justamente lo que la hace inofensiva: podar a
+/// diario borra un puñado de filas cada vez, y hacerlo una vez al mes borraría
+/// miles de golpe la primera vez que alguien mira. Además cuesta dos `DELETE` con
+/// índice por fecha, así que el plazo no lo pone el coste.
+pub const CADA_PODA: i64 = 24 * 3_600;
+
+/// Cuánto se guarda del registro de auditoría.
+///
+/// UN AÑO, y es la decisión de esta pieza que más merece discutirse, porque es la
+/// única que BORRA algo que el operador podría querer. Las razones del número:
+///
+///   · La consulta que de verdad usa el registro —`audit::fallos_recientes`—
+///     mira catorce días. Un año le sobra por un factor de veintiséis.
+///   · Es un registro de qué se ejecutó en las máquinas de alguien. Doce meses
+///     es lo que suele pedir una revisión, y menos empieza a estorbar.
+///   · Y aun así acota: sin esto la tabla crece durante toda la vida de la
+///     instalación, que es lo que `audit::prune` vino a evitar y nadie llamaba.
+///
+/// Si hace falta otro plazo, se cambia aquí y en un sitio.
+pub const DIAS_AUDITORIA: i64 = 365;
+
+/// Cuánto se guarda del buzón de avisos, y solo de los VISTOS.
+///
+/// Tres meses. Es más corto que la auditoría porque un aviso ya leído no es un
+/// registro de nada: es una notificación que cumplió su función. Los que siguen
+/// sin ver no se tocan por muy viejos que sean — eso lo garantiza `notify::prune`
+/// en su propia consulta, no esta constante.
+pub const DIAS_AVISOS: i64 = 90;
 
 pub fn ensure_schema() -> Result<(), String> {
     crate::with_db(|c| {
@@ -256,11 +289,12 @@ pub fn faltan(job: &str, cada: i64) -> i64 {
 pub struct Tanda {
     pub consolidado: Option<String>,
     pub reflexionado: Option<String>,
+    pub podado: Option<String>,
 }
 
 impl Tanda {
     pub fn hubo_algo(&self) -> bool {
-        self.consolidado.is_some() || self.reflexionado.is_some()
+        self.consolidado.is_some() || self.reflexionado.is_some() || self.podado.is_some()
     }
 }
 
@@ -297,6 +331,8 @@ pub enum Cifras {
     Consolidacion { miradas: usize, grupos: usize, fundidas: usize },
     Patrones { elegibles: usize, grupos: usize, creados: usize, reforzados: usize },
     SinPatrones { elegibles: usize, motivo: String },
+    /// Filas retiradas por vencimiento: del registro de auditoría y del buzón.
+    Poda { auditoria: usize, avisos: usize },
     Fallo(String),
     /// Una nota anterior a este formato. Se enseña tal cual.
     Prosa(String),
@@ -313,6 +349,7 @@ impl Cifras {
                 format!("p|{elegibles}|{grupos}|{creados}|{reforzados}")
             }
             Self::SinPatrones { elegibles, motivo } => format!("s|{elegibles}|{motivo}"),
+            Self::Poda { auditoria, avisos } => format!("d|{auditoria}|{avisos}"),
             Self::Fallo(e) => format!("f|{e}"),
             // Una prosa no se vuelve a guardar; si alguien lo intenta, que se
             // guarde tal cual y no un `Prosa(...)` con la envoltura dentro.
@@ -357,6 +394,13 @@ impl Cifras {
                 },
                 None => Self::Prosa(s.to_string()),
             },
+            (Some("d"), Some(resto)) => {
+                let v: Vec<&str> = resto.split('|').collect();
+                match (n(v.first().copied()), n(v.get(1).copied())) {
+                    (Some(auditoria), Some(avisos)) => Self::Poda { auditoria, avisos },
+                    _ => Self::Prosa(s.to_string()),
+                }
+            }
             (Some("f"), Some(e)) => Self::Fallo(e.to_string()),
             _ => Self::Prosa(s.to_string()),
         }
@@ -371,6 +415,11 @@ impl Cifras {
         match self {
             Self::Consolidacion { fundidas, .. } => *fundidas > 0,
             Self::Patrones { creados, reforzados, .. } => creados + reforzados > 0,
+            // Una poda que no encontró nada vencido acabó bien y no rindió nada,
+            // igual que una consolidación que no fundió. Y son justo las que hay
+            // que poder contar seguidas: una racha larga de podas en blanco dice
+            // que el plazo sobra, no que la poda esté rota.
+            Self::Poda { auditoria, avisos } => auditoria + avisos > 0,
             _ => false,
         }
     }
@@ -428,6 +477,25 @@ pub fn corre(job: &str, stop: &std::sync::atomic::AtomicBool) -> String {
                 Cifras::SinPatrones { elegibles: r.elegibles, motivo: r.motivo }
             }
         }
+        PODA => {
+            // LAS DOS PODAS EN UN SOLO TRABAJO, y no una cada una, porque para el
+            // operador son lo mismo: quitar de la base lo que ya pasó de plazo.
+            // Dos filas en el panel de mantenimiento para dos `DELETE` sería
+            // pedirle que decida sobre algo que no le interesa por separado.
+            //
+            // Un fallo en la primera NO cancela la segunda: son tablas distintas
+            // y no hay ninguna razón para que un problema con la auditoría deje
+            // el buzón sin podar. Lo que se cuenta es lo que se consiguió.
+            let auditoria = crate::audit::prune(DIAS_AUDITORIA);
+            let avisos = crate::notify::prune(DIAS_AVISOS);
+            match (auditoria, avisos) {
+                (Ok(a), Ok(v)) => Cifras::Poda { auditoria: a, avisos: v },
+                // Con una sola caída se dice cuál, porque «falló la poda» no
+                // distingue un problema de esquema de uno de permisos.
+                (Err(e), Ok(_)) | (Ok(_), Err(e)) => Cifras::Fallo(e),
+                (Err(a), Err(v)) => Cifras::Fallo(format!("{a}; {v}")),
+            }
+        }
         otro => Cifras::Fallo(format!("trabajo desconocido: {otro}")),
     };
     let nota = cifras.a_nota();
@@ -453,6 +521,16 @@ pub fn tanda(stop: &std::sync::atomic::AtomicBool) -> Tanda {
     }
     if toca(INSIGHTS, CADA_INSIGHTS) {
         t.reflexionado = Some(corre(INSIGHTS, stop));
+    }
+    if stop.load(std::sync::atomic::Ordering::Relaxed) {
+        return t;
+    }
+    // LA PODA VA LA ÚLTIMA, y no es indiferente: consolidar e insights ESCRIBEN
+    // en la base, y podar después deja la tanda con la casa recogida. Al revés se
+    // podaría antes de generar lo que se acaba de generar, que no rompe nada pero
+    // retrasa un día lo que ya se podía haber quitado.
+    if toca(PODA, CADA_PODA) {
+        t.podado = Some(corre(PODA, stop));
     }
     t
 }

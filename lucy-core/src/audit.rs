@@ -77,13 +77,30 @@ impl Entry {
     /// la misma tabla con dos relojes distintos harían que el orden de la vista
     /// dependiera de quién escribió, y `ORDER BY created_at DESC` dejaría de
     /// significar «lo último que pasó».
+    ///
+    /// ── LO QUE ENTRA AQUÍ SE DEPURA, Y ÉSTE ES EL ÚNICO SITIO DONDE HACERLO ──
+    ///
+    /// El comando y su salida iban CRUDOS a disco. Y no es lo mismo que en el
+    /// prompt: una fila de auditoría no se va cuando cierras la pestaña — se
+    /// queda en `lucy.db` un año, viaja en la copia de seguridad, y es el fichero
+    /// que alguien abre para revisar qué se hizo en las máquinas.
+    ///
+    /// Lo que se guardaba tal cual: un `net use \\srv /user:x CONTRASEÑA`
+    /// completo en la columna `command`, y en `output_preview` la cadena de
+    /// conexión que la copia del chat SÍ pasaba por `scrub` — el mismo secreto,
+    /// depurado en el sitio que caduca y crudo en el que no.
+    ///
+    /// SE DEPURA EN EL CONSTRUCTOR y no en cada llamante, que son ocho repartidos
+    /// entre los dos crates. Un redactor que hay que acordarse de llamar es un
+    /// redactor que un día no se llama; aquí no hay forma de escribir una fila
+    /// sin pasar por esto.
     pub fn nueva(command: impl Into<String>, source: impl Into<String>) -> Self {
         Self {
             id: 0,
             timestamp: ahora_iso(),
             host_id: String::new(),
             host_name: "local".into(),
-            command: command.into(),
+            command: crate::memories::scrub(&command.into()),
             source: source.into(),
             exit_code: None,
             duration_ms: None,
@@ -106,7 +123,7 @@ impl Entry {
     pub fn resultado(mut self, ok: bool, ms: u64, salida: &str) -> Self {
         self.exit_code = Some(if ok { 0 } else { 1 });
         self.duration_ms = Some(ms as i64);
-        self.output_preview = recorta(salida, MAX_PREVIEW);
+        self.output_preview = recorta(&crate::memories::scrub(salida), MAX_PREVIEW);
         self
     }
 
@@ -118,7 +135,7 @@ impl Entry {
     /// `None` es «no se sabe», y un cero aquí sería afirmar que un comando que
     /// nadie ejecutó terminó bien.
     pub fn nota(mut self, texto: &str) -> Self {
-        self.output_preview = recorta(texto, MAX_PREVIEW);
+        self.output_preview = recorta(&crate::memories::scrub(texto), MAX_PREVIEW);
         self
     }
 }
@@ -588,5 +605,59 @@ mod tests {
         assert_eq!(MAX_LIMIT.clamp(1, MAX_LIMIT), MAX_LIMIT);
         assert_eq!(0_i64.clamp(1, MAX_LIMIT), 1);
         assert_eq!((MAX_LIMIT + 5_000).clamp(1, MAX_LIMIT), MAX_LIMIT);
+    }
+}
+
+#[cfg(test)]
+mod nada_crudo_a_disco {
+    use super::*;
+
+    /// Un secreto de los que `memories::scrub` reconoce.
+    const SECRETO: &str = "Server=db;Password=Sup3rSecreto!;Uid=sa";
+
+    #[test]
+    fn el_comando_se_depura_antes_de_guardarse() {
+        // UN COMANDO PUEDE LLEVAR LA CONTRASEÑA DENTRO: `net use`, una cadena de
+        // conexion, un `curl` con su token. La fila de auditoria no se va cuando
+        // cierras la pestaña — se queda en `lucy.db`, viaja en la copia de
+        // seguridad, y es justo el fichero que alguien abre para revisar que se
+        // hizo en las maquinas.
+        let e = Entry::nueva(format!("sqlcmd -S \"{SECRETO}\""), "manual");
+        assert!(!e.command.contains("Sup3rSecreto"), "la contraseña va al disco: {}", e.command);
+        // Y lo demas del comando sigue ahi: una fila depurada de mas no sirve
+        // para auditar nada.
+        assert!(e.command.contains("sqlcmd"), "se llevo por delante el comando: {}", e.command);
+    }
+
+    #[test]
+    fn la_salida_se_depura_antes_de_guardarse() {
+        // La copia que va al chat SI pasaba por `scrub`. Esta no. El mismo
+        // secreto, depurado en el sitio que caduca y crudo en el que no.
+        let e = Entry::nueva("Get-Config", "ai").resultado(true, 10, SECRETO);
+        assert!(
+            !e.output_preview.contains("Sup3rSecreto"),
+            "la salida va cruda al disco: {}",
+            e.output_preview
+        );
+    }
+
+    #[test]
+    fn la_nota_de_lo_que_no_corrio_tambien() {
+        // `nota` es el otro camino de entrada, para lo que se propuso y no llego
+        // a ejecutarse. Un comando descartado que llevaba una clave la guardaba
+        // igual — y encima sin haber servido para nada.
+        let e = Entry::nueva("x", "descartado").nota(SECRETO);
+        assert!(!e.output_preview.contains("Sup3rSecreto"), "{}", e.output_preview);
+    }
+
+    #[test]
+    fn lo_que_no_es_un_secreto_pasa_intacto() {
+        // `scrub` tiene un atajo: si el texto no trae ninguna marca conocida, se
+        // devuelve tal cual. Una auditoria que recortara salidas normales seria
+        // peor que una que guarda de mas.
+        let salida = "Status   Name        DisplayName\n------   ----        -----------\nRunning  Spooler     Print Spooler";
+        let e = Entry::nueva("Get-Service Spooler", "manual").resultado(true, 5, salida);
+        assert_eq!(e.output_preview, salida);
+        assert_eq!(e.command, "Get-Service Spooler");
     }
 }

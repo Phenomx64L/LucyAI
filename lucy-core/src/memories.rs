@@ -1076,6 +1076,24 @@ impl Recuerdo {
 ///
 /// `presupuesto` recorta las tres para un modelo flojo, que se ahoga con el
 /// prompt entero y contesta en prosa sin emitir una sola etiqueta.
+/// Si hay que caer al respaldo por palabras.
+///
+/// ── LO QUE DECIDE, Y POR QUE ESTA APARTE ────────────────────────────────────
+///
+/// El respaldo entra cuando la busqueda POR SIGNIFICADO no trajo nada: sin
+/// embebedor, con el corpus sin vectorizar, o con una pregunta que no se parece a
+/// nada. Lo que NO cuenta para esto son las memorias fijadas: estan ahi
+/// incondicionalmente, no las encontro ninguna busqueda, y tratarlas como un
+/// hallazgo apagaba el respaldo para siempre en cuanto el operador clavara una
+/// chincheta.
+///
+/// Aparte y pura porque es una linea de condicion que se leia mal —`lineas` no
+/// dice de donde vino cada linea— y porque asi se puede fijar con una prueba en
+/// vez de con un montaje de base de datos sin embebedor.
+fn toca_respaldo(r: &Recuerdo) -> bool {
+    r.memorias == 0 && r.documentos == 0
+}
+
 pub fn recall(query: &str, presupuesto: usize) -> Recuerdo {
     let q = query.trim();
     if q.is_empty() {
@@ -1194,10 +1212,20 @@ pub fn recall(query: &str, presupuesto: usize) -> Recuerdo {
         }
     }
 
-    // EL RESPALDO SOLO SI NO HUBO NADA. Mezclar palabras con significado cuando
-    // el segundo ya trajo algo llenaría el prompt de coincidencias literales
-    // peores que lo que ya había.
-    if lineas.is_empty() {
+    // EL RESPALDO SOLO SI LA BUSQUEDA NO TRAJO NADA. Mezclar palabras con
+    // significado cuando el segundo ya trajo algo llenaria el prompt de
+    // coincidencias literales peores que lo que ya habia.
+    //
+    // SE MIRA LO QUE ENCONTRO LA BUSQUEDA, NO SI HAY LINEAS. Aqui ponia
+    // `lineas.is_empty()`, y las fijadas se meten en `lineas` VEINTE LINEAS MAS
+    // ARRIBA, antes de cualquier intento semantico. Asi que bastaba UNA memoria
+    // fijada para que el respaldo por palabras no llegara a correr nunca — con el
+    // embebedor caido, Lucy se quedaba con las chinchetas y nada mas, contestando
+    // como si no recordara nada del asunto.
+    //
+    // Y no fallaba: `recall` devolvia un bloque con contenido, asi que ni el
+    // contador de `lexico` ni la pantalla tenian de que quejarse.
+    if toca_respaldo(&r) {
         if let Ok(lex) = lexico(q, n_mem) {
             for t in &lex {
                 lineas.push(format!("- {}", una_linea(t)));
@@ -1605,5 +1633,41 @@ mod tests {
         // El coste de equivocarse no es simétrico: recordar de más mete una
         // línea que sobra, fundir de más PIERDE un hecho.
         assert!(COSINE_DUP > 0.45, "fundir con el umbral de recordar pierde hechos");
+    }
+}
+
+#[cfg(test)]
+mod respaldo_por_palabras {
+    use super::*;
+
+    #[test]
+    fn una_chincheta_ya_no_apaga_el_respaldo() {
+        // EL FALLO. La condicion era `lineas.is_empty()`, y las fijadas se meten
+        // en `lineas` antes de cualquier intento semantico. Asi que bastaba UNA
+        // memoria fijada para que el respaldo por palabras no corriera nunca: con
+        // el embebedor caido, Lucy se quedaba con las chinchetas y nada mas.
+        //
+        // Y no fallaba — devolvia un bloque con contenido, asi que no habia de
+        // que quejarse.
+        let solo_fijadas = Recuerdo { fijadas: 3, memorias: 0, documentos: 0, ..Default::default() };
+        assert!(
+            toca_respaldo(&solo_fijadas),
+            "tres chinchetas siguen apagando la busqueda por palabras"
+        );
+    }
+
+    #[test]
+    fn con_la_busqueda_dando_resultados_no_se_mezcla() {
+        // La razon original de la guarda, que sigue en pie: mezclar coincidencias
+        // literales con lo que el significado ya encontro llena el prompt de
+        // peores resultados que los que ya habia.
+        assert!(!toca_respaldo(&Recuerdo { memorias: 2, ..Default::default() }));
+        assert!(!toca_respaldo(&Recuerdo { documentos: 1, ..Default::default() }));
+        assert!(!toca_respaldo(&Recuerdo { memorias: 1, fijadas: 4, ..Default::default() }));
+    }
+
+    #[test]
+    fn sin_nada_de_nada_tambien_corre() {
+        assert!(toca_respaldo(&Recuerdo::default()));
     }
 }

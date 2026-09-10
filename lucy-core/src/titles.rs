@@ -288,6 +288,9 @@ fn nube(orden: &str, modelo: &str) -> Result<(String, u32, u32), String> {
         match rx.recv_timeout(limite) {
             Ok(ChatEvent::Token(t)) => texto.push_str(&t),
             Ok(ChatEvent::Usage(i, o)) => (ent, sal) = (i, o),
+            // Igual que el plazo, y por el mismo motivo escrito abajo: un título
+            // a medias sigue diciendo de qué va la conversación.
+            Ok(ChatEvent::Corte(_)) => {}
             Ok(ChatEvent::Done) => break,
             Ok(ChatEvent::Error(e)) => return Err(e),
             // Se acabó el plazo o se cayó el hilo. Con lo que haya llegado basta

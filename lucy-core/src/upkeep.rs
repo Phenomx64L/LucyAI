@@ -214,42 +214,127 @@ pub fn purga(que: Purga) -> Result<usize, String> {
     })
 }
 
-/// Cuántos trozos de documento están sin vector.
+/// Las dos clases de fila que llevan vector, con el criterio de cada una.
 ///
-/// La vista de Documentos ya dice «12 de 40 con vector» y no ofrecía arreglarlo.
-/// Esto es lo que hace falta para poder ofrecerlo.
-pub fn sin_vector() -> usize {
+/// PARAMETRIZADO Y NO COPIADO. Los trozos de PDF y las memorias viven en la
+/// MISMA tabla `agent_memories` y se distinguen por el `session_id`; escribir el
+/// criterio dos veces es como se llega a que una fila cuente como pendiente en
+/// el contador y no en el arreglo, o al revés — y el síntoma sería un botón que
+/// dice «6 sin vector» y al pulsarlo no hace nada.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Clase {
+    /// Un trozo de documento ingerido. `session_id` como `pdf:<algo>`.
+    Trozo,
+    /// Una memoria del agente. Todo lo demás.
+    Memoria,
+}
+
+impl Clase {
+    /// El `entity_type` con el que se guarda en `embeddings`.
+    ///
+    /// Son los que ya hay escritos en la base desde la V1 — `search` y
+    /// `load_stored` buscan por ellos. Cambiar uno no daría error: daría cero
+    /// resultados sobre una tabla llena.
+    pub fn etiqueta(self) -> &'static str {
+        match self {
+            Clase::Trozo => "pdf_chunk",
+            Clase::Memoria => "memory",
+        }
+    }
+
+    /// El `WHERE` que separa una clase de la otra.
+    ///
+    /// LAS DOS MITADES DEL CRITERIO, y la segunda faltaba.
+    ///
+    /// Una ingesta escribe DOS clases de fila: `pdf:{id}` por cada trozo, y UNA
+    /// `pdf-doc:{id}` con la ficha del documento. Este filtro solo excluía la
+    /// primera, así que las cuatro fichas de esta base entraban como memorias y
+    /// el botón ofrecía embeberlas — con `entity_type = 'memory'`, o sea
+    /// compitiendo en el recuerdo semántico con lo que Lucy aprendió de verdad.
+    ///
+    /// Y estaba EN DESACUERDO CON `recuento`, ciento ochenta líneas más arriba
+    /// en este mismo fichero, que sí lleva las dos. El panel decía «97 memorias»
+    /// y el botón contaba sobre 101. Dos criterios sobre la misma tabla es como
+    /// se llega a que una fila cuente en un sitio y no en el de al lado.
+    ///
+    /// `session_id IS NULL` cuenta como memoria: `NOT LIKE` sobre un nulo da
+    /// NULL, no verdadero, así que sin esto las filas anteriores a que existiera
+    /// la columna se caen del filtro y no las arregla nadie. Son justo las más
+    /// viejas, las que más falta hace embeber.
+    fn filtro(self) -> &'static str {
+        match self {
+            Clase::Trozo => "am.session_id LIKE 'pdf:%'",
+            Clase::Memoria => {
+                "(am.session_id IS NULL
+                  OR (am.session_id NOT LIKE 'pdf:%' AND am.session_id NOT LIKE 'pdf-doc:%'))"
+            }
+        }
+    }
+
+    /// El texto que se embebe, tal y como lo compone quien la creó.
+    ///
+    /// TIENE QUE COINCIDIR CON EL DEL CAMINO NORMAL. `memories::guarda` embebe
+    /// «título — contenido»; si el relleno embebiera solo el contenido, las
+    /// filas arregladas quedarían en otro sitio del espacio vectorial que sus
+    /// vecinas, y la búsqueda las ordenaría mal sin fallar.
+    fn texto(self, titulo: &str, contenido: &str) -> String {
+        match self {
+            Clase::Trozo => contenido.to_string(),
+            Clase::Memoria => format!("{titulo} — {contenido}"),
+        }
+    }
+}
+
+/// Cuántas filas de esa clase están sin vector.
+///
+/// La vista de Documentos ya decía «12 de 40 con vector» y no ofrecía arreglarlo.
+/// Esto es lo que hace falta para poder ofrecerlo — y desde que acepta `Clase`,
+/// también para las memorias, que era el lado sin remedio.
+pub fn sin_vector(clase: Clase) -> usize {
     crate::with_db(|c| {
         Ok(cuenta(
             c,
-            "SELECT COUNT(*) FROM agent_memories am
-             WHERE am.session_id LIKE 'pdf:%'
-               AND NOT EXISTS (SELECT 1 FROM embeddings e
-                               WHERE e.entity_type = 'pdf_chunk'
-                                 AND e.entity_id = CAST(am.id AS TEXT))",
+            &format!(
+                "SELECT COUNT(*) FROM agent_memories am
+                 WHERE {}
+                   AND NOT EXISTS (SELECT 1 FROM embeddings e
+                                   WHERE e.entity_type = '{}'
+                                     AND e.entity_id = CAST(am.id AS TEXT))",
+                clase.filtro(),
+                clase.etiqueta()
+            ),
         ))
     })
     .unwrap_or(0)
 }
 
-/// Vuelve a embeber los trozos que se quedaron sin vector.
+/// Vuelve a embeber las filas de esa clase que se quedaron sin vector.
 ///
-/// EL CASO QUE ARREGLA: una ingesta que empezó con Ollama caído deja el documento
-/// buscable solo por palabras, y hasta ahora la única salida era borrarlo y
-/// volver a ingerirlo. Va por lotes y en el hilo de quien llame.
-pub fn reembeber(stop: &std::sync::atomic::AtomicBool) -> Result<usize, String> {
-    let pendientes: Vec<(i64, String)> = crate::with_db(|c| {
+/// EL CASO QUE ARREGLA: algo que se guardó con Ollama caído queda buscable solo
+/// por palabras. Para un documento la salida era borrarlo y volver a ingerirlo;
+/// para una memoria NO HABÍA SALIDA — y eso importa más, porque una memoria no
+/// se puede «volver a ingerir»: es lo que Lucy aprendió, y perder su mitad
+/// semántica la deja fuera de todo lo que no case por palabra exacta.
+///
+/// Medido en la base de esta máquina cuando se escribió esto: 6 memorias de 101
+/// sin vector, y 0 trozos de 797. El lado que tenía botón estaba al día.
+///
+/// Va por lotes y en el hilo de quien llame.
+pub fn reembeber(clase: Clase, stop: &std::sync::atomic::AtomicBool) -> Result<usize, String> {
+    let pendientes: Vec<(i64, String, String)> = crate::with_db(|c| {
         let mut st = c
-            .prepare(
-                "SELECT am.id, am.content FROM agent_memories am
-                 WHERE am.session_id LIKE 'pdf:%'
+            .prepare(&format!(
+                "SELECT am.id, COALESCE(am.title, ''), am.content FROM agent_memories am
+                 WHERE {}
                    AND NOT EXISTS (SELECT 1 FROM embeddings e
-                                   WHERE e.entity_type = 'pdf_chunk'
+                                   WHERE e.entity_type = '{}'
                                      AND e.entity_id = CAST(am.id AS TEXT))",
-            )
+                clase.filtro(),
+                clase.etiqueta()
+            ))
             .map_err(|e| format!("reembeber: {e}"))?;
         let v = st
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
             .map_err(|e| format!("reembeber: {e}"))?
             .filter_map(|r| r.ok())
             .collect();
@@ -263,14 +348,15 @@ pub fn reembeber(stop: &std::sync::atomic::AtomicBool) -> Result<usize, String> 
         if stop.load(std::sync::atomic::Ordering::Relaxed) {
             break;
         }
-        let textos: Vec<String> = lote.iter().map(|(_, t)| t.clone()).collect();
+        let textos: Vec<String> = lote.iter().map(|(_, t, c)| clase.texto(t, c)).collect();
         let (vs, modelo) = crate::vectors::embed_batch(&textos)?;
         let filas: Vec<(String, String, Vec<f32>)> = lote
             .iter()
+            .zip(textos)
             .zip(vs)
-            .map(|((id, t), v)| (id.to_string(), t.clone(), v))
+            .map(|(((id, _, _), texto), v)| (id.to_string(), texto, v))
             .collect();
-        hechos += crate::vectors::upsert("pdf_chunk", &filas, &modelo)?;
+        hechos += crate::vectors::upsert(clase.etiqueta(), &filas, &modelo)?;
     }
     Ok(hechos)
 }

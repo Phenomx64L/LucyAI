@@ -42,6 +42,21 @@ pub enum ChatEvent {
     /// campo de `Done` porque no todos los mandan, y un `Done` que llevara
     /// ceros obligatorios haría indistinguible "no lo dijo" de "salió gratis".
     Usage(u32, u32),
+    /// La respuesta acabó por un motivo que NO es «terminé de hablar».
+    ///
+    /// ── LA PIEZA QUE FALTABA, Y SE CALCULABA DESDE SIEMPRE ──────────────────
+    ///
+    /// `cloud::stop_reason` sabe leer el motivo de las cuatro casas y descarta el
+    /// final normal —`stop`, `end_turn`— para no dar explicaciones donde no hay
+    /// nada que explicar. Pero el motivo solo se usaba cuando NO había llegado
+    /// texto: si el modelo escribía media respuesta y se cortaba en el tope de
+    /// salida, el motivo se tiraba y la respuesta se leía como terminada.
+    ///
+    /// Y esto no es solo el tope. Cubre también `content_filter`, `SAFETY`,
+    /// `RECITATION` y `refusal`: todos los finales en los que lo que hay en
+    /// pantalla NO es lo que el modelo iba a decir. Callarlos deja al operador
+    /// creyendo que Lucy contestó eso.
+    Corte(String),
     Done,
     Error(String),
 }

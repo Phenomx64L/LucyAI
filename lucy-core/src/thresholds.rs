@@ -15,6 +15,20 @@
 //! fábrica son los que había; lo que cambia es que ahora se pueden mover para
 //! el equipo donde estorban, en vez de para todos.
 
+/// La clave de ESTA máquina en la tabla de umbrales.
+///
+/// UNA CONSTANTE Y NO UN LITERAL EN CADA SITIO, y no es manía de estilo: la
+/// tabla se lee con `WHERE host_id = ?1` y `de` cae a los valores de fábrica
+/// cuando no encuentra fila. O sea que escribir con una clave y leer con otra NO
+/// FALLA — devuelve unos umbrales válidos que no son los del operador.
+///
+/// Que es exactamente lo que pasaba: el panel guardaba bajo «local», el
+/// Dashboard leía «local», y el vigilante —el que decide si te llega la
+/// notificación— leía la cadena vacía. Movías el corte del disco al 70 %, la
+/// pantalla te hacía caso y el aviso seguía saltando en el 85. Tres literales
+/// sueltos, uno mal, y ningún sitio donde se vieran los tres juntos.
+pub const LOCAL: &str = "local";
+
 /// En qué banda cae una medida.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Nivel {

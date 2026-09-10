@@ -551,6 +551,47 @@ fn una_linea(s: &str) -> String {
 ///
 /// BLOQUEANTE Y LENTA: una sesión WinRM por equipo. Quien la llama tiene que
 /// estar en un hilo, y no llamarla más a menudo que `REMOTO_CADA_SECS`.
+/// Pasa una lectura de salud remota al historial.
+///
+/// LOS PORCENTAJES SE CALCULAN AQUI porque `Salud` viene en unidades absolutas
+/// —megabytes de memoria, gigabytes de disco— y el historial guarda porcentajes:
+/// es lo que hace comparables dos equipos con hardware distinto, que es lo unico
+/// que una serie temporal tiene que poder hacer.
+///
+/// Un total en cero da cero y no una division por cero: un disco que no reporta
+/// tamaño es un dato que falta, no un disco lleno.
+fn guarda_muestra(host_id: &str, s: &crate::health::Salud, ahora: i64) {
+    // Un fallo al escribir no se propaga: el vigilante tiene que seguir avisando
+    // aunque el historial no se pueda apuntar. Son dos trabajos distintos.
+    let _ = crate::history::guarda(host_id, &muestra_de(s, ahora));
+}
+
+/// La lectura de salud, en la forma que guarda el historial.
+///
+/// APARTE Y PURA PARA PODER PROBARLA. Escrita dentro de `guarda_muestra` habria
+/// que montar una base para fijar la conversion, y una prueba que se copiara la
+/// aritmetica aqui estaria validando su propia copia — pasaria en verde el dia
+/// que las dos se separaran, que es justo el dia que hay que enterarse.
+fn muestra_de(s: &crate::health::Salud, ahora: i64) -> crate::history::Muestra {
+    let pct = |usado: f64, total: f64| if total > 0.0 { (usado / total * 100.0) as f32 } else { 0.0 };
+    crate::history::Muestra {
+        ts: ahora,
+        cpu: s.cpu_pct,
+        mem: pct(s.mem_used_mb as f64, s.mem_total_mb as f64),
+        discos: s
+            .discos
+            .iter()
+            .map(|d| {
+                // El punto de montaje y no el nombre: es la clave con la que el
+                // historial local guarda los suyos, y mezclar las dos daria dos
+                // series para el mismo volumen.
+                let clave = if d.montaje.is_empty() { d.nombre.clone() } else { d.montaje.clone() };
+                (clave, pct(d.usado_gb as f64, d.total_gb as f64))
+            })
+            .collect(),
+    }
+}
+
 pub fn pasada_remota(hosts: &[crate::hosts::Host], ahora: i64) -> Vec<Decision> {
     let mut sintomas = Vec::new();
     for h in hosts {
@@ -559,7 +600,23 @@ pub fn pasada_remota(hosts: &[crate::hosts::Host], ahora: i64) -> Vec<Decision> 
         match crate::hosts::password(&h.id) {
             None => sintomas.extend(observa_sin_credencial(&equipo)),
             Some(p) => match crate::health::sonda(h, &p) {
-                Ok(s) => sintomas.extend(observa_remoto(&equipo, &s, &u)),
+                Ok(s) => {
+                    // ── Y LA MUESTRA AL HISTORIAL, QUE ANTES SE TIRABA ────────
+                    //
+                    // Esta ronda mide CPU, memoria y discos de cada equipo cada
+                    // cinco minutos, y con esos numeros decidia si avisar y los
+                    // olvidaba. `history::guarda` acepta cualquier `host_id`
+                    // desde siempre; su unico llamante le pasaba «local» fijo,
+                    // por un comentario que decia que el sondeo remoto «todavia
+                    // vive en la app Tauri» — y ya no.
+                    //
+                    // La consecuencia era que la pregunta que este historial
+                    // existe para contestar —«¿esto es nuevo?»— no tenia
+                    // respuesta para un servidor. Justo donde mas importa: en el
+                    // equipo que el operador NO tiene delante.
+                    guarda_muestra(&h.id, &s, ahora);
+                    sintomas.extend(observa_remoto(&equipo, &s, &u));
+                }
                 Err(e) => sintomas.extend(observa_caido(&equipo, &e)),
             },
         }
@@ -647,7 +704,22 @@ pub fn olvida_la_sesion() {
 /// escribe en el carril de trace, que es donde se investiga un «me avisa
 /// demasiado» sin tener que adivinar.
 pub fn pasada(s: &SysSnapshot, servicios: Option<&[DownService]>, ahora: i64) -> Vec<Decision> {
-    let u = crate::thresholds::de("");
+    // «local» Y NO LA CADENA VACÍA, QUE ERA LO QUE HABÍA.
+    //
+    // `thresholds::de` es un `WHERE host_id = ?1` con caída a los valores de
+    // fábrica cuando no hay fila. La cadena vacía no es una clave especial: es
+    // una que NADIE ESCRIBE NUNCA. El único escritor de la tabla guarda bajo
+    // «local», que es la misma clave con la que el Dashboard lee.
+    //
+    // O sea que el operador bajaba el corte del disco al 70 %, la pantalla le
+    // hacía caso —esa sí lee «local»— y las notificaciones seguían saltando en el
+    // 85 de fábrica. Sin fallar y sin avisar: `de` devuelve unos umbrales
+    // perfectamente válidos, solo que no los suyos.
+    //
+    // Y es justo lo que este módulo vino a arreglar: la cabecera de `thresholds`
+    // dice que existe porque había TRES ESCALAS para el mismo dato. Con esto
+    // volvían a ser dos, la de la pantalla y la del vigilante.
+    let u = crate::thresholds::de(crate::thresholds::LOCAL);
     manda(observa_local(s, servicios, &u), ahora)
 }
 
@@ -1293,5 +1365,68 @@ mod tests {
         ];
         let callan = todos.iter().filter(|m| !m.avisa()).count();
         assert!(callan >= todos.len() / 2, "más motivos de hablar que de callar");
+    }
+}
+
+#[cfg(test)]
+mod historial_remoto {
+    use super::*;
+
+    fn salud(cpu: f32, usado_mb: u64, total_mb: u64, discos: Vec<(&str, f32, f32)>) -> crate::health::Salud {
+        crate::health::Salud {
+            hostname: "SRV".into(),
+            os: "Windows".into(),
+            uptime_h: 10,
+            cpu_pct: cpu,
+            cpu_cores: 4,
+            mem_total_mb: total_mb,
+            mem_used_mb: usado_mb,
+            discos: discos
+                .into_iter()
+                .map(|(n, usado, total)| crate::health::Disco {
+                    nombre: n.into(),
+                    montaje: n.into(),
+                    total_gb: total,
+                    usado_gb: usado,
+                })
+                .collect(),
+            procesos: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn las_unidades_absolutas_se_vuelven_porcentaje() {
+        // `Salud` viene en megabytes y gigabytes; el historial guarda
+        // porcentajes, que es lo que hace comparables dos equipos con hardware
+        // distinto — y comparar es lo unico que una serie temporal tiene que
+        // poder hacer.
+        let s = salud(37.5, 8_192, 16_384, vec![("C:", 120.0, 480.0)]);
+        let m = muestra_de(&s, 1_000);
+        assert_eq!(m.cpu, 37.5);
+        assert_eq!(m.mem, 50.0, "la memoria no salio en porcentaje");
+        assert_eq!(m.discos, vec![("C:".to_string(), 25.0)]);
+    }
+
+    #[test]
+    fn un_total_en_cero_no_es_un_disco_lleno() {
+        // Un volumen que no reporta tamaño es un dato que FALTA. Dividir por cero
+        // daria `inf` o `NaN`, y cualquiera de los dos pintado en un grafico de
+        // capacidad se lee como «esta a reventar» — un aviso inventado sobre un
+        // disco del que no se sabe nada.
+        let s = salud(1.0, 0, 0, vec![("D:", 0.0, 0.0)]);
+        let m = muestra_de(&s, 1);
+        assert_eq!(m.mem, 0.0);
+        assert_eq!(m.discos, vec![("D:".to_string(), 0.0)]);
+        assert!(m.mem.is_finite() && m.discos[0].1.is_finite(), "salio un infinito");
+    }
+
+    #[test]
+    fn la_clave_del_disco_es_el_montaje() {
+        // Es la que usa el historial local. Guardar unos por nombre y otros por
+        // montaje daria DOS series para el mismo volumen, y ninguna completa.
+        let mut s = salud(1.0, 1, 2, vec![("C:", 1.0, 2.0)]);
+        s.discos[0].montaje = String::new();
+        s.discos[0].nombre = "/dev/sda1".into();
+        assert_eq!(muestra_de(&s, 1).discos[0].0, "/dev/sda1", "sin montaje se cae al nombre");
     }
 }

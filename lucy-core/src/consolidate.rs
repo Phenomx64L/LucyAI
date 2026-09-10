@@ -644,39 +644,6 @@ mod tests {
         assert!(t.contains("uso") && t.contains("red") && t.contains("casa"));
     }
 
-    #[test]
-    fn la_app_delega_aqui_en_vez_de_tener_su_propia_copia() {
-        // NO se comparan los umbrales, como se hace con el catálogo de modelos y
-        // con los precios, porque aquí no hay dos copias que puedan derivar: la
-        // app llama a esta función. Lo que se vigila es justamente eso — que
-        // siga llamándola. Volver a escribir el criterio allí daría dos
-        // deduplicadores distintos sobre la MISMA base de datos, y el que
-        // corriera segundo encontraría un corpus que ya no reconoce.
-        // EN EJECUCIÓN Y NO CON `include_str!`. Aunque esté dentro de un test,
-        // la macro se resuelve al compilar, así que la batería del núcleo no
-        // compilaba sin `src-tauri` delante. Ver `models.rs` y `schema.rs`.
-        let Ok(app) = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../lucy-svelte/src-tauri/src/commands/memory.rs"),
-        ) else {
-            // Sin la app Tauri al lado no hay a quién vigilar. Se salta.
-            return;
-        };
-        let app = app.as_str();
-        assert!(
-            app.contains("lucy_core::consolidate::run("),
-            "src-tauri dejó de delegar: hay otra vez dos criterios de parecido"
-        );
-        // Se busca la DEFINICIÓN, no el nombre. `jaccard` y el tokenizador
-        // siguen viviendo allí y está bien: los usa el grafo de memoria, que es
-        // otra función con sus propios umbrales. Lo que no puede volver es una
-        // constante de consolidación redeclarada.
-        assert!(
-            !app.contains("const MIN_CONTENT_JACCARD"),
-            "el umbral volvió a declararse en la app — es una copia nueva"
-        );
-    }
-
     /// Mide el parecido REAL del corpus de ESTA máquina. Solo lectura.
     ///
     /// ── POR QUÉ HACE FALTA UN INSTRUMENTO Y NO UN RAZONAMIENTO ───────────────

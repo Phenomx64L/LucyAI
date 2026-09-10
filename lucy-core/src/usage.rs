@@ -249,23 +249,59 @@ fn agrupa(
     Ok(v)
 }
 
+/// El instante en que empezó el día DEL OPERADOR, en UTC.
+///
+/// ── POR QUÉ NO VALE `datetime('now', 'start of day')` ───────────────────────
+///
+/// El `now` de SQLite es UTC, así que `start of day` da la medianoche UTC. En un
+/// operador a UTC−6 eso significa que «hoy» empieza a las seis de la tarde de
+/// AYER: a las cinco de la tarde la cifra incluye la noche anterior, y a las seis
+/// y un minuto se pone a cero a media tarde, sin que haya cambiado el día para
+/// nadie que esté mirando la pantalla.
+///
+/// La cadena de modificadores hace el viaje de ida y vuelta: `now` en UTC →
+/// `localtime` lo pasa a la hora del operador → `start of day` corta a su
+/// medianoche → `utc` devuelve ese instante a UTC, que es como está escrita la
+/// columna. Convertir el CORTE y no cada fila, además, deja el índice utilizable.
+const INICIO_DEL_DIA: &str = "datetime('now', 'localtime', 'start of day', 'utc')";
+
 /// Cuánto se lleva gastado HOY, en dinero.
 ///
 /// Es la que hace falta para un tope diario: `spend_limit` es por sesión y se
 /// reinicia en cada arranque, así que hoy no impide gastar diez veces el tope
 /// abriendo Lucy diez veces.
+///
+/// «Hoy» es el del operador y no el de Greenwich. Ver `INICIO_DEL_DIA`.
 pub fn gasto_de_hoy() -> f64 {
     if ensure_schema().is_err() {
         return 0.0;
     }
     crate::with_db(|c| {
         c.query_row(
-            "SELECT COALESCE(SUM(total_cost), 0.0) FROM token_usage
-             WHERE created_at >= datetime('now', 'start of day')",
+            &format!(
+                "SELECT COALESCE(SUM(total_cost), 0.0) FROM token_usage
+                 WHERE created_at >= {INICIO_DEL_DIA}"
+            ),
             [],
             |f| f.get::<_, f64>(0),
         )
         .map_err(|e| e.to_string())
     })
     .unwrap_or(0.0)
+}
+
+/// El corte de «hoy» que usa `gasto_de_hoy`, para poder mirarlo desde fuera.
+///
+/// Existe PARA LA PRUEBA, y no es un atajo: lo que hay que fijar es que el corte
+/// sea la medianoche del operador, y sin poder leerlo la única alternativa sería
+/// comprobar la suma —que en una máquina en UTC da lo mismo con el fallo y sin
+/// él, y pasaría en verde justo donde no hay que confiar.
+#[doc(hidden)]
+pub fn inicio_del_dia() -> Option<String> {
+    ensure_schema().ok()?;
+    crate::with_db(|c| {
+        c.query_row(&format!("SELECT {INICIO_DEL_DIA}"), [], |f| f.get::<_, String>(0))
+            .map_err(|e| e.to_string())
+    })
+    .ok()
 }

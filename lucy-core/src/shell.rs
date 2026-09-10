@@ -120,9 +120,90 @@ pub const PS_UTF8_PREAMBLE: &str =
     "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()\n\
      $OutputEncoding = [System.Text.UTF8Encoding]::new()\n";
 
-/// Antepone el preámbulo a un script.
+/// El marcador con el que el epílogo cuenta lo que no se ve desde fuera.
+const FIN: &str = "##LUCY-FIN ";
+
+/// Lo que se añade DETRÁS del script para poder saber si de verdad fue bien.
+///
+/// ── EL FALLO QUE ESTO CIERRA, Y ESTÁ MEDIDO ─────────────────────────────────
+///
+/// El veredicto era `out.status.success()` a secas. Y en PowerShell un error NO
+/// TERMINANTE —que es el modo por defecto de casi todos los cmdlets— se escribe,
+/// se ve, y el proceso sale con CERO:
+///
+/// ```text
+///   powershell -Command "Get-Item 'C:\no-existe'; Get-Date"   → salida 0
+/// ```
+///
+/// O sea que Lucy lo apuntaba como éxito. El paso del plan iba a «hecho», la fila
+/// de auditoría guardaba `exit_code` 0, `fallos_recientes` no lo contaba nunca, y
+/// al modelo se le devolvía la salida con el mismo remate que si hubiera
+/// funcionado — así que proponía lo siguiente sobre algo que no pasó.
+///
+/// ── POR QUÉ `$Error.Count` Y NO MIRAR stderr A SECAS ────────────────────────
+///
+/// Porque stderr solo no distingue lo que hay que distinguir. Medido:
+///
+/// ```text
+///                                                stderr   $Error   veredicto
+///   Write-Warning / Verbose / Host / Information      0        0   bien
+///   error silenciado con -ErrorAction Silently…       0        1   bien
+///   programa NATIVO que escribe en stderr y va bien  21        0   bien
+///   error de PowerShell mostrado                    439        1   FALLO
+/// ```
+///
+/// Ni los avisos ni `Write-Host` llegan a stderr, así que no ensucian. Pero un
+/// programa nativo SÍ escribe ahí yendo bien —`git`, `winget`— y un error
+/// silenciado a propósito sube `$Error` sin escribir nada. Solo las DOS cosas
+/// juntas significan «hubo un error y se vio».
+///
+/// ── POR QUÉ REPONE `$LASTEXITCODE`, Y LO ENCONTRÓ UNA PRUEBA ────────────────
+///
+/// Porque el epílogo pasa a ser la ÚLTIMA instrucción del script, y PowerShell
+/// saca su código de salida de cómo acabó la última. Sin reponerlo, un
+/// `cmd /c exit 3` —que antes salía con 3— pasaba a salir con 0: el arreglo
+/// rompía justo el caso que ya funcionaba.
+///
+/// Las seis pruebas del analizador pasaban igual de verdes. Lo cazó la que lanza
+/// PowerShell de verdad, y por eso esa prueba existe.
+///
+/// ── SI EL SCRIPT LLAMA A `exit`, ESTO NO CORRE ──────────────────────────────
+///
+/// Y entonces no hay marcador. Ese caso vuelve al veredicto de antes, que para un
+/// `exit` explícito es exactamente el correcto: el código que puso el script.
+const PS_EPILOGO: &str = "\n$__lucy_code = $LASTEXITCODE\n\
+     [Console]::Error.WriteLine(\"##LUCY-FIN {0}\" -f $Error.Count)\n\
+     if ($__lucy_code) { exit $__lucy_code }\n";
+
+/// Antepone el preámbulo a un script, y le pone el epílogo detrás.
 pub fn ps_utf8(script: &str) -> String {
-    format!("{}{}", PS_UTF8_PREAMBLE, script)
+    format!("{PS_UTF8_PREAMBLE}{script}{PS_EPILOGO}")
+}
+
+/// Qué pasó de verdad: el canal de errores limpio, y si el comando funcionó.
+///
+/// Aparte y pura para poder fijar los cinco casos de la tabla de `PS_EPILOGO`
+/// sin arrancar PowerShell. `salio_bien` es lo que decía el proceso — que sigue
+/// mandando para lo nativo: un `cmd /c exit 3` al final SÍ sale con código, y ese
+/// camino no cambia.
+pub fn veredicto(stderr: &str, salio_bien: bool) -> (String, bool) {
+    let Some(i) = stderr.rfind(FIN) else {
+        // Sin marcador —el script llamó a `exit`, o PowerShell no llegó a
+        // terminar— se cree lo que dijo el proceso, como antes.
+        return (stderr.to_string(), salio_bien);
+    };
+    let errores: u32 = stderr[i + FIN.len()..]
+        .lines()
+        .next()
+        .unwrap_or("")
+        .trim()
+        .parse()
+        .unwrap_or(0);
+    // El marcador se va: es fontanería de Lucy y no tiene nada que decirle al
+    // operador ni al modelo.
+    let limpio = format!("{}{}", &stderr[..i], stderr[i..].split_once('\n').map_or("", |(_, r)| r));
+    let hubo_error_visible = errores > 0 && !limpio.trim().is_empty();
+    (limpio.trim_end().to_string(), salio_bien && !hubo_error_visible)
 }
 
 /// Ejecuta un script de PowerShell y devuelve `(stdout, stderr, ok)`.
@@ -164,11 +245,10 @@ pub fn run_powershell_utf8(script: &str) -> Result<(String, String, bool), Strin
         .creation_flags(CREATE_NO_WINDOW)
         .output()
         .map_err(|e| format!("PowerShell spawn failed: {}", e))?;
-    Ok((
-        decode_console(&out.stdout),
-        decode_console(&out.stderr),
-        out.status.success(),
-    ))
+    // EL VEREDICTO NO ES `status.success()`. Ver `PS_EPILOGO`: un error no
+    // terminante de PowerShell se ve, se escribe, y el proceso sale con cero.
+    let (err, ok) = veredicto(&decode_console(&out.stderr), out.status.success());
+    Ok((decode_console(&out.stdout), err, ok))
 }
 
 /// Traduce una etiqueta de ejecución al script de PowerShell que la cumple.
@@ -311,5 +391,117 @@ mod tests {
         let script_at = w.find("Get-Date").expect("el script debe seguir ahí");
         let out_enc_at = w.find("$OutputEncoding").expect("...");
         assert!(out_enc_at < script_at, "la codificación se fija en la primera escritura");
+    }
+}
+
+#[cfg(test)]
+mod veredicto_de_powershell {
+    use super::*;
+
+    /// Lo que deja PowerShell en stderr tras un error mostrado, con su marcador.
+    fn con_error(errores: u32, texto: &str) -> String {
+        format!("{texto}\n{FIN}{errores}\n")
+    }
+
+    #[test]
+    fn un_error_no_terminante_ya_no_pasa_por_exito() {
+        // EL CASO MEDIDO: `Get-Item 'C:\no-existe'; Get-Date` sale con CERO y el
+        // error esta ahi. Lucy lo apuntaba como exito, el paso iba a «hecho», la
+        // auditoria guardaba exit_code 0 y `fallos_recientes` no lo veia nunca.
+        let (limpio, ok) = veredicto(
+            &con_error(1, "Get-Item : No se encuentra la ruta de acceso."),
+            true,
+        );
+        assert!(!ok, "un error visible sigue contando como exito");
+        assert!(!limpio.contains(FIN), "el marcador llega al operador");
+        assert!(limpio.contains("No se encuentra"), "se perdio el mensaje del error");
+    }
+
+    #[test]
+    fn un_programa_nativo_que_avisa_por_stderr_sigue_yendo_bien() {
+        // `git`, `winget` y media consola de Windows escriben en stderr sin que
+        // haya fallado nada. Sin `$Error`, marcarlos como fallo seria una maquina
+        // de falsos positivos — y con `fallos_recientes` conectado, ademas le
+        // diria al modelo que reintente lo que si funciono.
+        let (_, ok) = veredicto(&con_error(0, "Cloning into 'repo'..."), true);
+        assert!(ok, "el aviso de un programa nativo cuenta como fallo");
+    }
+
+    #[test]
+    fn un_error_silenciado_a_proposito_no_es_un_fallo() {
+        // `-ErrorAction SilentlyContinue` sube `$Error` y NO escribe en stderr:
+        // quien lo puso dijo que ese error no importa.
+        let (_, ok) = veredicto(&format!("{FIN}1\n"), true);
+        assert!(ok, "un error que alguien silencio cuenta como fallo");
+    }
+
+    #[test]
+    fn lo_que_ya_fallaba_sigue_fallando() {
+        // Un programa nativo que termina mal SI llega al codigo de salida del
+        // proceso, y ese camino no cambia.
+        let (_, ok) = veredicto(&format!("{FIN}0\n"), false);
+        assert!(!ok, "se perdio el fallo que el proceso si reportaba");
+    }
+
+    #[test]
+    fn sin_marcador_se_cree_lo_que_dijo_el_proceso() {
+        // El script llamo a `exit` y el epilogo no llego a correr. Ahi el codigo
+        // que puso el script ES el veredicto correcto.
+        assert_eq!(veredicto("lo que sea", true), ("lo que sea".into(), true));
+        assert_eq!(veredicto("", false), (String::new(), false));
+    }
+
+    #[test]
+    fn el_epilogo_va_detras_del_script_y_en_su_propia_linea() {
+        // Un script que acaba en comentario se comeria la linea siguiente si el
+        // epilogo se pegara sin salto.
+        let s = ps_utf8("Get-Date  # mira la hora");
+        assert!(s.contains("# mira la hora\n"), "el epilogo se pego al comentario");
+        // Y lo ULTIMO que hace es reponer el codigo de salida. Sin esa linea el
+        // epilogo se convierte en la ultima instruccion del script y PowerShell
+        // saca de ella su codigo: un `cmd /c exit 3` pasaria a salir con cero.
+        assert!(
+            s.trim_end().ends_with("if ($__lucy_code) { exit $__lucy_code }"),
+            "el epilogo ya no repone el codigo de salida: {s}"
+        );
+    }
+}
+
+#[cfg(all(test, windows))]
+mod contra_powershell_de_verdad {
+    use super::*;
+
+    /// Los cinco casos de la tabla, lanzando PowerShell.
+    ///
+    /// LAS PRUEBAS DE ARRIBA FIJAN EL PARSER; ESTA FIJA EL ARREGLO. Un parser
+    /// correcto sobre un marcador que PowerShell no escribiera —porque el
+    /// epilogo se pego mal, o porque `$Error` no dice lo que se cree— pasaria
+    /// igual de verde y no arreglaria nada.
+    #[test]
+    fn los_cinco_casos_medidos() {
+        let casos: &[(&str, bool, &str)] = &[
+            ("Get-Date", true, "un comando que va bien"),
+            (
+                "Get-Item 'C:\no-existe-lucy-xyz'; Get-Date",
+                false,
+                "error NO terminante: sale con cero y hay que cazarlo",
+            ),
+            (
+                "Get-Item 'C:\no-existe-lucy-xyz' -ErrorAction SilentlyContinue; Get-Date",
+                true,
+                "error silenciado a proposito",
+            ),
+            (
+                "cmd /c 'echo aviso 1>&2'",
+                true,
+                "programa nativo que escribe en stderr y va bien",
+            ),
+            ("cmd /c exit 3", false, "programa nativo que falla"),
+        ];
+        for (script, esperado, que) in casos {
+            let (_, err, ok) = run_powershell_utf8(script).expect("arrancar PowerShell");
+            assert_eq!(ok, *esperado, "{que} — script: {script}, stderr: {err}");
+            assert!(!err.contains("LUCY-FIN"), "{que}: el marcador llega fuera");
+        }
     }
 }

@@ -319,6 +319,155 @@ fn openai_content(t: &Turn) -> serde_json::Value {
     serde_json::Value::Array(blocks)
 }
 
+/// Cómo viaja el prompt de sistema en el cuerpo de cada proveedor.
+///
+/// ── APARTE Y PURA PARA PODER PROBARLA ────────────────────────────────────────
+///
+/// Lo que se arregló aquí fue exactamente «una función que nadie llamaba»:
+/// `prompt::build` insertaba la marca de caché, la constante estaba, el orden por
+/// estabilidad estaba, y `stream` mandaba el sistema como una cadena plana. Una
+/// prueba de `parte_por_cache` a solas habría repetido el error — habría pasado
+/// igual de verde con el cableado desconectado.
+///
+/// ── LOS DOS COMPORTAMIENTOS ─────────────────────────────────────────────────
+///
+/// Anthropic recibe DOS BLOQUES con el punto de corte al final del primero. La
+/// caché es una coincidencia de prefijo: se cachea todo lo anterior al
+/// `cache_control`, y un byte distinto antes de ese punto invalida el resto. Por
+/// eso `build` deja lo estable delante y aquí solo hay que partir por la marca.
+///
+/// Los demás reciben UNA CADENA SIN LA MARCA. Ninguno cachea por punto de corte,
+/// y hasta ahora se les entregaba el comentario HTML literal en medio de las
+/// instrucciones — a los cuatro, incluidos los tres que ni siquiera tienen caché.
+fn sistema_json(p: Provider, system: &str) -> serde_json::Value {
+    let (estable, volatil) = crate::prompt::parte_por_cache(system);
+    match p {
+        Provider::Anthropic => {
+            let mut bloques = vec![serde_json::json!({
+                "type": "text",
+                "text": estable,
+                "cache_control": { "type": "ephemeral" },
+            })];
+            if !volatil.is_empty() {
+                bloques.push(serde_json::json!({ "type": "text", "text": volatil }));
+            }
+            serde_json::Value::Array(bloques)
+        }
+        _ => serde_json::json!(crate::prompt::sin_marca(system).as_ref()),
+    }
+}
+
+/// Cuántos intentos, contando el primero.
+///
+/// Tres. Con dos, un pico de un segundo se lleva el turno por delante; con más,
+/// una nube caída de verdad tiene al operador esperando medio minuto delante de
+/// una pantalla que no dice nada.
+const INTENTOS: u32 = 3;
+
+/// Lo máximo que se espera entre intentos, pase lo que diga el proveedor.
+///
+/// Un `retry-after` de diez minutos es una respuesta legítima —y significa
+/// «vuelve luego», no «quédate ahí»—. Sin este techo, Lucy se queda colgada el
+/// tiempo que al proveedor le parezca.
+const ESPERA_MAX_SECS: u64 = 20;
+
+/// Si merece la pena volver a intentarlo.
+///
+/// SOLO LO QUE ES DE PASO. Un 400 es la petición mal formada y un 401 es la clave:
+/// reintentarlos es esperar a que cambie algo que no va a cambiar, y encima
+/// retrasa el error que el operador necesita leer. Los que sí:
+///
+/// ```text
+///   408  el proveedor se cansó de esperar
+///   429  demasiadas peticiones — normalmente con `retry-after`
+///   500  502  503  504  529   la otra punta está mal o saturada
+/// ```
+fn transitorio(codigo: u16) -> bool {
+    matches!(codigo, 408 | 429 | 500 | 502 | 503 | 504 | 529)
+}
+
+/// Manda la petición, reintentando lo que es de paso.
+///
+/// ── POR QUÉ EXISTE ──────────────────────────────────────────────────────────
+///
+/// No había ninguno. Un 429 —que es el proveedor diciendo literalmente «espera un
+/// momento y vuelve»— mataba el turno, apagaba la cadena automática, y dejaba al
+/// operador con «HTTP 429» delante. La cabecera de este módulo lo dice: los
+/// reintentos con backoff se dejaron fuera del primer porte a propósito. Esta es
+/// la parte que faltaba.
+///
+/// SOLO ANTES DEL PRIMER BYTE. Es una petición en streaming: una vez que el flujo
+/// ha empezado a devolver texto, repetirla duplicaría lo que el operador ya está
+/// leyendo. Aquí se reintenta el envío, y lo que falle a mitad de flujo sigue
+/// siendo un error, como antes.
+///
+/// SE RESPETA `retry-after` cuando viene, porque el proveedor sabe mejor que
+/// nosotros cuándo va a poder atender. Y cuando no viene, la espera se dobla:
+/// un segundo, dos, cuatro.
+/// `Ok(None)` = el operador pulso Detener mientras se esperaba. No es un error
+/// y no debe enseñarse como tal: es exactamente lo que pidio.
+fn con_reintentos(
+    p: Provider,
+    req: ureq::Request,
+    cuerpo: &str,
+    stop: &AtomicBool,
+) -> Result<Option<ureq::Response>, String> {
+    let mut espera = std::time::Duration::from_secs(1);
+    for intento in 1..=INTENTOS {
+        match req.clone().send_string(cuerpo) {
+            Ok(r) => return Ok(Some(r)),
+            Err(ureq::Error::Status(code, r)) => {
+                // El cuerpo del error del proveedor es lo único que dice qué
+                // campo sobra o falta; tragárselo deja al operador con un número.
+                let sugerida = r
+                    .header("retry-after")
+                    .and_then(|s| s.trim().parse::<u64>().ok())
+                    .map(std::time::Duration::from_secs);
+                let detail = r.into_string().unwrap_or_default();
+                let ultimo = intento == INTENTOS;
+                if ultimo || !transitorio(code) {
+                    let cuantos = if intento > 1 {
+                        format!(" (tras {intento} intentos)")
+                    } else {
+                        String::new()
+                    };
+                    return Err(format!(
+                        "{} respondió HTTP {code}{cuantos}: {}",
+                        p.label(),
+                        truncate(&detail, 400)
+                    ));
+                }
+                let cuanto = sugerida.unwrap_or(espera).min(
+                    std::time::Duration::from_secs(ESPERA_MAX_SECS),
+                );
+                // A CACHOS, MIRANDO EL BOTÓN DE PARAR. Un `sleep` de veinte
+                // segundos deja el «Detener» sin efecto justo cuando más ganas
+                // hay de pulsarlo: el operador ve una pantalla quieta y no sabe
+                // que hay alguien esperando por él.
+                let fin = std::time::Instant::now() + cuanto;
+                while std::time::Instant::now() < fin {
+                    if stop.load(Ordering::Relaxed) {
+                        return Ok(None);
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+                espera *= 2;
+            }
+            // Un fallo de red no trae estado. Se reintenta igual —un cable que
+            // se mueve o una wifi que salta son lo más transitorio que hay— pero
+            // sin `retry-after` que respetar.
+            Err(otro) => {
+                if intento == INTENTOS {
+                    return Err(format!("No se pudo llamar a {}: {otro}", p.label()));
+                }
+                std::thread::sleep(espera.min(std::time::Duration::from_secs(ESPERA_MAX_SECS)));
+                espera *= 2;
+            }
+        }
+    }
+    Err(format!("No se pudo llamar a {}", p.label()))
+}
+
 fn stream(
     p: Provider,
     model: &str,
@@ -347,7 +496,7 @@ fn stream(
                 "messages": msgs,
             });
             if !system.is_empty() {
-                body["system"] = serde_json::json!(system);
+                body["system"] = sistema_json(p, &system);
             }
             if let Some(e) = effort {
                 body["output_config"] = serde_json::json!({ "effort": e });
@@ -375,8 +524,10 @@ fn stream(
                 .collect();
             let mut body = serde_json::json!({ "contents": contents });
             if !system.is_empty() {
+                // Sin la marca: Gemini no cachea por punto de corte, y el
+                // comentario HTML solo sería ruido en sus instrucciones.
                 body["systemInstruction"] =
-                    serde_json::json!({ "parts": [{ "text": system }] });
+                    serde_json::json!({ "parts": [{ "text": sistema_json(p, &system) }] });
             }
             (
                 // La clave va en cabecera y no en la query: una URL con el
@@ -390,7 +541,12 @@ fn stream(
             // lista, y es el único sitio donde va.
             let mut msgs: Vec<serde_json::Value> = Vec::with_capacity(hist.len() + 1);
             if !system.is_empty() {
-                msgs.push(serde_json::json!({ "role": "system", "content": system }));
+                // Sin la marca, por lo mismo que Gemini. Aquí entran también
+                // Ollama y los cuatro compatibles con OpenAI: ninguno cachea por
+                // punto de corte, y el comentario se les entregaba literal.
+                msgs.push(
+                    serde_json::json!({ "role": "system", "content": sistema_json(p, &system) }),
+                );
             }
             msgs.extend(
                 hist.iter().map(|t| {
@@ -400,29 +556,42 @@ fn stream(
                     })
                 }),
             );
+            let mut body =
+                serde_json::json!({ "model": model, "stream": true, "messages": msgs });
+            // ── HAY QUE PEDIR EL RECUENTO, O NO VIENE ────────────────────────
+            //
+            // En el protocolo de OpenAI, una respuesta EN STREAMING no lleva
+            // `usage` a menos que se pida con `stream_options`. Sin esta línea,
+            // `usage()` buscaba un objeto que el proveedor nunca manda: OpenAI,
+            // xAI, DeepSeek y NVIDIA —veinticuatro modelos del catálogo—
+            // declaraban cero tokens y cero coste, siempre.
+            //
+            // Y de ese contador cuelga el tope de gasto de la sesión, así que
+            // para esos veinticuatro no saltaba nunca. Un tope que solo funciona
+            // con un tercio del catálogo es peor que no tenerlo: da la impresión
+            // de estar puesto.
+            //
+            // No se le manda a Ollama, que va por su propio camino y no cobra.
+            if !matches!(p, Provider::Ollama) {
+                body["stream_options"] = serde_json::json!({ "include_usage": true });
+            }
             (
                 ureq::post(p.openai_endpoint()).set("Authorization", &format!("Bearer {key}")),
-                serde_json::json!({ "model": model, "stream": true, "messages": msgs }),
+                body,
             )
         }
     };
 
-    let resp = req
-        .set("content-type", "application/json")
-        // `send_string` y no `send_json`: ureq entra aquí sin su característica
-        // `json`, igual que en el resto de la caja. Serializar a mano cuesta una
-        // línea; añadir la característica arrastra otra copia de serde al
-        // binario para lo mismo.
-        .send_string(&body.to_string())
-        .map_err(|e| match e {
-            // El cuerpo del error del proveedor es lo único que dice qué campo
-            // sobra o falta; tragárselo deja al operador con un número.
-            ureq::Error::Status(code, r) => {
-                let detail = r.into_string().unwrap_or_default();
-                format!("{} respondió HTTP {code}: {}", p.label(), truncate(&detail, 400))
-            }
-            other => format!("No se pudo llamar a {}: {other}", p.label()),
-        })?;
+    let req = req.set("content-type", "application/json");
+    // `send_string` y no `send_json`: ureq entra aquí sin su característica
+    // `json`, igual que en el resto de la caja. Serializar a mano cuesta una
+    // línea; añadir la característica arrastra otra copia de serde al binario
+    // para lo mismo.
+    let cuerpo = body.to_string();
+    let Some(resp) = con_reintentos(p, req, &cuerpo, stop)? else {
+        // Se pulso Detener mientras se esperaba a reintentar.
+        return Ok(());
+    };
 
     let reader = BufReader::new(resp.into_reader());
     // Un turno que no produce NADA tiene que decir por qué. Sin esto, un
@@ -468,6 +637,20 @@ fn stream(
         }
     }
 
+    // ── LA RESPUESTA LLEGÓ, PERO NO ENTERA ──────────────────────────────────
+    //
+    // El motivo se calculaba desde siempre y solo se miraba cuando no había
+    // llegado NADA. Con media respuesta y un corte en el tope de salida, el
+    // motivo se tiraba: en pantalla quedaba un texto que se acaba a media frase y
+    // nada que dijera por qué.
+    //
+    // Se manda antes que `Done` a propósito: quien lo recibe tiene que poder
+    // marcar ESE mensaje, y después de `Done` la pestaña ya lo ha cerrado.
+    if tokens > 0 {
+        if let Some(r) = &motivo {
+            let _ = tx.send(ChatEvent::Corte(r.clone()));
+        }
+    }
     if tokens == 0 && !stop.load(Ordering::Relaxed) {
         return Err(match motivo {
             Some(r) => format!(
@@ -496,7 +679,27 @@ pub fn usage(p: Provider, v: &serde_json::Value) -> Option<(u32, u32)> {
     match p {
         Provider::Anthropic => {
             let u = v.get("usage").or_else(|| v.get("message")?.get("usage"))?;
-            Some((n(u.get("input_tokens")), n(u.get("output_tokens"))))
+            // ── LOS TRES CAMPOS, Y SUMARLOS NO ES OPCIONAL ───────────────────
+            //
+            // `input_tokens` de Anthropic es SOLO EL RESTO NO CACHEADO. El total
+            // del prompt es `input_tokens + cache_creation + cache_read`, y
+            // desde que el sistema viaja con punto de corte esos dos últimos se
+            // llevan unos dos mil tokens por turno.
+            //
+            // Leyendo solo el primero, el contador de gasto habría pasado a
+            // marcar cincuenta tokens donde hay dos mil — y de ese contador
+            // cuelga el tope que apaga el automático. Un tope que no se entera
+            // de lo que se gasta no es un tope.
+            //
+            // PENDIENTE, Y ES EL DESCUENTO: una lectura de caché cuesta la
+            // décima parte que un token normal, y aquí se suman al mismo precio.
+            // O sea que la cifra es un TECHO honesto —nunca por debajo— y sigue
+            // valiendo lo mismo que antes de conectar la caché. Enseñar el
+            // ahorro de verdad pide columnas nuevas en la tabla de gasto.
+            let entrada = n(u.get("input_tokens"))
+                + n(u.get("cache_creation_input_tokens"))
+                + n(u.get("cache_read_input_tokens"));
+            Some((entrada, n(u.get("output_tokens"))))
         }
         Provider::Gemini => {
             let u = v.get("usageMetadata")?;
@@ -874,6 +1077,238 @@ mod motivos {
             Some((5, 1))
         );
         // Una trama normal de texto no trae uso, y no debe inventarlo.
+        assert_eq!(usage(Provider::OpenAi, &json!({"choices":[{"delta":{"content":"x"}}]})), None);
+    }
+}
+
+#[cfg(test)]
+mod cache_de_prompt {
+    use super::*;
+    use crate::prompt::CACHE_BOUNDARY;
+
+    /// Un sistema con las dos mitades, como el que arma `prompt::build`.
+    fn sistema() -> String {
+        format!("Eres Lucy y estas son tus reglas.\n\n{CACHE_BOUNDARY}\nEl equipo va al 4 % de CPU.")
+    }
+
+    #[test]
+    fn anthropic_recibe_dos_bloques_con_el_corte_al_final_del_estable() {
+        let v = sistema_json(Provider::Anthropic, &sistema());
+        let bloques = v.as_array().expect("el sistema de Anthropic va en bloques");
+        assert_eq!(bloques.len(), 2, "lo estable y lo que cambia van separados");
+
+        // El punto de corte va en el PRIMERO. En el segundo sería inútil: se
+        // cachearía también lo que cambia en cada turno, así que cada petición
+        // escribiría una entrada nueva y ninguna se leería jamás — pagando la
+        // prima de escritura sin ahorrar un token.
+        assert_eq!(
+            bloques[0]["cache_control"]["type"], "ephemeral",
+            "lo estable no lleva punto de corte: no se cachea nada"
+        );
+        assert!(
+            bloques[1].get("cache_control").is_none(),
+            "el punto de corte alcanza a lo que cambia: cada turno escribiría una caché nueva"
+        );
+        assert!(bloques[0]["text"].as_str().unwrap().contains("Eres Lucy"));
+        assert!(bloques[1]["text"].as_str().unwrap().contains("4 %"));
+    }
+
+    #[test]
+    fn la_marca_no_llega_a_ningun_proveedor() {
+        // ERA UN FALLO REAL Y DE LOS CALLADOS: el comentario HTML se le entregaba
+        // literal al modelo en medio de sus instrucciones, en los cuatro
+        // proveedores — incluidos los tres que ni siquiera tienen caché de
+        // prompt y por tanto no ganaban nada a cambio del ruido.
+        for p in [
+            Provider::Anthropic,
+            Provider::Gemini,
+            Provider::OpenAi,
+            Provider::Xai,
+            Provider::DeepSeek,
+            Provider::Nvidia,
+            Provider::Ollama,
+        ] {
+            let texto = sistema_json(p, &sistema()).to_string();
+            assert!(
+                !texto.contains("LUCY_CACHE_BOUNDARY"),
+                "{}: la marca viaja al modelo",
+                p.label()
+            );
+        }
+    }
+
+    #[test]
+    fn partir_el_sistema_no_pierde_ni_una_palabra() {
+        // La comprobación que hace segura toda la pieza. Un corte que se coma
+        // una sección no falla por ninguna parte: el modelo simplemente deja de
+        // saber algo, y eso se manifiesta como «Lucy se ha vuelto tonta».
+        let s = sistema();
+        let (estable, volatil) = crate::prompt::parte_por_cache(&s);
+        let junto: String = format!("{estable}{volatil}").split_whitespace().collect();
+        let original: String = s.replace(CACHE_BOUNDARY, "").split_whitespace().collect();
+        assert_eq!(junto, original, "el corte perdió texto");
+    }
+
+    #[test]
+    fn sin_marca_todo_es_estable_y_se_cachea_entero() {
+        // `prompt_weak` no escribe la marca, y un prompt en el que ninguna
+        // sección resultó inestable tampoco. Ahí todo es cacheable, y va en un
+        // solo bloque con su punto de corte.
+        let v = sistema_json(Provider::Anthropic, "Solo lo fijo.");
+        let bloques = v.as_array().unwrap();
+        assert_eq!(bloques.len(), 1);
+        assert_eq!(bloques[0]["cache_control"]["type"], "ephemeral");
+        assert_eq!(sistema_json(Provider::Ollama, "Solo lo fijo."), "Solo lo fijo.");
+    }
+}
+
+#[cfg(test)]
+mod uso_con_cache {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn el_prompt_cacheado_sigue_contando_entero() {
+        // LO QUE ESTO EVITA. Con el sistema partido por punto de corte,
+        // `input_tokens` de Anthropic pasa a ser solo el resto: los ~2.000
+        // tokens del prefijo se facturan en los otros dos campos. Leyendo solo
+        // el primero, el contador de gasto marcaría cincuenta donde hay dos mil
+        // — y de ese contador cuelga el tope que apaga el modo automático.
+        let trama = json!({"usage": {
+            "input_tokens": 53,
+            "cache_creation_input_tokens": 2022,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 140
+        }});
+        assert_eq!(usage(Provider::Anthropic, &trama), Some((2075, 140)));
+
+        // El turno siguiente lee lo que el anterior escribió. Mismo total.
+        let leido = json!({"usage": {
+            "input_tokens": 53,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 2022,
+            "output_tokens": 90
+        }});
+        assert_eq!(usage(Provider::Anthropic, &leido), Some((2075, 90)));
+    }
+
+    #[test]
+    fn sin_cache_la_cuenta_no_cambia() {
+        // Una respuesta sin los campos de caché —un modelo que no la soporta, o
+        // un prefijo por debajo del mínimo cacheable— cuenta como siempre.
+        let trama = json!({"usage": {"input_tokens": 2075, "output_tokens": 140}});
+        assert_eq!(usage(Provider::Anthropic, &trama), Some((2075, 140)));
+    }
+}
+
+#[cfg(test)]
+mod respuesta_cortada {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn un_final_normal_no_es_un_corte() {
+        // `stop` y `end_turn` son el final de siempre y no explican nada. Si se
+        // colaran, CADA respuesta acabaria con un aviso pegado.
+        assert_eq!(stop_reason(Provider::Anthropic, &json!({"delta":{"stop_reason":"end_turn"}})), None);
+        assert_eq!(stop_reason(Provider::OpenAi, &json!({"choices":[{"finish_reason":"stop"}]})), None);
+        assert_eq!(stop_reason(Provider::Gemini, &json!({"candidates":[{"finishReason":"STOP"}]})), None);
+    }
+
+    #[test]
+    fn los_cuatro_finales_que_si_hay_que_decir() {
+        // No es solo el tope de salida: un filtro de contenido deja tambien un
+        // texto que NO es lo que el modelo iba a decir, y callarlo deja al
+        // operador creyendo que Lucy contesto eso.
+        for (p, v, que) in [
+            (Provider::Anthropic, json!({"delta":{"stop_reason":"max_tokens"}}), "tope de salida"),
+            (Provider::OpenAi, json!({"choices":[{"finish_reason":"length"}]}), "longitud"),
+            (Provider::OpenAi, json!({"choices":[{"finish_reason":"content_filter"}]}), "filtro"),
+            (Provider::Gemini, json!({"candidates":[{"finishReason":"SAFETY"}]}), "seguridad"),
+        ] {
+            assert!(stop_reason(p, &v).is_some(), "{que}: se traga el motivo del corte");
+        }
+    }
+
+    #[test]
+    fn el_motivo_viaja_entero_para_poder_enseñarlo() {
+        // Se pinta pegado al mensaje, asi que tiene que decir algo. Un booleano
+        // —«se corto»— dejaria al operador sin saber si fue el tope o un filtro,
+        // que piden cosas distintas: uno se reintenta, el otro no.
+        assert_eq!(
+            stop_reason(Provider::Anthropic, &json!({"delta":{"stop_reason":"max_tokens"}})),
+            Some("max_tokens".into())
+        );
+    }
+}
+
+#[cfg(test)]
+// Las aserciones sobre `ESPERA_MAX_SECS` e `INTENTOS` comparan CONSTANTES entre
+// si. Clippy las ve evaluables en compilacion y avisa; no son aserciones muertas
+// sino guardas de invariante: fijan una relacion de diseño para que subir un
+// numero rompa el test en vez de dejar la pantalla muerta veinte minutos.
+#[allow(clippy::assertions_on_constants)]
+mod reintentos {
+    use super::*;
+
+    #[test]
+    fn se_reintenta_lo_que_es_de_paso() {
+        // Un 429 es el proveedor diciendo literalmente «espera un momento y
+        // vuelve». Antes mataba el turno y apagaba la cadena automatica.
+        for c in [408, 429, 500, 502, 503, 504, 529] {
+            assert!(transitorio(c), "{c} no se reintenta y deberia");
+        }
+    }
+
+    #[test]
+    fn no_se_reintenta_lo_que_no_va_a_cambiar() {
+        // Reintentar un 400 es esperar a que cambie algo que no va a cambiar, y
+        // encima retrasa el error que el operador necesita leer — que en el 400 y
+        // el 401 dice exactamente que hay que arreglar.
+        for c in [400, 401, 403, 404, 413, 422] {
+            assert!(!transitorio(c), "{c} se reintenta y no deberia");
+        }
+    }
+
+    #[test]
+    fn la_espera_tiene_techo_aunque_el_proveedor_pida_mas() {
+        // Un `retry-after` de diez minutos es una respuesta legitima, y significa
+        // «vuelve luego» — no «quedate ahi». Sin techo, Lucy se queda colgada el
+        // tiempo que al proveedor le parezca, con el operador delante.
+        assert!(ESPERA_MAX_SECS <= 30, "una espera asi deja la pantalla muerta");
+        // Y con tres intentos y doblado, el peor caso sin `retry-after` son
+        // 1 + 2 = 3 segundos de espera: un pico se absorbe sin que se note.
+        assert_eq!(INTENTOS, 3);
+    }
+}
+
+#[cfg(test)]
+mod recuento_de_los_compatibles {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn la_trama_de_uso_se_lee_cuando_llega() {
+        // Es la que manda el proveedor en la ULTIMA trama, y solo si se pidio con
+        // `stream_options`. Sin pedirla, `usage` buscaba un objeto que nunca
+        // existia: veinticuatro modelos del catalogo declaraban cero tokens y
+        // cero coste, siempre — y el tope de gasto de la sesion no saltaba nunca
+        // para ellos.
+        for p in [Provider::OpenAi, Provider::Xai, Provider::DeepSeek, Provider::Nvidia] {
+            assert_eq!(
+                usage(p, &json!({"usage": {"prompt_tokens": 120, "completion_tokens": 45}})),
+                Some((120, 45)),
+                "{} no lee su recuento",
+                p.label()
+            );
+        }
+    }
+
+    #[test]
+    fn una_trama_de_texto_no_inventa_un_recuento() {
+        // La razon de que `usage` devuelva `Option`: la mayoria de las tramas de
+        // un flujo son texto y no traen uso. Un cero por defecto seria
+        // indistinguible de «salio gratis».
         assert_eq!(usage(Provider::OpenAi, &json!({"choices":[{"delta":{"content":"x"}}]})), None);
     }
 }

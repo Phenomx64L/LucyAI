@@ -93,61 +93,59 @@ pub fn fmt_usd(total: f64) -> String {
 mod tests {
     use super::*;
 
-    /// El fichero de precios de la app real. `None` si no está al lado.
+    /// Los ids del catalogo que se cobran, ya sin el sufijo de esfuerzo.
     ///
-    /// EN EJECUCIÓN Y NO CON `include_str!`. Aunque esté dentro de
-    /// `#[cfg(test)]`, la macro se resuelve al compilar, así que la batería del
-    /// núcleo no compilaba sin el frontend de la V1 delante. Ver `models.rs`.
-    fn js_fuente() -> Option<String> {
-        std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../lucy-svelte/src/lib/model-pricing.ts"),
-        )
-        .ok()
-    }
-
-    /// Extrae `(id, in, out)` del fichero de la app.
-    fn js_prices(js: &str) -> Vec<(String, f64, f64)> {
-        let mut out = Vec::new();
-        for line in js.lines() {
-            let l = line.trim();
-            if !l.starts_with('\'') || !l.contains("inputPer1K") {
-                continue;
-            }
-            let id = l[1..].split('\'').next().unwrap_or("").to_string();
-            let num = |campo: &str| -> Option<f64> {
-                let at = l.find(campo)? + campo.len();
-                l[at..]
-                    .trim_start_matches([':', ' '])
-                    .split(',')
-                    .next()?
-                    .trim()
-                    .parse()
-                    .ok()
-            };
-            if let (Some(i), Some(o)) = (num("inputPer1K"), num("outputPer1K")) {
-                out.push((id, i, o));
-            }
-        }
-        out
+    /// Fuera: Ollama —que corre en la maquina y no cobra— y las dos entradas de
+    /// escribir a mano, que no son modelos sino un hueco donde teclear uno.
+    fn los_de_pago() -> Vec<&'static str> {
+        crate::models::GROUPS
+            .iter()
+            .filter(|g| g.provider != "ollama")
+            .flat_map(|g| g.options.iter())
+            .map(|o| o.id.split("::").next().unwrap_or(o.id))
+            .filter(|id| !id.ends_with("-custom"))
+            .collect()
     }
 
     #[test]
-    fn los_precios_no_se_han_desviado_de_los_de_la_app() {
-        // Igual que el catálogo de modelos: el duplicado solo es legítimo
-        // mientras esto lo vigile. Un precio viejo no rompe nada — informa mal,
-        // que es la clase de fallo que nadie reporta porque nadie lo ve.
-        // Sin la V1 al lado no hay con qué comparar. Se salta, no se falla.
-        let Some(fuente) = js_fuente() else { return };
-        let js = js_prices(&fuente);
-        assert!(js.len() >= 30, "el parseo del .ts falló: {} entradas", js.len());
-        for (id, i, o) in &PRICES.iter().map(|(a, b, c)| (a.to_string(), *b, *c)).collect::<Vec<_>>()
-        {
-            let Some((_, ji, jo)) = js.iter().find(|(jid, _, _)| jid == id) else {
-                panic!("{id} está aquí y no en model-pricing.ts");
-            };
-            assert!((ji - i).abs() < 1e-9, "{id}: entrada {i} aquí, {ji} allí");
-            assert!((jo - o).abs() < 1e-9, "{id}: salida {o} aquí, {jo} allí");
-        }
+    fn todo_modelo_que_se_ofrece_tiene_precio() {
+        // ESTE TEST SUSTITUYE AL QUE COMPARABA CON `model-pricing.ts` DE LA V1.
+        // Aquel vigilaba que dos tablas de precios —una en Rust, otra en
+        // JavaScript— no se separaran. Ya no hay dos tablas, asi que el test se
+        // saltaba solo y ocupaba el sitio de uno que mirara.
+        //
+        // Lo que queda por vigilar es la otra mitad del mismo fallo: el menu de
+        // modelos y la tabla de precios siguen siendo dos listas en dos ficheros
+        // distintos. Un modelo que se pueda elegir y no tenga fila aqui hace que
+        // `cost()` devuelva `None`, y esa conversacion suma CERO. El contador no
+        // se rompe: se equivoca en silencio, solo para ese modelo, y nadie lo
+        // reporta porque no hay nada roto que ver.
+        let sin_precio: Vec<&str> =
+            los_de_pago().into_iter().filter(|id| cost(id, 1000, 1000).is_none()).collect();
+        assert!(
+            sin_precio.is_empty(),
+            "se pueden elegir y no cuestan nada: {sin_precio:?}"
+        );
+    }
+
+    #[test]
+    fn el_vigilante_de_precios_no_esta_mirando_una_lista_vacia() {
+        // SUELO. Si `los_de_pago` deja de encontrar modelos —porque cambio la
+        // forma del catalogo, o el sufijo, o el nombre del grupo local— el test
+        // de arriba pasaria siempre recorriendo cero elementos. Un test que se
+        // apaga solo es peor que no tenerlo.
+        //
+        // 40 Y NO 20, QUE ERA LO QUE PONIA. Hoy son 47, asi que un suelo de 20
+        // solo cazaba el desastre —un rascador que devuelve cero— y dejaba pasar
+        // el fallo realista: que se caiga un grupo entero del catalogo. NVIDIA
+        // son diez modelos; sin ellos quedan 37, y con el suelo viejo esto seguia
+        // en verde. Un margen de siete deja sitio para retirar un par de modelos
+        // sin tocar el test.
+        //
+        // Y NO SE FIJA EN 47 EXACTO a proposito: un suelo que hay que subir cada
+        // vez que se añade un modelo es un suelo que alguien acaba borrando.
+        let n = los_de_pago().len();
+        assert!(n >= 40, "el catalogo solo dio {n} modelos de pago: ya no lo esta leyendo");
     }
 
     #[test]

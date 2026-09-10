@@ -32,6 +32,94 @@ use std::sync::{Mutex, OnceLock};
 /// manda y la otra la lee, se entiendan.
 pub const CACHE_BOUNDARY: &str = "<!-- LUCY_CACHE_BOUNDARY -->";
 
+/// El prompt partido en dos: lo estable y lo que cambia.
+///
+/// ── LO QUE FALTABA, Y ERA LA LÍNEA QUE ENCIENDE TODO ESTO ───────────────────
+///
+/// Este fichero está organizado entero alrededor de la marca: `stable()` en el
+/// trait, el orden por prioridad, un test que fija que ninguna sección estable
+/// caiga por debajo de una que cambia, y comentarios que explican que Principles
+/// e Insights van por debajo de 40 «para que se cobren como caché».
+///
+/// Y nadie leía la marca. `build` la insertaba, `cloud` mandaba el sistema como
+/// una cadena plana, y el único sitio que volvía a mirar la constante era un
+/// test. O sea: la mitad estable se pagaba entera en cada vuelta de cada cadena
+/// automática —que es justo donde más vueltas hay—, y el comentario HTML se le
+/// entregaba literal al modelo en medio de sus instrucciones, en los cuatro
+/// proveedores, incluidos los tres que ni siquiera tienen caché de prompt.
+///
+/// ── POR QUÉ DEVUELVE DOS TROZOS Y NO QUITA LA MARCA ─────────────────────────
+///
+/// Porque los dos consumidores necesitan cosas distintas. Anthropic quiere los
+/// dos trozos por separado, para poner el punto de corte al final del primero;
+/// los demás quieren el texto sin la marca. Una función que solo la borrara
+/// dejaría al llamante que sí puede cachear sin forma de saber por dónde partir.
+///
+/// Sin marca —el prompt de los modelos flojos, o uno en el que no hubo ninguna
+/// sección inestable— todo es estable y el segundo trozo va vacío.
+pub fn parte_por_cache(p: &str) -> (&str, &str) {
+    match p.split_once(CACHE_BOUNDARY) {
+        Some((estable, volatil)) => (estable.trim_end(), volatil.trim_start()),
+        None => (p, ""),
+    }
+}
+
+/// El prompt entero sin la marca, para quien no sabe cachear.
+///
+/// Gemini, los compatibles con OpenAI y Ollama reciben el sistema como una sola
+/// cadena. Lo que NO pueden recibir es el comentario HTML en medio: es ruido en
+/// las instrucciones de un modelo que además no gana nada a cambio.
+pub fn sin_marca(p: &str) -> std::borrow::Cow<'_, str> {
+    let (estable, volatil) = parte_por_cache(p);
+    if volatil.is_empty() {
+        std::borrow::Cow::Borrowed(estable)
+    } else {
+        std::borrow::Cow::Owned(format!("{estable}\n\n{volatil}"))
+    }
+}
+
+/// Lo que le queda de presupuesto a una cadena automática, en palabras.
+///
+/// ── UN NIVEL MÁS ABAJO ESTO YA ESTABA RESUELTO ──────────────────────────────
+///
+/// `forks::corre` le inyecta al sub-agente «Te quedan 2 lecturas» / «Es la
+/// ÚLTIMA» en cada vuelta, con un comentario largo explicando que decir
+/// `MAX_VUELTAS - vuelta` contaba una lectura de más y que **un presupuesto que
+/// miente es peor que no darlo**: se lo gasta creyendo que le sobra.
+///
+/// Arriba, en el bucle que sí ejecuta comandos, lo único que se le decía era
+/// «hay un tope de pasos, así que no explores de más» — sin el número, sin lo
+/// gastado, y sin que supiera que mirar cuesta uno y cambiar cuesta tres. Así el
+/// modelo no puede priorizar: gasta el margen en cuatro consultas exploratorias
+/// y se queda sin puntos para el comando que arregla la cosa.
+///
+/// Aparte y pura por la misma razón que su hermana de `forks`: el conteo es lo
+/// que hay que poder probar, y es justo donde se equivocó la primera vez.
+pub fn aviso_de_presupuesto(restan: u32, coste_cambio: u32) -> String {
+    if restan == 0 {
+        return "Se te ha acabado el presupuesto de esta orden: no vas a poder ejecutar \
+                nada más. Responde con lo que ya sabes."
+            .to_string();
+    }
+    if restan < coste_cambio {
+        // El caso que más importa acertar. Con dos puntos y un cambio a tres, un
+        // «te quedan 2» invita a intentar el cambio — y la guarda lo va a
+        // rechazar. Decirle para qué alcanza es lo que evita el paso perdido.
+        return format!(
+            "Te {} de ejecución en esta orden: alcanza para MIRAR, no para cambiar nada \
+             (cambiar cuesta {coste_cambio}). Si lo que falta es un cambio, dilo y para.",
+            if restan == 1 { "queda 1 punto".to_string() } else { format!("quedan {restan} puntos") }
+        );
+    }
+    format!(
+        "Te quedan {restan} puntos de ejecución en esta orden. Mirar cuesta 1 y cambiar \
+         algo cuesta {coste_cambio}, así que da para {} consultas o {} cambios. Gasta \
+         primero en lo que te acerque a la respuesta.",
+        restan,
+        restan / coste_cambio
+    )
+}
+
 /// Todo lo que una sección necesita para decidir si viene al caso.
 ///
 /// Referencias, sin reservar memoria: se construye en cada turno y llega a
@@ -43,6 +131,13 @@ pub struct Ctx<'a> {
     pub user_profile: &'a str,
     /// Directorio de trabajo, para resolver rutas relativas.
     pub working_dir: &'a str,
+    /// Lo que le queda de presupuesto a la cadena automática: (puntos, coste de
+    /// un cambio). `None` fuera del modo automático, donde no hay cadena.
+    ///
+    /// VA EN EL `Ctx` Y NO EN UNA CONSTANTE porque cambia en cada turno: es
+    /// exactamente el tipo de dato que tiene que quedar DESPUÉS de la marca de
+    /// caché. La sección que lo pinta es inestable a propósito.
+    pub presupuesto: Option<(u32, u32)>,
     /// El equipo, medido hace segundos.
     pub machine: Option<&'a crate::system::SysSnapshot>,
     /// Servicios automáticos que están caídos.
@@ -112,6 +207,7 @@ impl Default for Ctx<'_> {
             user_name: "",
             user_profile: "",
             working_dir: "",
+            presupuesto: None,
             machine: None,
             services: &[],
             log: &[],
@@ -446,6 +542,10 @@ impl Section for Actions {
              un procedimiento o una configuración concreta: si hay un manual de eso, dice \
              más y mejor que lo que tú recuerdes, y citarlo es la diferencia entre una \
              respuesta y una respuesta comprobable.\n\
+             · <TOOL>recall:qué buscar</TOOL> — lo que ya sabes de otras veces. Lo que \
+             venía al caso de la pregunta inicial ya lo tienes más arriba, sin pedirlo; \
+             ésta es para cuando te haga falta algo del pasado A MITAD de una \
+             investigación, que es donde el recuerdo automático ya no llega.\n\
              Y dos para cambiar ficheros, que NO escriben solas: preparan el cambio en \
              el panel de Artefactos con su diff. De ahí sale al disco por una de dos \
              puertas: la aprueba el operador, o —si tiene el automático encendido— la \
@@ -503,8 +603,8 @@ impl Section for Actions {
                 "\nEl operador ha encendido el modo AUTOMÁTICO: tus comandos se ejecutan \
                  sin que nadie los apruebe, y su salida literal te vuelve en el turno \
                  siguiente. Encadena los pasos que hagan falta hasta poder responder, uno \
-                 por turno, y para en cuanto tengas la respuesta. Hay un tope de pasos, \
-                 así que no explores de más. Algunos comandos —elevación, formas raras— \
+                 por turno, y para en cuanto tengas la respuesta. Algunos comandos \
+                 —elevación, formas raras— \
                  seguirán parándose para que los apruebe una persona: si eso pasa, dilo y \
                  espera, no busques otra forma de darlos.",
             );
@@ -521,6 +621,30 @@ impl Section for Actions {
                  turno siguiente para que la resumas. Así que propón el comando y explica \
                  qué hace, pero NUNCA digas que ya lo ejecutaste ni des por hecho su \
                  salida: todavía no ha corrido.",
+            );
+        }
+        // ── RETIRAR LO QUE YA NO TIENE SENTIDO ──────────────────────────────
+        //
+        // Se anuncia en los tres modos porque en los tres hay cola: en el
+        // automático la corre el bucle sin preguntar, y en los otros dos el
+        // operador está a un clic de aprobar un paso que Lucy ya sabe que no va
+        // a funcionar. Ahorrarle ese clic es tan valioso como no ejecutarlo.
+        //
+        // Y se le dice CUÁNDO, no solo que existe: sin el ejemplo del caso
+        // encadenado, una etiqueta de cancelar invita a usarla ante cualquier
+        // fallo — y dos consultas independientes no se invalidan entre ellas.
+        if c.can_execute || c.auto {
+            s.push_str(
+                "\nSi dejaste varios pasos en cola y uno FALLA, mira si los que quedan \
+                 siguen teniendo sentido. Los que dependían del que falló, no: \
+                 retíralos con <CANCEL>por qué</CANCEL> en vez de dejar que corran. \
+                 Ejemplo: propusiste `Install-Module X`, `Import-Module X` y usar X; si \
+                 la instalación falla, los otros dos van a fallar también.\n\
+                 Los pasos INDEPENDIENTES no se retiran: que `Get-Service` falle no \
+                 invalida un `Get-Disk` que no tenía nada que ver. Y `<CANCEL>` solo \
+                 alcanza a lo que quedó pendiente ANTES de este turno — los pasos que \
+                 propongas ahora no se tocan, así que puedes retirar y proponer en la \
+                 misma respuesta.",
             );
         }
         s
@@ -662,6 +786,42 @@ impl Section for Skills {
     }
     fn render(&self, c: &Ctx) -> String {
         c.skills.trim_end().to_string()
+    }
+}
+
+/// Lo que le queda de presupuesto a la cadena automática.
+///
+/// ── POR QUÉ ES UNA SECCIÓN PROPIA Y NO UNA LÍNEA EN `Actions` ───────────────
+///
+/// Porque `Actions` es ESTABLE, y ahí es donde vivía la frase vaga que esto
+/// sustituye —«hay un tope de pasos, así que no explores de más»—. Un número que
+/// cambia en cada turno metido en una sección estable cae del lado cacheado de
+/// la marca, y entonces el prefijo deja de repetirse: cada turno escribiría una
+/// entrada de caché nueva y ninguna se leería. La cifra que se quería dar habría
+/// costado el ahorro entero.
+///
+/// Así que va aparte, inestable, y con prioridad por encima de 40 para caer
+/// después del corte. El test `ninguna_seccion_estable_cae_por_debajo_de_una_que
+/// _cambia` vigila que nadie invierta eso.
+struct Presupuesto;
+impl Section for Presupuesto {
+    fn name(&self) -> &'static str {
+        "Presupuesto"
+    }
+    fn relevant(&self, c: &Ctx) -> bool {
+        c.presupuesto.is_some()
+    }
+    fn priority(&self) -> u32 {
+        45
+    }
+    fn stable(&self) -> bool {
+        false
+    }
+    fn render(&self, c: &Ctx) -> String {
+        match c.presupuesto {
+            Some((restan, coste)) => aviso_de_presupuesto(restan, coste),
+            None => String::new(),
+        }
     }
 }
 
@@ -846,6 +1006,7 @@ fn secciones() -> Vec<Box<dyn Section>> {
         Box::new(Estilo),
         Box::new(Preset),
         Box::new(Skills),
+        Box::new(Presupuesto),
         Box::new(HostRouting),
         Box::new(Memories),
         Box::new(Machine),
@@ -1376,6 +1537,31 @@ mod tests {
         assert!(p.find("linea 30") < p.find("linea 49"), "el log va en su orden");
     }
 
+    /// Cuánto mide de verdad la mitad estable del prompt.
+    ///
+    /// NO ES CURIOSIDAD: el mínimo cacheable de la API va de 512 tokens en los
+    /// modelos nuevos a 4096 en Haiku 4.5 y Opus 4.6, y por debajo de ese suelo
+    /// la caché NO FALLA — simplemente no ocurre, con la marca puesta y sin
+    /// error. Si la mitad estable no llega, conectar la caché no ahorra nada.
+    #[test]
+    #[ignore = "instrumento: cargo test -- --ignored cuanto_mide_la_mitad_estable --nocapture"]
+    fn cuanto_mide_la_mitad_estable() {
+        let _s = serie();
+        let m = snap();
+        let p = build(&Ctx { machine: Some(&m), ..Default::default() });
+        let (estable, volatil) = parte_por_cache(&p);
+        // Regla de dedo de la casa: ~4 caracteres por token en español.
+        let tok = |s: &str| s.chars().count() / 4;
+        println!(
+            "estable {} car (~{} tok) · volatil {} car (~{} tok) · total {} car",
+            estable.chars().count(),
+            tok(estable),
+            volatil.chars().count(),
+            tok(volatil),
+            p.chars().count()
+        );
+    }
+
     #[test]
     fn la_marca_de_cache_separa_lo_fijo_de_lo_que_cambia() {
         let _s = serie();
@@ -1569,5 +1755,76 @@ mod tests {
         assert!(p.contains("equipo equivocado"));
         // El shell del equipo de destino, que no tiene por qué ser PowerShell.
         assert!(p.contains("bash"), "no le dice que un Linux lleva bash");
+    }
+}
+
+#[cfg(test)]
+mod presupuesto_del_bucle {
+    use super::*;
+
+    const CAMBIO: u32 = 3;
+
+    #[test]
+    fn con_menos_de_un_cambio_se_dice_para_que_alcanza() {
+        // EL CASO QUE MAS IMPORTA ACERTAR, y el que hundio a la version de
+        // `forks`: un «te quedan 2» con el cambio a tres invita a intentar el
+        // cambio, y la guarda lo rechaza. El paso se pierde y el modelo no sabe
+        // por que. Decirle PARA QUE alcanza es lo que lo evita.
+        for restan in [1, 2] {
+            let t = aviso_de_presupuesto(restan, CAMBIO);
+            assert!(t.contains("MIRAR"), "no dice para que alcanza: {t}");
+            assert!(t.contains("no para cambiar"), "no dice para que NO alcanza: {t}");
+        }
+        assert!(aviso_de_presupuesto(1, CAMBIO).contains("queda 1 punto"), "singular");
+        assert!(aviso_de_presupuesto(2, CAMBIO).contains("quedan 2 puntos"), "plural");
+    }
+
+    #[test]
+    fn con_presupuesto_de_sobra_se_dan_las_dos_conversiones() {
+        // El numero pelado no le sirve al modelo para priorizar: nueve puntos son
+        // nueve consultas o tres cambios, y esa es la decision que tiene delante.
+        let t = aviso_de_presupuesto(9, CAMBIO);
+        assert!(t.contains("9 puntos"), "{t}");
+        assert!(t.contains("9 consultas"), "no traduce a consultas: {t}");
+        assert!(t.contains("3 cambios"), "no traduce a cambios: {t}");
+    }
+
+    #[test]
+    fn a_cero_se_le_dice_que_pare_y_responda() {
+        let t = aviso_de_presupuesto(0, CAMBIO);
+        assert!(t.contains("acabado"), "{t}");
+        assert!(t.contains("Responde"), "no le dice que haga con lo que tiene: {t}");
+    }
+
+    #[test]
+    fn el_presupuesto_cae_del_lado_que_cambia_de_la_marca() {
+        // LA TRAMPA QUE ESTO CIERRA. Si esta seccion fuera estable, un numero que
+        // cambia en cada turno caeria del lado CACHEADO del corte: cada turno
+        // escribiria una entrada nueva de cache y ninguna se leeria jamas. La
+        // cifra habria costado el ahorro entero.
+        let secs = secciones();
+        let p = secs
+            .iter()
+            .find(|s| s.name() == "Presupuesto")
+            .expect("la seccion se quito del registro");
+        assert!(!p.stable(), "el presupuesto cambia en cada turno: no puede ser estable");
+        let primera_inestable = {
+            let mut v: Vec<_> = secs.iter().filter(|s| !s.stable()).map(|s| s.priority()).collect();
+            v.sort_unstable();
+            v[0]
+        };
+        assert!(
+            p.priority() >= primera_inestable,
+            "queda por encima del corte y se cachearia"
+        );
+    }
+
+    #[test]
+    fn fuera_del_automatico_no_se_menciona() {
+        // Sin cadena no hay presupuesto, y una linea que dice «te quedan N
+        // puntos» cuando cada comando lo aprueba una persona es ruido que ademas
+        // sugiere un limite que no existe.
+        let p = build(&Ctx { presupuesto: None, ..Default::default() });
+        assert!(!p.contains("puntos de ejecución"), "habla de presupuesto sin cadena");
     }
 }

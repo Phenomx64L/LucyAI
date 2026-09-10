@@ -715,6 +715,30 @@ pub fn local_time() -> (u32, u32, u32) {
     (0, 0, 0)
 }
 
+/// La fecha y hora locales como `YYYY-MM-DD HH:MM:SS`, para la marca de un log.
+///
+/// MISMA FUENTE QUE `local_time`, y por la misma razón: `GetLocalTime` ya trae
+/// el año y el día resueltos con la zona horaria y el horario de verano de esta
+/// máquina. Sacarlos del epoch obligaría a reimplementar el calendario, y una
+/// marca de hora mal puesta en un log es peor que no tenerla — se cruza con
+/// otros logs y hace concluir cosas falsas sobre el orden de los sucesos.
+#[cfg(windows)]
+pub fn marca_local() -> String {
+    use winapi::um::sysinfoapi::GetLocalTime;
+    let mut st = unsafe { std::mem::zeroed() };
+    // SAFETY: igual que arriba — solo escribe la estructura que se le pasa.
+    unsafe { GetLocalTime(&mut st) };
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+        st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond
+    )
+}
+
+#[cfg(not(windows))]
+pub fn marca_local() -> String {
+    String::from("0000-00-00 00:00:00")
+}
+
 #[cfg(all(test, windows))]
 mod hora {
     use super::*;

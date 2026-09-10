@@ -42,6 +42,24 @@ pub enum TagKind {
     Learn,
     Remember,
     FileContent,
+    /// Lucy retira los pasos que ella misma dejo pendientes.
+    ///
+    /// ── POR QUE LO DECIDE ELLA Y NO EL ARNES ─────────────────────────────
+    ///
+    /// Un turno puede dejar varios `<EXECUTE>` en cola, y si el primero falla,
+    /// los demas se ejecutaban igual. Cancelarlos TODOS de oficio seria
+    /// agresivo —`Get-Service A` y `Get-Disk` no tienen nada que ver entre
+    /// ellos— y no cancelar ninguno deja al automatico siguiendo un plan que la
+    /// realidad acaba de desmentir.
+    ///
+    /// El arnes no puede acertar siempre porque no sabe si los tres pasos eran
+    /// independientes o encadenados. El modelo SI: los acaba de escribir el. Y
+    /// desde que se le devuelve el fallo con su aviso de «esto ya fallo aqui N
+    /// veces», tiene con que decidir.
+    ///
+    /// Asi que en vez de adivinar, se le da la forma de retirarlos — y queda
+    /// escrito en el plan quien lo hizo.
+    Cancel,
 }
 
 impl TagKind {
@@ -60,6 +78,7 @@ impl TagKind {
             Self::Learn => "LEARN",
             Self::Remember => "REMEMBER",
             Self::FileContent => "FILECONTENT",
+            Self::Cancel => "CANCEL",
         }
     }
 
@@ -309,6 +328,9 @@ pub fn extract_tags(text: &str) -> Vec<Tag> {
         (TagKind::Tool, true),
         (TagKind::Thought, true),
         (TagKind::Learn, true),
+        // El cuerpo es el MOTIVO, en una linea: acaba en el plan, donde el
+        // operador lee por que un paso no llego a correr.
+        (TagKind::Cancel, true),
         // FILECONTENT NO se recorta: es el contenido literal de un fichero que
         // se va a escribir, y quitarle los espacios de los extremos cambiaría
         // el fichero. El original tampoco lo recorta.
@@ -879,5 +901,43 @@ mod codegen {
         let c = clean_display("<EXECUTE>uno</EXECUTE><EXECUTE_REG>dos</EXECUTE_REG>");
         assert_eq!(c.commands, 2);
         assert_eq!(clean_display("sin comandos").commands, 0);
+    }
+}
+
+#[cfg(test)]
+mod retirar_pasos {
+    use super::*;
+
+    #[test]
+    fn se_reconoce_con_su_motivo() {
+        // El cuerpo es el MOTIVO y acaba en el plan, que es donde el operador lee
+        // por que un paso no llego a correr. Sin el, la fila dice «retirado» y no
+        // se puede discutir con ella.
+        let t = extract_tags("Voy a dejarlo. <CANCEL>la instalacion fallo</CANCEL>");
+        assert_eq!(t.len(), 1);
+        assert_eq!(t[0].kind, TagKind::Cancel);
+        assert_eq!(t[0].content, "la instalacion fallo");
+    }
+
+    #[test]
+    fn no_es_una_peticion_de_ejecutar() {
+        // `is_execute` decide si Lucy quiere tocar la maquina, y de eso cuelgan el
+        // guardrail, el presupuesto de pasos y la confirmacion de lo destructivo.
+        // Retirar es lo contrario de ejecutar: contarla ahi cobraria puntos por
+        // cancelar y pediria aprobacion para no hacer nada.
+        assert!(!TagKind::Cancel.is_execute());
+    }
+
+    #[test]
+    fn convive_con_los_pasos_del_mismo_turno() {
+        // El caso que el prompt promete: retirar lo viejo y proponer lo nuevo en
+        // la misma respuesta. Las dos etiquetas tienen que salir del extractor.
+        let t = extract_tags(
+            "<CANCEL>dependian del que fallo</CANCEL> Pruebo otra cosa. \
+             <EXECUTE>Get-Service Spooler</EXECUTE>",
+        );
+        assert_eq!(t.len(), 2, "se perdio una: {t:?}");
+        assert!(t.iter().any(|x| x.kind == TagKind::Cancel));
+        assert!(t.iter().any(|x| x.kind == TagKind::Execute));
     }
 }
