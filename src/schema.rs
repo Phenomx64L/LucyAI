@@ -22,9 +22,16 @@
 //! una tabla que ya está. Por eso se crean completas de entrada, y los `ALTER`
 //! quedan para las bases viejas.
 //!
-//! Hay un test que compara esto con lo que produce `src-tauri`. Dos esquemas
-//! que se parecen son peores que dos que se diferencian: el fallo aparece al
-//! insertar, meses después, en la máquina de otro.
+//! Hubo un test que comparó esto con lo que producía `src-tauri`, y se fue con
+//! la V1 — sin el otro árbol al lado se saltaba solo, que es el fallo que lo
+//! motivó a retirarse. El razonamiento sigue en pie para el día que haya otro
+//! consumidor: dos esquemas que se PARECEN son peores que dos que se
+//! diferencian, porque el fallo no aparece al abrir la base sino al insertar,
+//! meses después, en la máquina de otro.
+//!
+//! Lo que hoy sí vigila algo es `una_base_recien_creada_tiene_las_columnas_que_
+//! lucy_core_lee`, al final del fichero: no compara contra nadie, comprueba que
+//! lo que este módulo CREA es lo que el resto del crate LEE.
 
 /// Las tablas de las que `lucy-core` es dueño, con TODAS sus columnas.
 ///
