@@ -25,17 +25,27 @@ This keeps the Lucy bundle to ~1.94 MB of pure markdown content
 while preserving the full `When to Use`, `Workflow`, `Key Concepts`,
 `Tools & Systems`, and `Common Scenarios` sections of every skill.
 
-## What Lucy does with these skills
+## What Lucy does with these skills — today, nothing automatic
 
-The Rust module `src-tauri/src/commands/security_skills.rs` walks
-this directory at boot, parses each SKILL.md's YAML frontmatter
-(name, description, domain, subdomain, tags, NIST CSF mappings, MITRE
-ATT&CK / D3FEND / ATLAS), and builds an in-memory search index.
+**This catalogue ships as reference material, not as a wired feature.** It is
+here to be read, and to be copied into the user profile where Lucy does read
+skills from.
 
-The `/sec-skill <query>` slash command searches that index and lets
-the user activate a skill — at which point the skill's full body is
-prepended to Lucy's next system prompt (same mechanism as the v1.6.1
-preset system).
+`/sec-skill` appears in the command palette — `main.rs:2015` registers it as
+`("/sec-skill", "Catálogo security/forensics (200+)", false)`, and that `false`
+is the flag that means *not implemented yet*. The palette deliberately lists
+commands that don't work rather than hiding them, so the operator discovers what
+Lucy is growing towards; picking one says so instead of doing nothing.
+
+This section used to describe a Rust module —
+`src-tauri/src/commands/security_skills.rs` — that walked this directory at boot
+and built a search index, and a `/sec-skill <query>` that searched it. **No such
+module exists in any of the three repositories**, and `src-tauri` itself left the
+tree with v1. It described the intended design as though it were shipped, on a
+page the root README links to.
+
+The intent stands and the mapping work below is real. What is not real yet is the
+loader.
 
 ## Five frameworks mapped
 

@@ -150,9 +150,23 @@ If you need anything that ISN'T here, fetch with:
 curl -O https://raw.githubusercontent.com/aaronsb/knowledge-graph-system/main/<path>
 ```
 
-## License note
+## License and attribution
 
-The upstream project's license at the time of mirroring is in
-`reference/README.md`. This research mirror is for internal Lucy reference
-only; any code we re-implement is our own, but credit the ideas back to
-ADR numbers in commit messages.
+This directory is a redistributed snapshot of
+[`aaronsb/knowledge-graph-system`](https://github.com/aaronsb/knowledge-graph-system),
+**licensed under the Apache License 2.0**. The full license text is in
+[`LICENSE`](LICENSE), beside this file.
+
+That copy is not a formality: Apache 2.0 §4(a) requires anyone redistributing the
+work to hand recipients a copy of the license, and these 31 files are
+redistribution. It was missing until now, which was an oversight rather than a
+position — `docs/security-skills/` next door has carried its own `LICENSE` and
+`ATTRIBUTION.md` from the start.
+
+This section previously said the mirror was "for internal Lucy reference only".
+That was never true of a public repository, and it is the sentence that hid the
+missing license: a directory described as internal doesn't get asked the
+questions a redistributed one does.
+
+Any code Lucy re-implements from these ideas is its own work under Lucy's GPLv3.
+Credit the ideas back to their ADR numbers in commit messages.
