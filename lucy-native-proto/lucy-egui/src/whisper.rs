@@ -1,14 +1,28 @@
 //! Dónde vive el modelo de Whisper y en qué estado está.
 //!
-//! EMPAQUETADO CON EL INSTALADOR, que es la decisión del operador y la correcta:
-//! instalador autocontenido, sin red en el primer uso, y sin un descargador que
-//! falle en una máquina detrás de un proxy corporativo — que es justo donde vive
-//! una herramienta de administración.
+//! NO VIENE CON EL INSTALADOR, y esta cabecera decía lo contrario.
 //!
-//! PERO NO EN GIT. Medio giga en el repositorio haría el clon inviable para
-//! siempre, y un binario grande no se borra del historial después sin
-//! reescribirlo entero. El modelo se trae en el paso de EMPAQUETADO, no se
-//! guarda en el árbol. Por eso este módulo busca en dos sitios y no en uno.
+//! Decía «EMPAQUETADO CON EL INSTALADOR, que es la decisión del operador y la
+//! correcta: instalador autocontenido, sin red en el primer uso». Era el plan,
+//! no lo que pasa. COMPROBADO, y está escrito otra vez ochenta líneas más abajo:
+//! ni `lucy.nsi` ni `lucy.wxs` mencionan `models`, `whisper` ni un solo fichero
+//! de modelo. No lo empaquetan, y probablemente nunca lo hicieron.
+//!
+//! Y NO DEBERÍAN. `whisper-small` son cientos de megas contra los 6,6 MB del
+//! instalador; meterlo dentro multiplicaría por decenas lo que se descarga todo
+//! el mundo para una función que no usa todo el mundo. Es el mismo razonamiento
+//! que deja a Ollama fuera.
+//!
+//! La cabecera importaba más que un comentario cualquiera: es lo primero que lee
+//! quien vaya a tocar el empaquetado, y le decía que el trabajo ya está hecho. El
+//! fallo que el operador reportó —un aviso que manda a reinstalar para conseguir
+//! algo que la reinstalación no trae— fue exactamente creerse esto.
+//!
+//! TAMPOCO EN GIT, y eso sí sigue en pie: medio giga en el repositorio haría el
+//! clon inviable para siempre, y un binario grande no se borra del historial
+//! después sin reescribirlo entero. Por eso este módulo busca en DOS sitios: al
+//! lado del ejecutable, por si algún día se empaqueta, y en el perfil del
+//! usuario, que es donde hay que dejarlo hoy.
 //!
 //! Formato safetensors + tokenizer de Hugging Face, que es lo que consume
 //! `candle`. No es el `.bin` de ggml de whisper.cpp: son incompatibles, y bajar
@@ -82,8 +96,8 @@ impl Status {
             // solo `.bin` — no lo empaquetan, y probablemente nunca lo hicieron.
             //
             // Y NO DEBERÍAN. `whisper-small` son unos cientos de megas contra los
-            // 19,6 MB que mide hoy el instalador entero; meterlo dentro
-            // multiplicaría por quince lo que se descarga todo el mundo para una
+            // 6,6 MB que mide hoy el instalador entero; meterlo dentro
+            // multiplicaría por decenas lo que se descarga todo el mundo para una
             // función que no usa todo el mundo. Es el mismo razonamiento que
             // deja a Ollama fuera.
             //
@@ -92,8 +106,8 @@ impl Status {
             // un aviso: es una tarde perdida.
             Self::Missing => crate::i18n::trf(
                 "El dictado necesita el modelo de voz {modelo}, que no viene con Lucy: \
-                 son cientos de megas y el instalador entero pesa veinte. Descárgalo y \
-                 deja sus tres ficheros en «{ruta}».",
+                 pesa cientos de megas, muchas veces más que el instalador entero. \
+                 Descárgalo y deja sus tres ficheros en «{ruta}».",
                 &[
                     ("modelo", MODEL),
                     (
@@ -215,14 +229,37 @@ mod tests {
     fn se_busca_junto_al_ejecutable_antes_que_en_appdata() {
         // El que viene con la instalación manda sobre una copia suelta que nadie
         // sabe de dónde salió.
+        //
+        // SE COMPARAN RUTAS, NO SUBCADENAS, y la diferencia no es de estilo.
+        // Esto decía `assert!(!p[0].to_lowercase().contains("appdata"))`, y `p[0]`
+        // se construye desde `current_exe()` — o sea desde `target/`, o sea desde
+        // donde esté clonado el repositorio. Cualquiera que clone bajo
+        // `%LOCALAPPDATA%`, bajo `%TEMP%` o en un worktree colgado de AppData veía
+        // ROJO en `cargo test`, que es una de las tres órdenes que promete el
+        // README. Comprobado: falla 3 de 3 desde un clon en
+        // `C:\Users\…\AppData\Local\Temp\`, y pasa 20 de 20 desde `C:\X\`.
+        //
+        // Lo que el test quiere fijar es un ORDEN entre dos orígenes, así que se
+        // pregunta por los orígenes.
         let p = search_paths();
         assert!(!p.is_empty());
         if p.len() > 1 {
-            let primero = p[0].to_string_lossy().to_lowercase();
+            let junto_al_exe = std::env::current_exe()
+                .ok()
+                .and_then(|e| e.parent().map(|d| d.to_path_buf()))
+                .expect("sin ejecutable no hay nada que ordenar");
             assert!(
-                !primero.contains("appdata"),
-                "appdata no puede ir primero: {primero}"
+                p[0].starts_with(&junto_al_exe),
+                "el primero no es el de al lado del ejecutable: {:?}",
+                p[0]
             );
+            let en_datos = dirs::data_dir().expect("sin directorio de datos");
+            assert!(
+                p[1].starts_with(&en_datos),
+                "el segundo no es el del perfil: {:?}",
+                p[1]
+            );
+            assert_ne!(p[0], p[1], "los dos orígenes no pueden resolver al mismo sitio");
         }
     }
 }

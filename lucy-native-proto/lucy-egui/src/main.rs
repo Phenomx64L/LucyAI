@@ -1,15 +1,33 @@
-﻿//! Lucy — Fase 1 · shell nativo egui (paso 1).
+﻿//! Lucy — el shell nativo. Esto ES la aplicación.
 //!
-//! Una app egui REAL: rail izquierdo + 3 vistas. Prueba de extremo a extremo del
-//! camino de migración — nativo, sin WebView, sin Tauri:
-//!   • Chat     — markdown en streaming (egui_commonmark).
-//!   • Terminal — PTY viva (portable-pty, el de tu app).
-//!   • Memoria  — lee tu DB REAL de Lucy (%APPDATA%\com.lucy.dev\lucy.db) en
-//!                SOLO-LECTURA con rusqlite y renderiza tus memorias de verdad.
+//! Ventana propia sobre egui, sin motor de navegador, hablando con `lucy-core`
+//! por llamadas de función y no por IPC. Ocho módulos —Dashboard, Terminal IA,
+//! NexShell, Log Viewer, Inventario, Cumplimiento, Memoria y Configuración— en
+//! el rail izquierdo, uno por `vista_*.rs`.
 //!
-//! NO modifica lucy-svelte. El acceso a la DB es read-only (WAL permite lectores
-//! concurrentes con la app corriendo). Para render por software / RDP:
-//!   set WGPU_BACKEND=gl && cargo run -p lucy-egui --release
+//! Lee y ESCRIBE tu base real, `%APPDATA%\com.lucy.dev\lucy.db`, y la crea si no
+//! está.
+//!
+//! ── LO QUE DECÍA ESTA CABECERA, Y POR QUÉ IMPORTA ─────────────────────────
+//!
+//! «Fase 1 · shell nativo egui (paso 1) — rail izquierdo + 3 vistas», con dos
+//! afirmaciones que dejaron de ser ciertas y una que nunca lo fue:
+//!
+//!   • «SOLO-LECTURA con rusqlite». Escribe: memorias, auditoría, métricas,
+//!     gasto. Leer eso y confiarse es cómo se toca la base de otro proceso.
+//!   • «NO modifica lucy-svelte». Cierto cuando era un prototipo aislado; hoy
+//!     este árbol ENTRA en `lucy-svelte` por subtree, que es el repositorio
+//!     publicado.
+//!   • «Para render por software / RDP: set WGPU_BACKEND=gl». Esa variable no
+//!     la lee nadie aquí: era de `egui-proto`, la maqueta del bake-off. Medido
+//!     con `cargo tree -p lucy-egui -i wgpu`, que no imprime nada — eframe
+//!     enlaza `glow` y wgpu no entra por ninguna rama del árbol.
+//!
+//! Esa última era la peor: es la única instrucción operativa del fichero, y
+//! apunta al caso de uso que justifica la migración entera —RDP contra una
+//! máquina sin GPU—. Quien la siguiera no habría visto pasar nada y habría
+//! concluido que la propiedad es falsa. No hay nada que forzar: Lucy pinta por
+//! OpenGL y solamente por OpenGL, que es justamente por lo que funciona ahí.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod avatar;

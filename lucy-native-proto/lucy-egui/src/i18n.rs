@@ -1197,11 +1197,11 @@ pub const FRASES: &[Frase] = &[
         "In {nombre} ausführen",
     ),
     f!(
-        "El dictado necesita el modelo de voz {modelo}, que no viene con Lucy: son cientos de megas y el instalador entero pesa veinte. Descárgalo y deja sus tres ficheros en «{ruta}».",
-        "Dictation needs the {modelo} voice model, which does not ship with Lucy: it is hundreds of megabytes and the whole installer weighs twenty. Download it and leave its three files in \"{ruta}\".",
-        "O ditado precisa do modelo de voz {modelo}, que não vem com a Lucy: são centenas de megas e o instalador inteiro pesa vinte. Descarrega-o e deixa os seus três ficheiros em «{ruta}».",
-        "La dictée a besoin du modèle vocal {modelo}, qui n’est pas fourni avec Lucy : il pèse des centaines de mégaoctets et l’installateur entier en fait vingt. Télécharge-le et laisse ses trois fichiers dans « {ruta} ».",
-        "Das Diktat braucht das Sprachmodell {modelo}, das nicht mit Lucy kommt: es sind Hunderte Megabyte und das ganze Installationsprogramm wiegt zwanzig. Lade es herunter und leg seine drei Dateien in «{ruta}» ab.",
+        "El dictado necesita el modelo de voz {modelo}, que no viene con Lucy: pesa cientos de megas, muchas veces más que el instalador entero. Descárgalo y deja sus tres ficheros en «{ruta}».",
+        "Dictation needs the {modelo} voice model, which does not ship with Lucy: it is hundreds of megabytes, many times the whole installer. Download it and leave its three files in \"{ruta}\".",
+        "O ditado precisa do modelo de voz {modelo}, que não vem com a Lucy: pesa centenas de megas, muitas vezes mais do que o instalador inteiro. Descarrega-o e deixa os seus três ficheiros em «{ruta}».",
+        "La dictée a besoin du modèle vocal {modelo}, qui n’est pas fourni avec Lucy : il pèse des centaines de mégaoctets, bien plus que l’installateur entier. Télécharge-le et laisse ses trois fichiers dans « {ruta} ».",
+        "Das Diktat braucht das Sprachmodell {modelo}, das nicht mit Lucy kommt: es sind Hunderte Megabyte, ein Vielfaches des gesamten Installationsprogramms. Lade es herunter und leg seine drei Dateien in «{ruta}» ab.",
     ),
     f!(
         "El equipo no informó de ningún disco.",
