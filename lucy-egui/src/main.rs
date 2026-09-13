@@ -4810,9 +4810,19 @@ fn lv_opcion(ui: &mut egui::Ui, nombre: &str, tipo: &str, sel: bool) -> bool {
     resp.clicked()
 }
 
-/// Un lado de un control segmentado. Activo = relleno de acento con tinta
-/// oscura encima, que es el único sitio donde el CSS pone el acento sólido.
 // AQUÍ ESTABA `fn seg`, EL SEGUNDO SEGMENTADO DE LA APLICACIÓN, y se ha ido.
+//
+// Su documentación —«un lado de un control segmentado; activo = relleno de
+// acento con tinta oscura encima»— se quedó aquí como `///` después de que la
+// función desapareciera. Un `///` se pega al SIGUIENTE item, así que rustdoc lo
+// colgaba de `struct Kpi`, que está veinte líneas más abajo y ya tiene la suya:
+// la documentación de la tarjeta KPI empezaba con un párrafo sobre un control
+// segmentado que no existe.
+//
+// Lo cazó la puerta que el CI viejo denegaba —`-D clippy::suspicious`, lint
+// `empty_line_after_doc_comment`— corrida a mano. Entró después de que esa
+// puerta se fuera del árbol con la V1, y es el único error que quedaba: el
+// núcleo pasa esa misma puerta limpio.
 //
 // Era un `Button` de 40×18 con radio 6 y sin animación, metido a mano en dos
 // `Frame` que no coincidían ni entre sí ni con `segmentado`: tres alturas, tres
