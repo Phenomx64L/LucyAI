@@ -22,8 +22,8 @@ Lee tu base real —`%APPDATA%\com.lucy.dev\lucy.db`— y la crea si no está.
 ## Probar
 
 ```powershell
-cargo test                      # 230, más 2 mediciones ignoradas
-cargo clippy --all-targets      # 13 avisos de línea base, sin contar los dos resúmenes
+cargo test                      # 234, más 2 mediciones ignoradas
+cargo clippy --all-targets      # 12 avisos de línea base, sin contar los dos resúmenes
 cargo test cuanto_cuesta -- --ignored --nocapture
 ```
 
