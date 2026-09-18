@@ -73,7 +73,7 @@ cargo test --manifest-path lucy-core/Cargo.toml
 cargo test --manifest-path lucy-native-proto/lucy-egui/Cargo.toml
 ```
 
-709 in the core and 230 in the shell at the time of writing, plus 10 marked
+709 in the core and 234 in the shell at the time of writing, plus 10 marked
 `#[ignore]` — those are measurements rather than assertions, and they print
 numbers instead of passing or failing. Run one with:
 
@@ -95,7 +95,7 @@ cargo clippy --all-targets --manifest-path lucy-core/Cargo.toml
 cargo clippy --all-targets --manifest-path lucy-native-proto/lucy-egui/Cargo.toml
 ```
 
-Both crates carry a small number of accepted warnings — 7 in the core, 13 in the
+Both crates carry a small number of accepted warnings — 7 in the core, 12 in the
 shell, not counting the two "generated N warnings" summary lines cargo prints.
 Treat those as the baseline: a pull request should not add to it. Each warning
 that is deliberate carries an `#[allow]` with a comment saying why.

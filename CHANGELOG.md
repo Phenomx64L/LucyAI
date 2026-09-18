@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [2.1.1] — 2026-09-17
+
+**Actualización de seguridad.** La 2.1.0 salió el 11 con una versión de `rustls`
+que tres días después resultó tener un fallo en el handshake de TLS 1.3. Es la
+pila que usa Lucy en cada llamada a los proveedores de nube — las que llevan las
+claves de API. Si tienes la 2.1.0, instala ésta encima.
+
+### Fix — RUSTSEC-2026-0285 en `rustls`
+
+«TLS 1.3 handshake messages incorrectly accepted across encryption level
+boundaries», publicado el 14 de septiembre. `rustls` pasa de 0.23.43 a **0.23.45**
+y `rustls-webpki` de 0.103.13 a 0.103.15. El parche es compatible por semver y no
+toca una línea de código; `cargo audit` pasa de una vulnerabilidad a cero.
+
+Nadie lo vio llegar porque `cargo audit` lo corría la CI, y la CI se fue del árbol
+con la V1 el 1 de septiembre. Lo encontró un barrido a mano. Tres días antes ese
+mismo barrido habría dicho «pasa verde» — que es el argumento más concreto para
+reponer la CI: el código no se movió, se movió el mundo debajo.
+
+### Fix — `/model` se tragaba lo que se le escribía
+
+Estaba marcado como listo en la paleta. Escribir `/model claude-opus-5` y pulsar
+Enter vaciaba la caja, tiraba el argumento y dejaba el modelo como estaba, sin
+error. Desde la paleta sí funcionaba —se atiende antes, por otro camino—, y por
+eso nadie lo había visto.
+
+Ahora valida contra el catálogo o los modelos de Ollama instalados —una errata no
+se convierte en el modelo activo—, respeta el modo privacidad igual que
+`/privacy`, y sin argumento dice cuál hay y cómo se cambia.
+
+**El test que existía para esto no lo vigilaba.** Su comentario describía el fallo
+palabra por palabra —«un comando que se traga la orden y no hace nada»— y luego
+comprobaba que hubiera quince comandos listos, sin mirar si tenían quien los
+cumpliera. El nuevo lee el despachador y cruza: falla nombrando `["/model"]` si
+alguien vuelve a marcar uno como listo sin brazo.
+
+### Fix — un pánico cerraba la ventana sin dejar rastro
+
+Lucy arranca sin consola, así que el aviso por defecto de Rust al caerse no iba a
+ninguna parte: la ventana desaparecía y en `lucy_app.log` no quedaba nada. Era el
+único fallo que no se podía contar, y el que más falta hace contar.
+
+Ahora un pánico deja **dos** líneas en el log —el mensaje con el sitio exacto, y
+la pila— de nivel `ERROR`, así que el filtro de errores del visor las encuentra.
+Dos y no veinte: con la pila partida en líneas, el visor las habría contado como
+registros sueltos y el filtro habría escondido justo dónde fue.
+
+### Fix — el empaquetado moría en cuanto había algo que compilar
+
+`cargo` escribe su progreso por stderr, y Windows PowerShell 5.1 convertía la
+primera línea en un error que cortaba el script. La 2.1.0 salió porque no tuvo
+nada que compilar; ésta sí —la TLS nueva— y el script moría con algo que parecía
+un fallo de compilación. Habría pasado igual en cualquier clon limpio.
+
+---
+
 ## [2.1.0] — 2026-09-09
 
 **Lucy deja de llevar un navegador dentro.** La V1 era Tauri 2 + SvelteKit sobre

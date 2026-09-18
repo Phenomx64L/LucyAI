@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-2.1.0-7dd3fc" alt="v2.1.0" />
+  <img src="https://img.shields.io/badge/version-2.1.1-7dd3fc" alt="v2.1.1" />
   <img src="https://img.shields.io/badge/egui-0.29-blue" alt="egui 0.29" />
   <img src="https://img.shields.io/badge/Rust-2021-brown?logo=rust" alt="Rust 2021" />
   <img src="https://img.shields.io/badge/license-GPLv3-green" alt="GPLv3" />
@@ -125,7 +125,7 @@ cargo test --manifest-path lucy-core/Cargo.toml
 cargo test --manifest-path lucy-native-proto/lucy-egui/Cargo.toml
 ```
 
-709 tests in the core and 230 in the shell, plus 10 marked `#[ignore]` that
+709 tests in the core and 234 in the shell, plus 10 marked `#[ignore]` that
 print a measurement instead of asserting one.
 
 Note that there is no `Cargo.toml` at the root of this repository — `main` is an
