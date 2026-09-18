@@ -16588,6 +16588,80 @@ mod paleta {
     }
 
     #[test]
+    fn todo_comando_marcado_listo_tiene_quien_lo_cumpla() {
+        // EL TEST DE ARRIBA DESCRIBE ESTE FALLO Y NO LO VIGILA. Su comentario dice
+        // que marcar uno como listo sin cumplirlo «lo convertiría en un comando que
+        // se traga la orden y no hace nada», y luego comprueba que haya QUINCE y
+        // que cuatro concretos estén en la lista. No mira si tienen brazo.
+        //
+        // Y había uno sin él: `/model`. Marcado como listo, escribir
+        // `/model claude-opus-5` y Enter pasaba el filtro, vaciaba la caja y caía
+        // en el `otro =>` de `slash_exec` — el argumento se tiraba y el modelo no
+        // cambiaba, sin error. Desde la paleta funcionaba porque se atiende antes,
+        // con el `ui`, y por eso no lo había visto nadie.
+        //
+        // Se lee el FUENTE de `slash_exec` y se sacan sus brazos, igual que el
+        // guardia de i18n lee el de la pantalla: es la única forma de preguntar
+        // «¿hay un brazo para esto?» sin ejecutar cada comando con un `App` entero
+        // montado detrás.
+        let fuente = include_str!("vista_paleta.rs");
+        let ini = fuente
+            .find("pub(crate) fn slash_exec(")
+            .expect("slash_exec ya no se llama así: el test está mirando otra cosa");
+        // Hasta el brazo por defecto, que es el final del `match`.
+        //
+        // SE BUSCA POR LÍNEA Y NO POR SUBCADENA, y lo enseñó este mismo test. La
+        // primera versión hacía `find("otro =>")`, y el comentario del brazo de
+        // `/model` dice «caía en el `otro =>` de abajo»: el rascador se paraba en el
+        // COMENTARIO, tres brazos después del principio, y veía dos de catorce. Lo
+        // cazó el suelo de más abajo. El brazo de verdad es la única línea que
+        // EMPIEZA por `otro =>`.
+        let fin = ini
+            + fuente[ini..]
+                .lines()
+                .take_while(|l| !l.trim_start().starts_with("otro =>"))
+                .map(|l| l.len() + 1)
+                .sum::<usize>();
+        let cuerpo = &fuente[ini..fin.min(fuente.len())];
+
+        // Un brazo es una línea que empieza por uno o varios literales `"/…"`
+        // separados por `|` y termina en `=>`.
+        let mut con_brazo: Vec<String> = Vec::new();
+        for linea in cuerpo.lines() {
+            let l = linea.trim_start();
+            if !l.starts_with("\"/") || !l.contains("=>") {
+                continue;
+            }
+            let patron = &l[..l.find("=>").unwrap()];
+            for trozo in patron.split('|') {
+                let t = trozo.trim().trim_matches('"');
+                if t.starts_with('/') {
+                    con_brazo.push(t.to_string());
+                }
+            }
+        }
+        // SUELO: si el rascador deja de entender el formato, esto pasaría siempre
+        // recorriendo cero brazos. Hoy son catorce.
+        assert!(
+            con_brazo.len() >= 12,
+            "solo vi {} brazos en slash_exec: el rascador ya no lo está leyendo",
+            con_brazo.len()
+        );
+
+        let sin_brazo: Vec<&str> = SLASH
+            .iter()
+            .filter(|(_, _, listo)| *listo)
+            .map(|(c, _, _)| *c)
+            .filter(|c| !con_brazo.iter().any(|b| b == c))
+            .collect();
+        assert!(
+            sin_brazo.is_empty(),
+            "marcados como listos y sin brazo en slash_exec — se tragan lo que se \
+             les escribe: {sin_brazo:?}"
+        );
+    }
+
+    #[test]
     fn el_catalogo_de_comandos_es_el_de_la_v2_mas_lo_que_aqui_existe() {
         // 29 son los de `SLASH` en CockpitShell. Recortarlo a lo ya migrado
         // enseñaría una Lucy más pequeña de la que hay: la paleta es una
@@ -17469,3 +17543,4 @@ mod retirada_de_pasos {
         assert!(p.contains("ANTES de este turno"), "no se le dice a que alcanza");
     }
 }
+
