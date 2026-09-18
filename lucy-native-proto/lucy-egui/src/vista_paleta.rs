@@ -214,6 +214,57 @@ impl App {
             // Rota entre los tres en vez de abrir un menú: un comando de barra
             // se escribe para no levantar las manos del teclado, y desembocar
             // en un desplegable que hay que apuntar deshace justo eso.
+            // `/model <id>` ESCRITO. Elegido de la paleta no llega aquí: se queda
+            // arriba, en el sitio que tiene `ui`, y abre el desplegable.
+            //
+            // NO TENÍA BRAZO, y estaba marcado como listo. Escribir
+            // `/model claude-opus-5` y pulsar Enter pasaba el filtro de `listo`,
+            // vaciaba la caja y caía en el `otro =>` de abajo: el argumento se
+            // tiraba, el modelo no cambiaba, y la caja volvía a decir `/model `.
+            // Sin error. Desde la paleta funcionaba, y por eso nadie lo había
+            // visto — pero era el único comando anunciado como listo que no
+            // hacía nada con lo que se le escribía.
+            "/model" => {
+                let id = args.trim();
+                if id.is_empty() {
+                    // Sin `ui` no se puede abrir el desplegable desde aquí: su id
+                    // de memoria sale de la ruta del `ui` que lo dibuja. Se dice
+                    // cuál hay y cómo se cambia.
+                    let m = i18n::trf(
+                        "El modelo activo es **{modelo}**. Para cambiarlo, escribe \
+                         `/model` seguido del id, o elígelo en el selector de modelos.",
+                        &[("modelo", lucy_core::models::describe(&self.chat_model))],
+                    );
+                    self.di(&m);
+                } else if lucy_core::models::find(id).is_none()
+                    && !self.models.iter().any(|m| m == id)
+                {
+                    // UNA ERRATA NO SE CONVIERTE EN EL MODELO ACTIVO. Aceptarla
+                    // la guardaría como id, y el error saldría en el siguiente
+                    // envío con un mensaje del proveedor que no dice que la causa
+                    // fue esto. Los ids de escribir a mano —`nvidia-custom`,
+                    // `local-custom`— siguen yendo por el selector.
+                    let m = i18n::trf(
+                        "No conozco el modelo `{id}`. El selector de modelos enseña los \
+                         que hay, incluidos los de Ollama instalados en este equipo.",
+                        &[("id", id)],
+                    );
+                    self.di(&m);
+                } else if let Err(e) = lucy_core::cloud::allowed(id, self.privacy) {
+                    // El mismo filtro que aplica `/privacy` al modelo que ya hay.
+                    // Sin esto, escribir un modelo de nube con el modo privacidad
+                    // puesto lo activaba, y el siguiente mensaje salía del equipo.
+                    let m = i18n::trf("No lo cambio: {e}", &[("e", &e)]);
+                    self.di(&m);
+                } else {
+                    self.chat_model = id.to_string();
+                    let m = i18n::trf(
+                        "Modelo: **{modelo}**.",
+                        &[("modelo", lucy_core::models::describe(id))],
+                    );
+                    self.di(&m);
+                }
+            }
             "/theme" => {
                 let siguiente = match theme::mode() {
                     theme::Mode::Dark => theme::Mode::Light,

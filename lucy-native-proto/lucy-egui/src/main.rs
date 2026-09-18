@@ -105,6 +105,10 @@ fn icono_ventana() -> egui::IconData {
 }
 
 fn main() -> eframe::Result {
+    // EL REGISTRO DE PÁNICOS, ANTES QUE LA BASE. Abrir la base también puede
+    // caerse, y un pánico ahí es justo uno de los que hay que poder contar.
+    instala_registro_de_panicos();
+
     // LA BASE, ANTES QUE NADA, y esto es un orden que importa de verdad.
     //
     // La construcción de `App` es un literal de struct, y sus campos se evalúan
@@ -2107,6 +2111,82 @@ const SUGGESTIONS: [(icons::Icon, &str, &str); 4] = [
         "Resume los errores más recientes del registro de eventos del sistema (últimas 24 h).",
     ),
 ];
+
+/// Deja constancia de un pánico en `lucy_app.log` antes de que el proceso muera.
+///
+/// ── POR QUÉ HACÍA FALTA ─────────────────────────────────────────────────────
+///
+/// En release la ventana arranca con `windows_subsystem = "windows"`, o sea SIN
+/// consola. El gancho por defecto de Rust escribe el pánico en `stderr`, y
+/// `stderr` no va a ninguna parte: la ventana se cerraba de golpe y no quedaba una
+/// sola línea. Era el único fallo que el operador no podía contar, y el que más
+/// falta hace contar — un cierre sin aviso es lo primero que alguien reporta y lo
+/// último que se puede diagnosticar.
+///
+/// SE ENCADENA AL GANCHO ANTERIOR, no lo sustituye. Quien arranque Lucy desde una
+/// terminal para depurar sigue viendo el pánico donde siempre; lo del log es lo
+/// que se AÑADE para el caso normal, que es el Explorador.
+///
+/// Y NO PUEDE CAERSE ÉL. Un pánico dentro del gancho de pánicos aborta el proceso
+/// sin decir nada, que es peor que no tenerlo. `logs::apunta_en` no devuelve
+/// error —si el disco está lleno, no apunta y sigue—, y `lineas_de_panico` no
+/// hace nada que pueda fallar.
+fn instala_registro_de_panicos() {
+    let anterior = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let mensaje = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "(pánico sin mensaje de texto)".to_string());
+        let donde = info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()));
+        let pila = std::backtrace::Backtrace::force_capture().to_string();
+        if let Some(p) = log_path() {
+            for (nivel, linea) in lineas_de_panico(&mensaje, donde.as_deref(), &pila) {
+                lucy_core::logs::apunta_en(&p, nivel, &linea);
+            }
+        }
+        anterior(info);
+    }));
+}
+
+/// Cuántos marcos de la pila van al log. Los de arriba son los que dicen dónde;
+/// los de abajo son el arranque de eframe y el `main` de siempre, iguales en
+/// cualquier pánico.
+const MARCOS_DE_PANICO: usize = 24;
+
+/// Las líneas que un pánico deja en el log. Pura y aparte para poder probarla sin
+/// provocar un pánico de verdad.
+///
+/// DOS LÍNEAS Y NO UNA. `apunta_en` aplana los saltos de un mensaje para que un
+/// registro sea una línea —si no, el visor contaría cada línea de la pila como un
+/// registro INFO suelto—. Así que la cabecera va en una, con el mensaje y el
+/// sitio, y la pila en otra con los marcos unidos por ` ← `: legible en el visor,
+/// y el filtro de errores encuentra las dos.
+fn lineas_de_panico(
+    mensaje: &str,
+    donde: Option<&str>,
+    pila: &str,
+) -> Vec<(&'static str, String)> {
+    let cabecera = match donde {
+        Some(d) => format!("PÁNICO en {d}: {mensaje}"),
+        None => format!("PÁNICO: {mensaje}"),
+    };
+    let mut v = vec![("ERROR", cabecera)];
+    let marcos: Vec<&str> = pila
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .take(MARCOS_DE_PANICO)
+        .collect();
+    if !marcos.is_empty() {
+        v.push(("ERROR", format!("pila: {}", marcos.join(" ← "))));
+    }
+    v
+}
 
 /// `%APPDATA%\Lucy\logs\lucy_app.log`. Ojo: no cuelga de `com.lucy.dev` como la
 /// DB, sino de `Lucy\logs` — así lo fijó la V1 y así lo lee la vista de Logs.
@@ -16588,6 +16668,80 @@ mod paleta {
     }
 
     #[test]
+    fn todo_comando_marcado_listo_tiene_quien_lo_cumpla() {
+        // EL TEST DE ARRIBA DESCRIBE ESTE FALLO Y NO LO VIGILA. Su comentario dice
+        // que marcar uno como listo sin cumplirlo «lo convertiría en un comando que
+        // se traga la orden y no hace nada», y luego comprueba que haya QUINCE y
+        // que cuatro concretos estén en la lista. No mira si tienen brazo.
+        //
+        // Y había uno sin él: `/model`. Marcado como listo, escribir
+        // `/model claude-opus-5` y Enter pasaba el filtro, vaciaba la caja y caía
+        // en el `otro =>` de `slash_exec` — el argumento se tiraba y el modelo no
+        // cambiaba, sin error. Desde la paleta funcionaba porque se atiende antes,
+        // con el `ui`, y por eso no lo había visto nadie.
+        //
+        // Se lee el FUENTE de `slash_exec` y se sacan sus brazos, igual que el
+        // guardia de i18n lee el de la pantalla: es la única forma de preguntar
+        // «¿hay un brazo para esto?» sin ejecutar cada comando con un `App` entero
+        // montado detrás.
+        let fuente = include_str!("vista_paleta.rs");
+        let ini = fuente
+            .find("pub(crate) fn slash_exec(")
+            .expect("slash_exec ya no se llama así: el test está mirando otra cosa");
+        // Hasta el brazo por defecto, que es el final del `match`.
+        //
+        // SE BUSCA POR LÍNEA Y NO POR SUBCADENA, y lo enseñó este mismo test. La
+        // primera versión hacía `find("otro =>")`, y el comentario del brazo de
+        // `/model` dice «caía en el `otro =>` de abajo»: el rascador se paraba en el
+        // COMENTARIO, tres brazos después del principio, y veía dos de catorce. Lo
+        // cazó el suelo de más abajo. El brazo de verdad es la única línea que
+        // EMPIEZA por `otro =>`.
+        let fin = ini
+            + fuente[ini..]
+                .lines()
+                .take_while(|l| !l.trim_start().starts_with("otro =>"))
+                .map(|l| l.len() + 1)
+                .sum::<usize>();
+        let cuerpo = &fuente[ini..fin.min(fuente.len())];
+
+        // Un brazo es una línea que empieza por uno o varios literales `"/…"`
+        // separados por `|` y termina en `=>`.
+        let mut con_brazo: Vec<String> = Vec::new();
+        for linea in cuerpo.lines() {
+            let l = linea.trim_start();
+            if !l.starts_with("\"/") || !l.contains("=>") {
+                continue;
+            }
+            let patron = &l[..l.find("=>").unwrap()];
+            for trozo in patron.split('|') {
+                let t = trozo.trim().trim_matches('"');
+                if t.starts_with('/') {
+                    con_brazo.push(t.to_string());
+                }
+            }
+        }
+        // SUELO: si el rascador deja de entender el formato, esto pasaría siempre
+        // recorriendo cero brazos. Hoy son catorce.
+        assert!(
+            con_brazo.len() >= 12,
+            "solo vi {} brazos en slash_exec: el rascador ya no lo está leyendo",
+            con_brazo.len()
+        );
+
+        let sin_brazo: Vec<&str> = SLASH
+            .iter()
+            .filter(|(_, _, listo)| *listo)
+            .map(|(c, _, _)| *c)
+            .filter(|c| !con_brazo.iter().any(|b| b == c))
+            .collect();
+        assert!(
+            sin_brazo.is_empty(),
+            "marcados como listos y sin brazo en slash_exec — se tragan lo que se \
+             les escribe: {sin_brazo:?}"
+        );
+    }
+
+    #[test]
     fn el_catalogo_de_comandos_es_el_de_la_v2_mas_lo_que_aqui_existe() {
         // 29 son los de `SLASH` en CockpitShell. Recortarlo a lo ya migrado
         // enseñaría una Lucy más pequeña de la que hay: la paleta es una
@@ -17467,5 +17621,57 @@ mod retirada_de_pasos {
         assert!(p.contains("<CANCEL>"), "no se le ofrece la etiqueta");
         assert!(p.contains("INDEPENDIENTES"), "no se le dice cuando NO retirar");
         assert!(p.contains("ANTES de este turno"), "no se le dice a que alcanza");
+    }
+}
+
+#[cfg(test)]
+mod registro_de_panicos {
+    use super::*;
+    use lucy_core::logs::Level;
+
+    #[test]
+    fn un_panico_deja_dos_registros_de_error_y_no_veinte_sueltos() {
+        // LO QUE SE PUEDE ROMPER DE VERDAD. `apunta_en` aplana los saltos de un
+        // mensaje, pero si la pila entrara en una sola llamada con sus saltos, o en
+        // una llamada por marco, el visor la leería como veinte registros — y los
+        // de la pila, sin `[ERROR]` delante, saldrían como INFO. El filtro de
+        // errores enseñaría la cabecera y escondería justo el sitio del fallo.
+        let pila = "0: std::panicking::begin_panic\n\
+                    1: lucy_egui::App::update\n\
+                    \n\
+                    2: eframe::run_native";
+        let v = lineas_de_panico("índice fuera de rango", Some("src/main.rs:120:9"), pila);
+
+        assert_eq!(v.len(), 2, "tienen que ser dos registros: {v:?}");
+        for (nivel, linea) in &v {
+            assert_eq!(*nivel, "ERROR");
+            // Y lo que el visor va a leer — `Level::of` sobre la línea tal cual la
+            // escribe `apunta_en`: `[marca] [NIVEL] mensaje`.
+            let escrita = format!("[2026-09-17 10:00:00] [{nivel}] {linea}");
+            assert_eq!(Level::of(&escrita), Level::Error, "{escrita}");
+            assert!(!linea.contains('\n'), "una línea con saltos se parte en el log");
+        }
+        assert!(v[0].1.contains("src/main.rs:120:9"), "falta el sitio: {}", v[0].1);
+        assert!(v[0].1.contains("índice fuera de rango"), "falta el mensaje");
+        // La pila, en orden y sin la línea vacía de en medio.
+        assert!(v[1].1.contains("begin_panic ← 1: lucy_egui::App::update ← 2:"), "{}", v[1].1);
+    }
+
+    #[test]
+    fn sin_pila_ni_sitio_queda_la_cabecera() {
+        // Un pánico sin ubicación —raro, pero la API lo permite— y con la pila
+        // vacía, que es lo que da `force_capture` en un binario sin símbolos.
+        let v = lineas_de_panico("algo", None, "");
+        assert_eq!(v, vec![("ERROR", "PÁNICO: algo".to_string())]);
+    }
+
+    #[test]
+    fn la_pila_se_corta_para_no_llenar_el_log() {
+        // Los marcos de abajo son el arranque de eframe y el `main`, iguales en
+        // cualquier pánico. Una recursión desbocada da miles.
+        let pila: String = (0..500).map(|i| format!("{i}: marco\n")).collect();
+        let v = lineas_de_panico("recursión", None, &pila);
+        let marcos = v[1].1.matches(" ← ").count() + 1;
+        assert_eq!(marcos, MARCOS_DE_PANICO);
     }
 }

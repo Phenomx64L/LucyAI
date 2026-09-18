@@ -57,10 +57,33 @@ if (-not $SinCompilar) {
         }
     }
     Push-Location $raiz
+    # CARGO ESCRIBE SU PROGRESO POR STDERR, y eso no es un error. «Compiling
+    # rustls v0.23.45» sale por el canal de errores por convención de cargo, y en
+    # Windows PowerShell 5.1, con `ErrorActionPreference = Stop` arriba, la
+    # PRIMERA línea de stderr de un comando nativo se convierte en una excepción
+    # que corta el script — antes de llegar al `$LASTEXITCODE` de la línea
+    # siguiente, que es la comprobación buena.
+    #
+    # Por eso el 2.1.0 salió y el 2.1.1 no: aquel se construyó con la caché
+    # caliente y cargo no tuvo nada que compilar, así que no escribió nada por
+    # stderr. En cuanto hay algo que compilar —una dependencia actualizada, un
+    # clon limpio— el script moría con un `NativeCommandError` que parece un
+    # fallo de compilación y no lo es.
+    #
+    # Se relaja la preferencia SOLO alrededor de cargo y manda el código de
+    # salida. El `ForEach-Object` convierte cada línea en texto plano: sin él,
+    # PowerShell 5.1 pinta las de stderr como registros de error en rojo aunque
+    # ya no corten nada.
+    $eap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
     try {
-        cargo build -p lucy-egui --release
-        if ($LASTEXITCODE -ne 0) { throw 'cargo build falló' }
-    } finally { Pop-Location }
+        cargo build -p lucy-egui --release 2>&1 | ForEach-Object { "$_" }
+        $codigo = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $eap
+        Pop-Location
+    }
+    if ($codigo -ne 0) { throw "cargo build falló (código $codigo)" }
 }
 
 $exe = Join-Path $raiz 'target\release\lucy-egui.exe'

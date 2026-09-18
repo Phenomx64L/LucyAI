@@ -1237,6 +1237,13 @@ pub const FRASES: &[Frase] = &[
          beim Anbieter: Schick den Befehl noch einmal.",
     ),
     f!(
+        "El modelo activo es **{modelo}**. Para cambiarlo, escribe `/model` seguido del id, o elígelo en el selector de modelos.",
+        "The active model is **{modelo}**. To change it, type `/model` followed by the id, or pick it in the model selector.",
+        "O modelo ativo é **{modelo}**. Para o mudar, escreve `/model` seguido do id, ou escolhe-o no seletor de modelos.",
+        "Le modèle actif est **{modelo}**. Pour le changer, tape `/model` suivi de l’id, ou choisis-le dans le sélecteur de modèles.",
+        "Das aktive Modell ist **{modelo}**. Zum Wechseln `/model` gefolgt von der ID eingeben oder im Modellwähler auswählen.",
+    ),
+    f!(
         "El modelo de voz está incompleto en {dir}: falta {falta}. Suele ser una copia interrumpida — bórralo y vuelve a ponerlo.",
         "The voice model is incomplete in {dir}: {falta} missing. Usually an interrupted copy — delete it and put it back.",
         "O modelo de voz está incompleto em {dir}: falta {falta}. Costuma ser uma cópia interrompida — apaga-o e volta a pô-lo.",
@@ -2088,6 +2095,13 @@ pub const FRASES: &[Frase] = &[
         "Modell und Verhalten",
     ),
     f!(
+        "Modelo: **{modelo}**.",
+        "Model: **{modelo}**.",
+        "Modelo: **{modelo}**.",
+        "Modèle : **{modelo}**.",
+        "Modell: **{modelo}**.",
+    ),
+    f!(
         "Modo **{n}** puesto — {d}\n\nA partir de ahora enmarco todo en él. Se quita con `/preset clear`.",
         "Mode **{n}** set — {d}\n\nFrom now on I frame everything in it. Clear it with `/preset clear`.",
         "Modo **{n}** definido — {d}\n\nA partir de agora enquadro tudo nele. Remove-se com `/preset clear`.",
@@ -2224,6 +2238,13 @@ pub const FRASES: &[Frase] = &[
         "Kein Modell passt",
     ),
     f!(
+        "No conozco el modelo `{id}`. El selector de modelos enseña los que hay, incluidos los de Ollama instalados en este equipo.",
+        "I don’t know the model `{id}`. The model selector shows the ones available, including the Ollama models installed on this machine.",
+        "Não conheço o modelo `{id}`. O seletor de modelos mostra os que há, incluindo os do Ollama instalados neste equipamento.",
+        "Je ne connais pas le modèle `{id}`. Le sélecteur de modèles montre ceux qui existent, y compris les modèles Ollama installés sur cette machine.",
+        "Das Modell `{id}` kenne ich nicht. Der Modellwähler zeigt die verfügbaren, einschließlich der auf diesem Rechner installierten Ollama-Modelle.",
+    ),
+    f!(
         "No había nada sin vector.",
         "Nothing was missing a vector.",
         "Não havia nada sem vetor.",
@@ -2264,6 +2285,13 @@ pub const FRASES: &[Frase] = &[
         "Não há nenhum skill chamado «{a}». Os que há: {hay}.",
         "Il n'y a aucun skill nommé «{a}». Ceux qui existent : {hay}.",
         "Es gibt keinen Skill namens «{a}». Vorhanden: {hay}.",
+    ),
+    f!(
+        "No lo cambio: {e}",
+        "Not changing it: {e}",
+        "Não o mudo: {e}",
+        "Je ne le change pas : {e}",
+        "Ich wechsle es nicht: {e}",
     ),
     f!(
         "No pude apuntar eso",
